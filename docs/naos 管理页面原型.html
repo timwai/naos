@@ -1,0 +1,4297 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>naos · 跨平台 NAS 管理控制台</title>
+<style>
+/* ==========================================================================
+   NAOS DESIGN SYSTEM 2.0 (Modern Cloud / NAS Console)
+   ========================================================================== */
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Monaco, Consolas, monospace;
+
+  /* Light Theme */
+  --bg: #f8fafc;
+  --bg-subtle: #f1f5f9;
+  --card: #ffffff;
+  --card-hover: #ffffff;
+  --card-subtle: #f8fafc;
+  --border: #e2e8f0;
+  --border-subtle: #edf2f7;
+  --border-focus: #6366f1;
+
+  --tx-main: #0f172a;
+  --tx-muted: #64748b;
+  --tx-dim: #94a3b8;
+
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-light: #eef2ff;
+  --primary-gradient: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+
+  --success: #10b981;
+  --success-bg: #ecfdf5;
+  --success-border: #a7f3d0;
+  --warning: #f59e0b;
+  --warning-bg: #fffbeb;
+  --warning-border: #fde68a;
+  --danger: #ef4444;
+  --danger-bg: #fef2f2;
+  --danger-border: #fecaca;
+  --info: #0284c7;
+  --info-bg: #f0f9ff;
+  --info-border: #bae6fd;
+
+  --sidebar-bg: #0f172a;
+  --sidebar-hover: rgba(255, 255, 255, 0.08);
+  --sidebar-active: rgba(99, 102, 241, 0.2);
+  --sidebar-tx: #94a3b8;
+  --sidebar-tx-active: #ffffff;
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+  --shadow-glow: 0 0 20px -3px rgba(79, 70, 229, 0.35);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+}
+
+[data-theme="dark"] {
+  --bg: #090d16;
+  --bg-subtle: #0f1524;
+  --card: #131a2c;
+  --card-hover: #172036;
+  --card-subtle: #0f1524;
+  --border: #1e293b;
+  --border-subtle: #172236;
+  --border-focus: #818cf8;
+
+  --tx-main: #f8fafc;
+  --tx-muted: #94a3b8;
+  --tx-dim: #64748b;
+
+  --primary: #6366f1;
+  --primary-hover: #4f46e5;
+  --primary-light: rgba(99, 102, 241, 0.15);
+  --primary-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+
+  --success: #10b981;
+  --success-bg: rgba(16, 185, 129, 0.12);
+  --success-border: rgba(16, 185, 129, 0.3);
+  --warning: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.12);
+  --warning-border: rgba(245, 158, 11, 0.3);
+  --danger: #ef4444;
+  --danger-bg: rgba(239, 68, 68, 0.12);
+  --danger-border: rgba(239, 68, 68, 0.3);
+  --info: #38bdf8;
+  --info-bg: rgba(56, 189, 248, 0.12);
+  --info-border: rgba(56, 189, 248, 0.3);
+
+  --sidebar-bg: #0a0f1d;
+  --sidebar-hover: rgba(255, 255, 255, 0.06);
+  --sidebar-active: rgba(99, 102, 241, 0.22);
+  --sidebar-tx: #94a3b8;
+  --sidebar-tx-active: #ffffff;
+
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 20px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
+  --shadow-xl: 0 25px 35px -5px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 25px -2px rgba(99, 102, 241, 0.4);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--tx-main);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.25); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.45); }
+
+/* Layout Shell */
+.app-container {
+  display: flex;
+  min-height: 100vh;
+  position: relative;
+}
+
+/* Sidebar */
+aside.sidebar {
+  width: 256px;
+  background: var(--sidebar-bg);
+  color: var(--sidebar-tx);
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  flex-shrink: 0;
+  z-index: 30;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  transition: transform 0.25s ease, width 0.25s ease;
+}
+
+.brand-header {
+  padding: 20px 20px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.brand-logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: #fff;
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+.brand-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--primary-gradient);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-glow);
+  color: #fff;
+}
+.brand-tag {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background: rgba(99, 102, 241, 0.25);
+  color: #a5b4fc;
+  font-weight: 600;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+}
+
+.nav-scroller {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 14px;
+}
+.nav-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(148, 163, 184, 0.55);
+  padding: 16px 10px 6px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: none;
+  background: none;
+  color: var(--sidebar-tx);
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.18s ease;
+  margin-bottom: 3px;
+  text-align: left;
+}
+.nav-item:hover {
+  background: var(--sidebar-hover);
+  color: #fff;
+}
+.nav-item.active {
+  background: var(--sidebar-active);
+  color: #fff;
+  font-weight: 600;
+}
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3.5px;
+  border-radius: 0 4px 4px 0;
+  background: var(--primary);
+  box-shadow: 0 0 10px var(--primary);
+}
+.nav-item svg { width: 18px; height: 18px; flex-shrink: 0; opacity: 0.85; }
+.nav-item.active svg { opacity: 1; color: #818cf8; }
+.nav-badge {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.08);
+  color: #cbd5e1;
+}
+
+/* Sidebar Footer / Storage Mini-widget */
+.sidebar-footer {
+  padding: 16px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.storage-mini-card {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+.storage-mini-title {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: #cbd5e1;
+  margin-bottom: 8px;
+}
+.storage-bar {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.storage-fill {
+  height: 100%;
+  background: var(--primary-gradient);
+  border-radius: 99px;
+  transition: width 0.3s ease;
+}
+.storage-mini-sub {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #64748b;
+}
+
+/* Main Content Area */
+.main-wrapper {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+header.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 25;
+  height: 64px;
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+}
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.system-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--tx-muted);
+  background: var(--card-subtle);
+  border: 1px solid var(--border);
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+}
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  position: relative;
+  box-shadow: 0 0 0 2px var(--success-bg);
+}
+.pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: var(--success);
+  opacity: 0.4;
+  animation: pulse 2s infinite ease-in-out;
+}
+@keyframes pulse {
+  0% { transform: scale(1); opacity: 0.4; }
+  50% { transform: scale(1.8); opacity: 0; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Quick Search Trigger */
+.search-trigger-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--tx-muted);
+  font-size: 12.5px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.search-trigger-btn:hover {
+  border-color: var(--border-focus);
+  color: var(--tx-main);
+  box-shadow: var(--shadow-sm);
+}
+.kbd-shortcut {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--bg-subtle);
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+/* User Profile Badge */
+.user-menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 4px 12px 4px 6px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.user-menu-btn:hover {
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-sm);
+}
+.avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  background: var(--primary-gradient);
+  flex-shrink: 0;
+}
+.user-name-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tx-main);
+}
+.user-role-tag {
+  font-size: 11px;
+  color: var(--tx-muted);
+}
+
+/* Main View Container */
+main.main-body {
+  flex: 1;
+  padding: 28px;
+  max-width: 1240px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* Typography & Titles */
+.page-header {
+  margin-bottom: 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.page-title {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--tx-main);
+  line-height: 1.25;
+}
+.page-desc {
+  font-size: 13.5px;
+  color: var(--tx-muted);
+  margin-top: 4px;
+}
+.header-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Cards & Surfaces */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 22px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.card:hover {
+  box-shadow: var(--shadow-md);
+}
+.card-flush { padding: 0; overflow: hidden; }
+.card-header-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Grid System */
+.grid-12 {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 18px;
+}
+.col-12 { grid-column: span 12; }
+.col-8 { grid-column: span 8; }
+.col-7 { grid-column: span 7; }
+.col-6 { grid-column: span 6; }
+.col-5 { grid-column: span 5; }
+.col-4 { grid-column: span 4; }
+.col-3 { grid-column: span 3; }
+
+/* Stat Widgets */
+.stat-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  position: relative;
+  overflow: hidden;
+}
+.stat-card::after {
+  content: "";
+  position: absolute;
+  right: -20px;
+  top: -20px;
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  background: var(--accent-light, var(--primary-light));
+  opacity: 0.5;
+  filter: blur(25px);
+  pointer-events: none;
+}
+.stat-icon-wrapper {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-light, var(--primary-light));
+  color: var(--accent-color, var(--primary));
+  flex-shrink: 0;
+}
+.stat-icon-wrapper svg { width: 24px; height: 24px; }
+.stat-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--tx-muted);
+}
+.stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--tx-main);
+  margin-top: 2px;
+}
+.stat-trend {
+  font-size: 11.5px;
+  font-weight: 500;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.stat-trend.good { color: var(--success); }
+.stat-trend.warn { color: var(--warning); }
+.stat-trend.danger { color: var(--danger); }
+
+/* Buttons & Inputs */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--tx-main);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  user-select: none;
+}
+.btn:hover {
+  background: var(--bg-subtle);
+  border-color: var(--border-focus);
+}
+.btn:active {
+  transform: scale(0.985);
+}
+.btn-primary {
+  background: var(--primary-gradient);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.28);
+}
+.btn-primary:hover {
+  filter: brightness(1.08);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(79, 70, 229, 0.38);
+}
+.btn-danger {
+  color: var(--danger);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+.btn-danger:hover {
+  background: var(--danger);
+  color: #fff;
+  border-color: transparent;
+}
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+}
+.btn-icon {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: var(--radius-md);
+  color: var(--tx-muted);
+}
+.btn-icon:hover {
+  color: var(--tx-main);
+}
+.btn-icon.active {
+  background: var(--primary-light);
+  color: var(--primary);
+  border-color: var(--primary);
+}
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  font-size: 13.5px;
+  color: var(--tx-main);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  transition: all 0.15s ease;
+  width: 100%;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+.font-mono { font-family: var(--font-mono); font-size: 13px; }
+
+/* Switch Toggle */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: var(--border);
+  transition: 0.2s;
+  border-radius: 99px;
+}
+.slider::before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.2s;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+}
+input:checked + .slider { background-color: var(--success); }
+input:checked + .slider::before { transform: translateX(18px); }
+input:disabled + .slider { opacity: 0.5; cursor: not-allowed; }
+
+/* Badges & Tags */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  line-height: 1.2;
+}
+.badge-primary { background: var(--primary-light); color: var(--primary); }
+.badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+.badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
+.badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-border); }
+.badge-subtle { background: var(--bg-subtle); color: var(--tx-muted); border: 1px solid var(--border); }
+
+/* Protocol Pills */
+.proto-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2.5px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-right: 4px;
+  background: var(--bg-subtle);
+  color: var(--tx-dim);
+  border: 1px dashed var(--border);
+  opacity: 0.45;
+}
+.proto-tag.active {
+  opacity: 1;
+  border: 1px solid transparent;
+}
+.proto-tag.smb.active { background: rgba(59, 130, 246, 0.15); color: #3b82f6; border-color: rgba(59, 130, 246, 0.3); }
+.proto-tag.dav.active { background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: rgba(16, 185, 129, 0.3); }
+.proto-tag.nfs.active { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border-color: rgba(245, 158, 11, 0.3); }
+
+/* Permission Pills */
+.perm-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2.5px 10px;
+  border-radius: var(--radius-full);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.perm-pill.rw { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+.perm-pill.ro { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
+.perm-pill.none { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-border); }
+
+/* Tables */
+.table-wrapper {
+  overflow-x: auto;
+  width: 100%;
+}
+table.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  text-align: left;
+}
+table.data-table th {
+  padding: 12px 16px;
+  background: var(--bg-subtle);
+  color: var(--tx-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+table.data-table td {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--tx-main);
+  vertical-align: middle;
+}
+table.data-table tbody tr {
+  transition: background 0.12s ease;
+}
+table.data-table tbody tr:hover {
+  background: var(--bg-subtle);
+}
+table.data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Tabs */
+.tab-nav {
+  display: flex;
+  gap: 6px;
+  background: var(--bg-subtle);
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  margin-bottom: 20px;
+}
+.tab-btn {
+  border: none;
+  background: transparent;
+  color: var(--tx-muted);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.tab-btn:hover {
+  color: var(--tx-main);
+}
+.tab-btn.active {
+  background: var(--card);
+  color: var(--primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+/* Callout / Notes */
+.notice-box {
+  background: var(--primary-light);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: var(--radius-md);
+  padding: 14px 18px;
+  font-size: 13px;
+  color: var(--tx-main);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 16px 0;
+}
+.notice-box.warning {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--tx-main);
+}
+.notice-box.danger {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+.notice-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* Breadcrumbs */
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.crumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  color: var(--tx-main);
+  text-decoration: none;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.crumb-item:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.crumb-sep {
+  color: var(--tx-dim);
+}
+
+/* File System Elements */
+.file-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+.file-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 18px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  position: relative;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.file-card:hover {
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.file-card.selected {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+.file-card.dimmed {
+  opacity: 0.55;
+}
+.file-checkbox {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+}
+.file-icon {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+.file-icon svg { width: 32px; height: 32px; }
+.file-name {
+  font-size: 13px;
+  font-weight: 500;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--tx-main);
+}
+.file-meta {
+  font-size: 11.5px;
+  color: var(--tx-muted);
+  margin-top: 4px;
+}
+.file-actions-hover {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.file-card:hover .file-actions-hover {
+  opacity: 1;
+}
+
+/* File Icon Themes */
+.f-folder { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+.f-img { background: rgba(168, 85, 247, 0.15); color: #a855f7; }
+.f-code { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+.f-doc { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+.f-media { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.f-archive { background: rgba(249, 115, 22, 0.15); color: #f97316; }
+.f-db { background: rgba(6, 182, 212, 0.15); color: #06b6d4; }
+.f-generic { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+
+/* Protocol Cards in Dashboard */
+.proto-service-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  background: var(--card);
+  position: relative;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+.proto-service-card:hover {
+  box-shadow: var(--shadow-md);
+}
+.proto-service-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.proto-badge-lg {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+/* Circular Metric Rings */
+.gauge-cluster {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 10px 0;
+}
+.gauge-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.gauge-svg { width: 96px; height: 96px; transform: rotate(-90deg); }
+.gauge-track { fill: none; stroke: var(--border); stroke-width: 8; }
+.gauge-value {
+  fill: none;
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.5s ease;
+}
+.gauge-text {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--tx-main);
+  margin-top: -64px;
+  margin-bottom: 38px;
+}
+.gauge-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tx-muted);
+}
+
+/* Modal Dialog */
+dialog.custom-dialog {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  color: var(--tx-main);
+  width: min(520px, 92vw);
+  padding: 26px;
+  box-shadow: var(--shadow-xl);
+  margin: auto;
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+dialog.custom-dialog::backdrop {
+  background: rgba(10, 15, 29, 0.65);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 18px;
+}
+.dialog-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--tx-main);
+}
+
+/* Toast */
+.toast-msg {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+  background: #0f172a;
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: var(--radius-full);
+  font-size: 13.5px;
+  font-weight: 500;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.35);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  animation: toast-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 16px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* Login Page Presentation */
+.login-screen {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  background: var(--bg);
+}
+.login-hero {
+  position: relative;
+  overflow: hidden;
+  color: #fff;
+  padding: 64px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background: linear-gradient(135deg, #0b1120 0%, #1e1b4b 50%, #312e81 100%);
+}
+.login-hero-glow {
+  position: absolute;
+  width: 450px;
+  height: 450px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.35) 0%, transparent 70%);
+  filter: blur(60px);
+  top: -100px;
+  right: -100px;
+  pointer-events: none;
+}
+.login-hero-glow2 {
+  position: absolute;
+  width: 400px;
+  height: 400px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(168, 85, 247, 0.25) 0%, transparent 70%);
+  filter: blur(70px);
+  bottom: -100px;
+  left: -80px;
+  pointer-events: none;
+}
+.login-form-pane {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+.login-card-inner {
+  width: min(420px, 100%);
+}
+
+/* Responsive styles */
+@media (max-width: 980px) {
+  .grid-12 > * { grid-column: span 12 !important; }
+  .login-screen { grid-template-columns: 1fr; }
+  .login-hero { display: none; }
+  
+  .app-container { flex-direction: column; }
+  aside.sidebar {
+    position: fixed;
+    bottom: 0;
+    top: auto;
+    left: 0;
+    right: 0;
+    height: auto;
+    width: 100%;
+    border-right: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    flex-direction: row;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+    z-index: 50;
+  }
+  .brand-header, .sidebar-footer, .nav-group-label { display: none; }
+  .nav-scroller {
+    display: flex;
+    overflow-x: auto;
+    padding: 0;
+    gap: 4px;
+    width: 100%;
+    justify-content: space-around;
+  }
+  .nav-item {
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    padding: 6px 10px;
+    margin-bottom: 0;
+    text-align: center;
+    border-radius: var(--radius-sm);
+  }
+  .nav-item.active::before { display: none; }
+  .nav-badge { display: none; }
+  main.main-body { padding: 18px 16px 88px; }
+  header.app-header { padding: 0 16px; }
+  .search-trigger-btn span { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="app-container" id="app" style="display:none">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="brand-header">
+      <a href="#" class="brand-logo" onclick="go('dash');return false;">
+        <span class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px">
+            <rect x="3" y="4" width="18" height="16" rx="3"></rect>
+            <path d="M7 10h.01M7 14h.01"></path>
+            <path d="M12 12h5"></path>
+          </svg>
+        </span>
+        <div>
+          <div>naos</div>
+          <div style="font-size:11px;font-weight:400;color:#64748b;letter-spacing:0">NAS Console</div>
+        </div>
+      </a>
+      <span class="brand-tag">v0.2</span>
+    </div>
+
+    <div class="nav-scroller" id="sidebar-nav">
+      <!-- Dynamic Nav Items -->
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="storage-mini-card">
+        <div class="storage-mini-title">
+          <span>存储容量池</span>
+          <span style="color:#a5b4fc">5.0 / 10 TB</span>
+        </div>
+        <div class="storage-bar">
+          <div class="storage-fill" style="width: 50%"></div>
+        </div>
+        <div class="storage-mini-sub">
+          <span>2 个活跃卷 (ext4 / NTFS)</span>
+          <span>50% 已用</span>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content Wrapper -->
+  <div class="main-wrapper">
+    <header class="app-header">
+      <div class="header-left">
+        <div class="system-status-pill">
+          <span class="pulse-dot"></span>
+          <span>naos-nas · 守护进程在线</span>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <!-- Quick Search -->
+        <button class="search-trigger-btn" onclick="openCmdPalette()" title="全局搜索与快捷命令">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px">
+            <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path>
+          </svg>
+          <span>快速跳转 / 命令</span>
+          <span class="kbd-shortcut">⌘K</span>
+        </button>
+
+        <!-- Theme Toggle -->
+        <button class="btn btn-icon" onclick="toggleTheme()" title="切换明暗色彩主题" id="theme-btn">
+          <!-- Sun/Moon icon filled dynamically -->
+        </button>
+
+        <!-- User Profile Dropdown -->
+        <div class="user-menu-btn" onclick="go('me')" title="个人中心与账号设置">
+          <div class="avatar" id="header-avatar">A</div>
+          <div>
+            <div class="user-name-text" id="header-username">admin</div>
+            <div class="user-role-tag" id="header-role">系统管理员</div>
+          </div>
+        </div>
+
+        <!-- Logout -->
+        <button class="btn btn-icon" onclick="logout()" title="安全退出控制台">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+            <polyline points="16 17 21 12 16 7"></polyline>
+            <line x1="21" y1="12" x2="9" y2="12"></line>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="main-body" id="main-content">
+      <!-- Dynamic Views rendered here -->
+    </main>
+  </div>
+</div>
+
+<!-- Login View Container -->
+<div id="login-container" style="display:none"></div>
+
+<!-- Modal Dialog -->
+<dialog class="custom-dialog" id="modal-dialog"></dialog>
+
+<!-- Command Palette Modal -->
+<dialog class="custom-dialog" id="cmd-dialog" style="padding:0;max-width:560px;border-radius:18px;overflow:hidden">
+  <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;color:var(--tx-muted)">
+      <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path>
+    </svg>
+    <input id="cmd-input" placeholder="键入关键词跳转页面或执行操作..." style="border:none;background:transparent;padding:0;font-size:15px;box-shadow:none" oninput="renderCmdResults()">
+    <span class="kbd-shortcut" style="cursor:pointer" onclick="$('#cmd-dialog').close()">ESC</span>
+  </div>
+  <div id="cmd-results" style="max-height:360px;overflow-y:auto;padding:8px"></div>
+</dialog>
+
+<script>
+/* ==========================================================================
+   STATE & DATA STORE
+   ========================================================================== */
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const BUILTIN_BLACKLIST = ['/', '/etc', '/proc', '/sys', '/dev', '/boot', '/system', 'c:\\windows'];
+
+const S = {
+  auth: null,
+  lockUntil: 0,
+  fails: 0,
+  msg: '',
+  cfg: {
+    listen: '127.0.0.1',
+    port: 8443,
+    tls: true,
+    cert: '/etc/naos/tls/cert.pem',
+    key: '/etc/naos/tls/key.pem',
+    redirect: true,
+    sess: 30,
+    maxFail: 5,
+    lockMin: 5,
+    minPw: 8,
+    keep: 90,
+    smbAudit: true,
+    krb: false,
+    keytab: '',
+    realm: '',
+    bl: [...BUILTIN_BLACKLIST]
+  },
+  view: 'dash',
+  sel: null,
+  tab: 'acl',
+  st: 'gen',
+  vw: 'grid', // files view mode: grid or list
+  fsh: 1,     // current selected share in files
+  fp: [],     // current folder path parts
+  chk: [],    // checked files
+  q: '',      // search query
+  as: null,   // admin impersonate identity
+  
+  users: [
+    { n: 'admin', role: 'admin', g: [], on: 1, pw: 'naos12345', desc: '内置管理员' },
+    { n: 'alice', role: 'user', g: ['family'], on: 1, pw: 'naos12345', desc: '家庭成员' },
+    { n: 'bob', role: 'user', g: ['family', 'dev'], on: 1, pw: 'naos12345', desc: '研发测试' },
+    { n: 'carol', role: 'user', g: ['dev'], on: 0, pw: 'naos12345', desc: '外部开发协作' }
+  ],
+  groups: ['family', 'dev'],
+  shares: [
+    {
+      id: 1,
+      name: 'media',
+      path: '/data/media',
+      comment: '家庭影音多媒体共享库',
+      smb: 1, dav: 1, nfs: 1,
+      acl: [
+        { p: '/', s: 'group:family', perm: 'ro' },
+        { p: '/', s: 'user:alice', perm: 'rw' },
+        { p: '/private', s: 'group:family', perm: 'none' }
+      ],
+      nfsb: [
+        { cidr: '192.168.1.0/24', uid: '', user: 'alice', perm: 'ro' }
+      ]
+    },
+    {
+      id: 2,
+      name: 'projects',
+      path: '/data/projects',
+      comment: 'Git 仓库与工程代码存档',
+      smb: 1, dav: 1, nfs: 0,
+      acl: [
+        { p: '/', s: 'group:dev', perm: 'rw' }
+      ],
+      nfsb: []
+    },
+    {
+      id: 3,
+      name: 'backup',
+      path: 'D:\\Backup',
+      comment: 'Windows 灾备与数据库冷备份',
+      smb: 1, dav: 0, nfs: 1,
+      acl: [
+        { p: '/', s: 'user:admin', perm: 'rw' }
+      ],
+      nfsb: [
+        { cidr: '10.0.0.5/32', uid: '1000', user: 'admin', perm: 'rw' }
+      ]
+    }
+  ],
+  audit: [
+    ['14:22:10', 'alice', 'SMB', 'WRITE', 'media', '/photos/2026/a.jpg', '192.168.1.23', 'ok', '写入文件成功 (3.2 MB)'],
+    ['14:18:03', 'bob', 'WebDAV', 'READ', 'projects', '/spec.md', '192.168.1.40', 'ok', '下载项目规范文档'],
+    ['14:15:57', 'bob', 'SMB', 'DELETE', 'media', '/private/notes.txt', '192.168.1.40', 'deny', '命中 /private 显式拒绝规则'],
+    ['13:42:20', '—', 'NFS', 'MOUNT', 'backup', '/', '10.0.0.9', 'deny', '未命中任何 NFS 客户端绑定 (L1/L2)'],
+    ['12:30:45', 'admin', 'NFS', 'WRITE', 'backup', '/db.dump', '10.0.0.5', 'ok', '执行备份写入 (820 MB)']
+  ],
+  proto: { SMB: 1, WebDAV: 1, NFS: 1 },
+  conn: { SMB: 4, WebDAV: 2, NFS: 1 },
+  net: Array.from({ length: 30 }, (_, i) => 24 + 12 * Math.sin(i / 3) + Math.random() * 8)
+};
+
+/* Mock File System Data */
+const D = (c, m) => ({ t: 'd', m: m || '2026-10-02 11:20', c });
+const Fl = (s, m) => ({ t: 'f', s, m: m || '2026-10-03 14:10' });
+
+S.fs = {
+  1: D({
+    photos: D({
+      '2026': D({
+        'a.jpg': Fl(3355443),
+        'b.jpg': Fl(2831155)
+      })
+    }),
+    music: D({
+      'track01.flac': Fl(31457280)
+    }),
+    private: D({
+      'notes.txt': Fl(2048)
+    }),
+    'movie.mkv': Fl(1503238553)
+  }),
+  2: D({
+    'spec.md': Fl(8192),
+    src: D({
+      'main.rs': Fl(5120),
+      'lib.rs': Fl(12288)
+    }),
+    docs: D({
+      'architecture.md': Fl(30720)
+    })
+  }),
+  3: D({
+    'db.dump': Fl(859832320),
+    configs: D({
+      'naos.toml': Fl(1024)
+    })
+  })
+};
+
+/* Mock Previews */
+const PREVIEWS = {
+  'a.jpg': { type: 'img', desc: '2026 欧洲之旅高清原图 · 3.2 MB · 4032x3024' },
+  'b.jpg': { type: 'img', desc: '阿尔卑斯山风光 · 2.7 MB · 3840x2160' },
+  'notes.txt': { type: 'text', content: `[机密备忘录 - 仅管理员与授权人员可见]\n1. 2026 Q4 存储扩容计划：新增 2x 16TB 希捷银河企业盘\n2. 审计策略更新：启用 Samba full_audit 扩展\n3. 密钥轮换周期调整为 90 天\n4. NFS L3 Kerberos 计划于下一阶段灰度上线` },
+  'spec.md': { type: 'text', content: `# naos 核心模块规格书 v0.2\n- acl-engine: 内存级权限计算引擎，支持最近匹配覆盖与显式拒绝\n- reconciler: 声明式配置渲染与系统原生服务热重载\n- nfs-server: ONC-RPC / NFSv3 用户态服务实现\n- multi-platform: Linux, macOS (Homebrew Samba), Windows 原生适配` },
+  'main.rs': { type: 'code', content: `use tokio::net::TcpListener;\nuse axum::{Router, routing::get};\n\n#[tokio::main]\nasync fn main() -> Result<(), Box<dyn std::error::Error>> {\n    tracing_subscriber::fmt::init();\n    tracing::info!("Starting naosd daemon v0.2.0...");\n    \n    let app = Router::new().route("/health", get(|| async { "ok" }));\n    let listener = TcpListener::bind("127.0.0.1:8443").await?;\n    axum::serve(listener, app).await?;\n    Ok(())\n}` },
+  'naos.toml': { type: 'code', content: `[server]\nlisten = "127.0.0.1"\nport = 8443\ntls = true\n\n[storage]\ndata_root = "/var/lib/naos"\naudit_retention_days = 90\n\n[protocols]\nsmb_enabled = true\nwebdav_enabled = true\nnfs_enabled = true` }
+};
+
+/* ==========================================================================
+   ICONS & VISUAL HELPERS
+   ========================================================================== */
+const ICONS = {
+  dash: `<rect width="7" height="9" x="3" y="3" rx="1.5"/><rect width="7" height="5" x="14" y="3" rx="1.5"/><rect width="7" height="9" x="14" y="12" rx="1.5"/><rect width="7" height="5" x="3" y="16" rx="1.5"/>`,
+  files: `<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>`,
+  shares: `<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/>`,
+  users: `<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>`,
+  sim: `<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/>`,
+  audit: `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><polyline points="10 9 9 9 8 9"/>`,
+  settings: `<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>`,
+  me: `<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 1 0-16 0"/>`,
+  sun: `<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>`,
+  moon: `<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>`,
+  plus: `<path d="M12 5v14M5 12h14"/>`,
+  trash: `<path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6"/>`,
+  edit: `<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>`,
+  copy: `<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>`,
+  move: `<path d="M5 12h14M12 5l7 7-7 7"/>`,
+  dl: `<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>`,
+  upload: `<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>`,
+  folderplus: `<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/><line x1="12" x2="12" y1="10" y2="16"/><line x1="9" x2="15" y1="13" y2="13"/>`,
+  file: `<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><polyline points="14 2 14 8 20 8"/>`,
+  grid: `<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>`,
+  list: `<line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>`,
+  lock: `<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>`,
+  unlock: `<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>`,
+  up: `<path d="m18 15-6-6-6 6"/>`,
+  chev: `<path d="m9 18 6-6-6-6"/>`,
+  info: `<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>`,
+  check: `<polyline points="20 6 9 17 4 12"/>`,
+  alert: `<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>`,
+  refresh: `<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>`
+};
+
+const svg = (n, style = '') => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="${style}">${ICONS[n] || ''}</svg>`;
+
+const isDark = () => document.documentElement.dataset.theme === 'dark';
+function toggleTheme() {
+  const next = isDark() ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  updateThemeIcon();
+}
+function updateThemeIcon() {
+  const btn = $('#theme-btn');
+  if (btn) btn.innerHTML = svg(isDark() ? 'sun' : 'moon', 'width:16px;height:16px');
+}
+
+const fmt = b => {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+  return (b / 1073741824).toFixed(2) + ' GB';
+};
+
+const nowTime = () => new Date().toTimeString().slice(0, 8);
+const nowDate = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
+
+function toast(m, iconName = 'check') {
+  const t = document.createElement('div');
+  t.className = 'toast-msg';
+  t.innerHTML = `${svg(iconName, 'width:16px;height:16px;color:#10b981')} <span>${esc(m)}</span>`;
+  document.body.appendChild(t);
+  setTimeout(() => {
+    t.style.opacity = '0';
+    t.style.transition = 'opacity 0.25s ease';
+    setTimeout(() => t.remove(), 250);
+  }, 2600);
+}
+
+/* Copy to Clipboard helper */
+function copyText(txt, label = '内容') {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(txt).then(
+      () => toast(`已复制 ${label} 到剪贴板`),
+      () => toast('复制失败，请手动选择复制', 'alert')
+    );
+  } else {
+    toast(`已模拟复制: ${txt}`);
+  }
+}
+
+/* ==========================================================================
+   ACL CALCULATION ENGINE
+   Rules:
+   1. Deepest path match wins (most specific ancestor).
+   2. Same level: max permission (rw > ro), explicit 'none' always wins!
+   3. No matching rule => default deny ('none').
+   4. Admin role does NOT automatically bypass file ACL.
+   ========================================================================== */
+const RANK = { none: -1, ro: 1, rw: 2 };
+
+function calcEffectiveAcl(share, username, targetPath) {
+  const user = S.users.find(x => x.n === username);
+  if (!user) return { perm: 'none', why: '指定的用户不存在' };
+
+  const subjects = ['user:' + user.n, ...user.g.map(g => 'group:' + g)];
+  const normalizedPath = targetPath === '' ? '/' : targetPath;
+
+  // Filter rules that match this subject and path hierarchy
+  const hits = share.acl.filter(r => {
+    if (!subjects.includes(r.s)) return false;
+    if (r.p === '/') return true;
+    return normalizedPath === r.p || normalizedPath.startsWith(r.p + '/');
+  });
+
+  if (!hits.length) {
+    return { perm: 'none', why: '无任何匹配的授权规则 → 默认安全拒绝' };
+  }
+
+  // Find the deepest path length
+  const depth = r => r.p === '/' ? 0 : r.p.split('/').filter(Boolean).length;
+  const maxDepth = Math.max(...hits.map(depth));
+  const currentLevelRules = hits.filter(r => depth(r) === maxDepth);
+
+  // At the most specific level, explicit 'none' takes priority
+  let perm;
+  if (currentLevelRules.some(r => r.perm === 'none')) {
+    perm = 'none';
+  } else {
+    perm = currentLevelRules.reduce((best, r) => RANK[r.perm] > RANK[best] ? r.perm : best, 'ro');
+  }
+
+  const ruleDetails = currentLevelRules.map(r => `${r.p} ← ${r.s} (${r.perm === 'rw' ? '读写' : r.perm === 'ro' ? '只读' : '显式拒绝'})`).join('；');
+  return {
+    perm,
+    why: `命中最近层级规则: ${ruleDetails}`
+  };
+}
+
+/* Render protocol badges */
+function renderProtoBadges(share) {
+  return `
+    <span class="proto-tag smb ${share.smb ? 'active' : ''}">SMB</span>
+    <span class="proto-tag dav ${share.dav ? 'active' : ''}">WebDAV</span>
+    <span class="proto-tag nfs ${share.nfs ? 'active' : ''}">NFS</span>
+  `;
+}
+
+function renderPermPill(p) {
+  const text = { rw: '读写 (RW)', ro: '只读 (RO)', none: '拒绝 (Deny)' }[p] || p;
+  const icon = p === 'rw' ? 'check' : p === 'ro' ? 'info' : 'lock';
+  return `<span class="perm-pill ${p}">${svg(icon, 'width:12px;height:12px')} ${text}</span>`;
+}
+
+/* Network Chart Points */
+function getSparklinePoints() {
+  const pts = S.net.map((v, i) => `${(i / 29 * 300).toFixed(1)},${(60 - (v / 64) * 54).toFixed(1)}`);
+  return [pts.join(' '), `0,64 ${pts.join(' ')} 300,64`];
+}
+
+setInterval(() => {
+  S.net.push(Math.min(62, Math.max(6, S.net.at(-1) + (Math.random() - 0.5) * 14)));
+  S.net.shift();
+  const line = $('#sparkline-line');
+  const area = $('#sparkline-area');
+  const speedVal = $('#live-speed-val');
+  if (line && area && speedVal) {
+    const [a, b] = getSparklinePoints();
+    line.setAttribute('points', a);
+    area.setAttribute('points', b);
+    speedVal.textContent = S.net.at(-1).toFixed(1);
+  }
+}, 1800);
+
+/* ==========================================================================
+   NAVIGATION & ROUTING
+   ========================================================================== */
+const NAV_MENU = [
+  {
+    group: '控制中心',
+    items: [
+      { id: 'dash', title: '概览仪表盘', icon: 'dash' },
+      { id: 'files', title: '文件浏览器', icon: 'files' }
+    ]
+  },
+  {
+    group: '共享与存储',
+    items: [
+      { id: 'shares', title: '共享目录', icon: 'shares' },
+      { id: 'users', title: '用户与权限组', icon: 'users' },
+      { id: 'sim', title: '权限模拟器', icon: 'sim' }
+    ]
+  },
+  {
+    group: '系统与安全',
+    items: [
+      { id: 'audit', title: '统一审计日志', icon: 'audit' },
+      { id: 'settings', title: '系统设置与诊断', icon: 'settings' },
+      { id: 'me', title: '个人安全设置', icon: 'me' }
+    ]
+  }
+];
+
+function go(v, id) {
+  S.view = v;
+  if (id !== undefined) S.sel = id;
+  render();
+}
+
+function renderNav() {
+  const isAdmin = S.auth && S.auth.role === 'admin';
+  const isAllowed = id => isAdmin || id === 'me' || id === 'files';
+
+  let html = '';
+  NAV_MENU.forEach(g => {
+    const items = g.items.filter(x => isAllowed(x.id));
+    if (!items.length) return;
+    html += `<div class="nav-group-label">${g.group}</div>`;
+    items.forEach(it => {
+      const active = S.view === it.id || (it.id === 'shares' && S.view === 'share');
+      let badge = '';
+      if (it.id === 'shares') badge = `<span class="nav-badge">${S.shares.length}</span>`;
+      if (it.id === 'users') badge = `<span class="nav-badge">${S.users.length}</span>`;
+      html += `
+        <button class="nav-item ${active ? 'active' : ''}" onclick="go('${it.id}')">
+          ${svg(it.icon)}
+          <span>${it.title}</span>
+          ${badge}
+        </button>
+      `;
+    });
+  });
+  $('#sidebar-nav').innerHTML = html;
+
+  // Update header info
+  if (S.auth) {
+    $('#header-username').textContent = S.auth.n;
+    $('#header-role').textContent = S.auth.role === 'admin' ? '系统管理员' : '普通用户';
+    $('#header-avatar').textContent = S.auth.n[0].toUpperCase();
+  }
+  updateThemeIcon();
+}
+
+/* ==========================================================================
+   VIEW 1: DASHBOARD
+   ========================================================================== */
+function viewDash() {
+  const shareCount = S.shares.length;
+  const userActive = S.users.filter(u => u.on).length;
+  const totalConn = Object.values(S.conn).reduce((a, b) => a + b, 0);
+  const totalDeny = S.audit.filter(a => a[7] === 'deny').length;
+
+  const [sparkPoints, sparkArea] = getSparklinePoints();
+  const currentSpeed = S.net.at(-1).toFixed(1);
+
+  return `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">系统概览</h1>
+        <p class="page-desc">主机: <b>naos-nas</b> · 运行时: Rust tokio 守护进程 · 正常运行时间: 12 天 4 小时 28 分</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-sm" onclick="S.st='doc';go('settings')">
+          ${svg('sim', 'width:14px;height:14px')} 系统诊断 (Doctor)
+        </button>
+        <button class="btn btn-primary btn-sm" onclick="newShareModal()">
+          ${svg('plus', 'width:14px;height:14px')} 创建新共享
+        </button>
+      </div>
+    </div>
+
+    <!-- 4 Key Stat Cards -->
+    <div class="grid-12" style="margin-bottom:20px">
+      <div class="card stat-card col-3" style="--accent-color:#4f46e5;--accent-light:rgba(79,70,229,0.12)">
+        <div class="stat-icon-wrapper">${svg('shares')}</div>
+        <div>
+          <div class="stat-label">共享目录数</div>
+          <div class="stat-value">${shareCount}</div>
+          <div class="stat-trend good">${svg('check', 'width:12px;height:12px')} 全部协议运行中</div>
+        </div>
+      </div>
+
+      <div class="card stat-card col-3" style="--accent-color:#10b981;--accent-light:rgba(16,185,129,0.12)">
+        <div class="stat-icon-wrapper">${svg('users')}</div>
+        <div>
+          <div class="stat-label">系统映射账号</div>
+          <div class="stat-value">${userActive} <span style="font-size:14px;color:var(--tx-muted);font-weight:400">/ ${S.users.length}</span></div>
+          <div class="stat-trend good">${svg('check', 'width:12px;height:12px')} 底层 naos_* 账号同步</div>
+        </div>
+      </div>
+
+      <div class="card stat-card col-3" style="--accent-color:#f59e0b;--accent-light:rgba(245,158,11,0.12)">
+        <div class="stat-icon-wrapper">${svg('files')}</div>
+        <div>
+          <div class="stat-label">活跃协议连接</div>
+          <div class="stat-value">${totalConn} <span style="font-size:14px;color:var(--tx-muted);font-weight:400">Clients</span></div>
+          <div class="stat-trend good">SMB: 4 · WebDAV: 2 · NFS: 1</div>
+        </div>
+      </div>
+
+      <div class="card stat-card col-3" style="--accent-color:#ef4444;--accent-light:rgba(239,68,68,0.12)">
+        <div class="stat-icon-wrapper">${svg('audit')}</div>
+        <div>
+          <div class="stat-label">今日安全拦截</div>
+          <div class="stat-value">${totalDeny} <span style="font-size:14px;color:var(--tx-muted);font-weight:400">次</span></div>
+          <div class="stat-trend warn">${svg('alert', 'width:12px;height:12px')} 包含未授权挂载尝试</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Middle Row: Performance Gauges & Live Network Throughput -->
+    <div class="grid-12" style="margin-bottom:20px">
+      <!-- Performance Cluster & Network -->
+      <div class="card col-7">
+        <div class="card-header-line">
+          <div class="card-title">${svg('dash', 'width:18px;height:18px;color:var(--primary)')} 核心资源与实时网络吞吐</div>
+          <span class="badge badge-success">实时刷新中</span>
+        </div>
+
+        <div class="gauge-cluster">
+          <!-- CPU Gauge -->
+          <div class="gauge-item">
+            <svg class="gauge-svg" viewBox="0 0 100 100">
+              <circle class="gauge-track" cx="50" cy="50" r="38"></circle>
+              <circle class="gauge-value" cx="50" cy="50" r="38" stroke="#4f46e5" stroke-dasharray="60 240"></circle>
+            </svg>
+            <div class="gauge-text">24%</div>
+            <div class="gauge-label">CPU 占用率</div>
+          </div>
+
+          <!-- Memory Gauge -->
+          <div class="gauge-item">
+            <svg class="gauge-svg" viewBox="0 0 100 100">
+              <circle class="gauge-track" cx="50" cy="50" r="38"></circle>
+              <circle class="gauge-value" cx="50" cy="50" r="38" stroke="#8b5cf6" stroke-dasharray="138 240"></circle>
+            </svg>
+            <div class="gauge-text">58%</div>
+            <div class="gauge-label">内存占用 (4.6G)</div>
+          </div>
+
+          <!-- Disk IO Gauge -->
+          <div class="gauge-item">
+            <svg class="gauge-svg" viewBox="0 0 100 100">
+              <circle class="gauge-track" cx="50" cy="50" r="38"></circle>
+              <circle class="gauge-value" cx="50" cy="50" r="38" stroke="#10b981" stroke-dasharray="72 240"></circle>
+            </svg>
+            <div class="gauge-text">30%</div>
+            <div class="gauge-label">NVMe 磁盘 I/O</div>
+          </div>
+        </div>
+
+        <!-- Network Sparkline -->
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-size:12.5px;color:var(--tx-muted);font-weight:500">双工网络吞吐速率 (Tx / Rx)</span>
+            <div style="font-size:14px;font-weight:700;color:var(--tx-main)">
+              <span id="live-speed-val">${currentSpeed}</span> <span style="font-size:12px;color:var(--tx-muted);font-weight:400">MB/s</span>
+            </div>
+          </div>
+          <svg viewBox="0 0 300 64" preserveAspectRatio="none" style="width:100%;height:64px;border-radius:var(--radius-sm);overflow:hidden">
+            <defs>
+              <linearGradient id="net-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#6366f1" stop-opacity="0.32"/>
+                <stop offset="100%" stop-color="#6366f1" stop-opacity="0.0"/>
+              </linearGradient>
+            </defs>
+            <polygon id="sparkline-area" fill="url(#net-grad)" points="${sparkArea}"></polygon>
+            <polyline id="sparkline-line" fill="none" stroke="#6366f1" stroke-width="2.5" stroke-linejoin="round" points="${sparkPoints}"></polyline>
+          </svg>
+        </div>
+      </div>
+
+      <!-- Storage Pool Volumes -->
+      <div class="card col-5">
+        <div class="card-header-line">
+          <div class="card-title">${svg('files', 'width:18px;height:18px;color:var(--warning)')} 挂载存储池分布</div>
+          <span style="font-size:12px;color:var(--tx-muted)">总计 10.0 TB</span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:18px;margin-top:6px">
+          <!-- Volume 1 -->
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <div>
+                <b style="font-size:13.5px">主数据卷 (Pool-01)</b>
+                <span class="font-mono" style="color:var(--tx-muted);font-size:12px;margin-left:6px">/data (ext4)</span>
+              </div>
+              <span style="font-size:12px;font-weight:600;color:var(--tx-main)">3.2 / 8.0 TB (40%)</span>
+            </div>
+            <div style="height:8px;background:var(--border);border-radius:99px;overflow:hidden">
+              <div style="width:40%;height:100%;background:linear-gradient(90deg,#4f46e5,#6366f1);border-radius:99px"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--tx-muted);margin-top:4px">
+              <span>可用 4.8 TB</span>
+              <span class="badge badge-success" style="padding:1px 6px;font-size:10px">POSIX ACL 已就绪</span>
+            </div>
+          </div>
+
+          <!-- Volume 2 -->
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <div>
+                <b style="font-size:13.5px">灾备存储卷 (Backup-Pool)</b>
+                <span class="font-mono" style="color:var(--tx-muted);font-size:12px;margin-left:6px">D:\\ (NTFS)</span>
+              </div>
+              <span style="font-size:12px;font-weight:600;color:var(--warning)">1.8 / 2.0 TB (90%)</span>
+            </div>
+            <div style="height:8px;background:var(--border);border-radius:99px;overflow:hidden">
+              <div style="width:90%;height:100%;background:linear-gradient(90deg,#f59e0b,#ef4444);border-radius:99px"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--tx-muted);margin-top:4px">
+              <span>仅剩 200 GB · 建议清理</span>
+              <span class="badge badge-warning" style="padding:1px 6px;font-size:10px">接近阈值</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="notice-box" style="margin-top:20px;padding:10px 14px;font-size:12px">
+          ${svg('info', 'width:16px;height:16px;color:var(--primary)')}
+          <div>naos 声明式引擎仅负责映射与权限下发，底层磁盘由宿主机安全隔离管理。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Protocols Matrix -->
+    <div class="grid-12" style="margin-bottom:20px">
+      <!-- SMB -->
+      <div class="card proto-service-card col-4">
+        <div class="proto-service-header">
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="proto-badge-lg" style="background:rgba(59,130,246,0.15);color:#3b82f6">SMB</span>
+            <div>
+              <b style="font-size:15px">Samba / Windows SMB</b>
+              <div style="font-size:12px;color:var(--tx-muted)">端口: 445 · 客户端: ${S.conn.SMB} 台</div>
+            </div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" ${S.proto.SMB ? 'checked' : ''} onchange="S.proto.SMB^=1;toast('SMB 守护适配器状态已更新');render()">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding-top:10px;border-top:1px solid var(--border)">
+          <span style="color:var(--tx-muted)">集成模式: 系统原生服务托管</span>
+          <span class="badge ${S.proto.SMB ? 'badge-success' : 'badge-danger'}">${S.proto.SMB ? '● 监听中' : '○ 已停止'}</span>
+        </div>
+      </div>
+
+      <!-- WebDAV -->
+      <div class="card proto-service-card col-4">
+        <div class="proto-service-header">
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="proto-badge-lg" style="background:rgba(16,185,129,0.15);color:#10b981">DAV</span>
+            <div>
+              <b style="font-size:15px">内置 WebDAV 服务</b>
+              <div style="font-size:12px;color:var(--tx-muted)">端口: 8443 (/dav) · 客户端: ${S.conn.WebDAV} 台</div>
+            </div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" ${S.proto.WebDAV ? 'checked' : ''} onchange="S.proto.WebDAV^=1;toast('WebDAV 服务状态已更新');render()">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding-top:10px;border-top:1px solid var(--border)">
+          <span style="color:var(--tx-muted)">集成模式: Rust 内存路由热更新</span>
+          <span class="badge ${S.proto.WebDAV ? 'badge-success' : 'badge-danger'}">${S.proto.WebDAV ? '● 监听中' : '○ 已停止'}</span>
+        </div>
+      </div>
+
+      <!-- NFS -->
+      <div class="card proto-service-card col-4">
+        <div class="proto-service-header">
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="proto-badge-lg" style="background:rgba(245,158,11,0.15);color:#f59e0b">NFS</span>
+            <div>
+              <b style="font-size:15px">自研 naos-nfs (NFSv3)</b>
+              <div style="font-size:12px;color:var(--tx-muted)">端口: 2049 · 客户端: ${S.conn.NFS} 台</div>
+            </div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" ${S.proto.NFS ? 'checked' : ''} onchange="S.proto.NFS^=1;toast('NFS 服务状态已更新');render()">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding-top:10px;border-top:1px solid var(--border)">
+          <span style="color:var(--tx-muted)">认证体系: L1(CIDR) + L2(UID 映射)</span>
+          <span class="badge ${S.proto.NFS ? 'badge-success' : 'badge-danger'}">${S.proto.NFS ? '● 监听中' : '○ 已停止'}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Row: Recent Shares & Live Audit Streams -->
+    <div class="grid-12">
+      <!-- Recent Shares -->
+      <div class="card col-6">
+        <div class="card-header-line">
+          <div class="card-title">${svg('shares', 'width:18px;height:18px;color:var(--primary)')} 活跃共享列表</div>
+          <button class="btn btn-sm" onclick="go('shares')">管理全部 (${S.shares.length}) ${svg('chev', 'width:12px;height:12px')}</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          ${S.shares.map(s => `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:var(--radius-md);background:var(--bg-subtle);border:1px solid var(--border)">
+              <div style="display:flex;align-items:center;gap:12px;min-width:0">
+                <span class="file-icon f-folder" style="width:38px;height:38px;margin:0">${svg('files', 'width:20px;height:20px')}</span>
+                <div style="min-width:0">
+                  <div style="font-weight:600;font-size:14px;color:var(--tx-main)">${esc(s.name)}</div>
+                  <div class="font-mono" style="font-size:11.5px;color:var(--tx-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.path)}</div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div>${renderProtoBadges(s)}</div>
+                <button class="btn btn-sm" onclick="openFilesView(${s.id})" title="浏览文件">${svg('files', 'width:13px;height:13px')} 浏览</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- Live Audit Stream -->
+      <div class="card col-6">
+        <div class="card-header-line">
+          <div class="card-title">${svg('audit', 'width:18px;height:18px;color:var(--danger)')} 最新安全审计记录</div>
+          <button class="btn btn-sm" onclick="go('audit')">完整审计 ${svg('chev', 'width:12px;height:12px')}</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${S.audit.slice(0, 5).map(a => `
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:var(--radius-sm);border-bottom:1px solid var(--border)">
+              <span class="avatar" style="width:26px;height:26px;font-size:11px">${esc((a[1] === '—' ? '?' : a[1])[0].toUpperCase())}</span>
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;align-items:center;gap:6px;font-size:13px">
+                  <b style="color:var(--tx-main)">${esc(a[1])}</b>
+                  <span class="proto-tag ${a[2].toLowerCase()} active" style="margin:0;font-size:10px;padding:1px 5px">${esc(a[2])}</span>
+                  <span class="badge ${a[3] === 'WRITE' ? 'badge-primary' : a[3] === 'DELETE' ? 'badge-danger' : 'badge-subtle'}" style="padding:1px 6px;font-size:10px">${esc(a[3])}</span>
+                </div>
+                <div class="font-mono" style="font-size:11.5px;color:var(--tx-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                  ${esc(a[4])}: ${esc(a[5])}
+                </div>
+              </div>
+              <div style="text-align:right">
+                <span class="badge ${a[7] === 'ok' ? 'badge-success' : 'badge-danger'}" style="font-size:10.5px">
+                  ${a[7] === 'ok' ? '允许' : '拦截'}
+                </span>
+                <div style="font-size:10.5px;color:var(--tx-dim);margin-top:2px">${esc(a[0])}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* ==========================================================================
+   VIEW 2: SHARES (List & Detail with ACL, NFS, Addresses)
+   ========================================================================== */
+function viewShares() {
+  return `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">共享目录管理</h1>
+        <p class="page-desc">将任意本地或挂载目录通过 SMB / WebDAV / NFS 三大协议共享，支持目录级精细权限控制</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-primary" onclick="newShareModal()">
+          ${svg('plus')} 新建共享
+        </button>
+      </div>
+    </div>
+
+    <div class="grid-12">
+      ${S.shares.map(s => `
+        <div class="card col-4" style="cursor:pointer;display:flex;flex-direction:column;justify-content:space-between" onclick="go('share', ${s.id})">
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+              <div style="display:flex;align-items:center;gap:12px">
+                <span class="file-icon f-folder" style="margin:0;width:44px;height:44px">
+                  ${svg('files', 'width:24px;height:24px')}
+                </span>
+                <div>
+                  <h3 style="font-size:16px;font-weight:700;color:var(--tx-main)">${esc(s.name)}</h3>
+                  <div class="font-mono" style="font-size:12px;color:var(--tx-muted);margin-top:2px">${esc(s.path)}</div>
+                </div>
+              </div>
+            </div>
+
+            <p style="font-size:12.5px;color:var(--tx-muted);margin-bottom:14px">${esc(s.comment || '无附加备注')}</p>
+
+            <div style="margin-bottom:14px">
+              <span style="font-size:12px;color:var(--tx-dim);margin-right:8px">开放协议:</span>
+              ${renderProtoBadges(s)}
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;padding-top:14px;border-top:1px solid var(--border)">
+            <span class="badge badge-subtle">
+              ${svg('lock', 'width:12px;height:12px')} ${s.acl.length} 条 ACL 规则
+            </span>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-sm" onclick="event.stopPropagation();openFilesView(${s.id})">浏览文件</button>
+              <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();go('share', ${s.id})">配置</button>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function viewShareDetail() {
+  const s = S.shares.find(x => x.id === S.sel);
+  if (!s) return viewShares();
+
+  const tabs = [
+    { id: 'acl', title: '子目录 ACL 权限' },
+    { id: 'nfs', title: 'NFS 客户端绑定', hidden: !s.nfs },
+    { id: 'access', title: '挂载与访问连接' }
+  ].filter(t => !t.hidden);
+
+  if (!tabs.some(t => t.id === S.tab)) S.tab = 'acl';
+
+  let tabContent = '';
+
+  if (S.tab === 'acl') {
+    tabContent = `
+      <div class="notice-box">
+        ${svg('info', 'width:18px;height:18px;color:var(--primary)')}
+        <div>
+          <b>权限求值法则 (acl-engine)：</b><br>
+          1. 规则按路径级联继承，<b>越深层级的子目录越优先</b>；<br>
+          2. 同一层级若有多条规则，取用户与所属组的权限并集（只读 vs 读写），但<b>显式「拒绝」拥有最高优先级</b>；<br>
+          3. 若无任何匹配规则，系统默认拒绝访问；管理员不自动越权。
+        </div>
+      </div>
+
+      <div class="card card-flush" style="margin-top:16px">
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>相对路径 (rel_path)</th>
+                <th>授权主体 (Subject)</th>
+                <th>生效权限 (Permission)</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${s.acl.map((r, i) => `
+                <tr>
+                  <td>
+                    <span class="font-mono" style="font-weight:600;color:var(--tx-main)">${esc(r.p)}</span>
+                  </td>
+                  <td>
+                    <span class="badge ${r.s.startsWith('user:') ? 'badge-primary' : 'badge-subtle'}">
+                      ${r.s.startsWith('user:') ? svg('users', 'width:12px;height:12px') : svg('shares', 'width:12px;height:12px')}
+                      ${esc(r.s)}
+                    </span>
+                  </td>
+                  <td>
+                    <select onchange="updateAclPerm(${s.id}, ${i}, this.value)" style="width:auto;display:inline-block">
+                      <option value="rw" ${r.perm === 'rw' ? 'selected' : ''}>读写 (RW)</option>
+                      <option value="ro" ${r.perm === 'ro' ? 'selected' : ''}>只读 (RO)</option>
+                      <option value="none" ${r.perm === 'none' ? 'selected' : ''}>拒绝 (Deny)</option>
+                    </select>
+                  </td>
+                  <td>
+                    <button class="btn btn-sm btn-danger" onclick="delAclRule(${s.id}, ${i})">
+                      ${svg('trash', 'width:12px;height:12px')} 删除
+                    </button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Add Rule Card -->
+      <div class="card" style="margin-top:16px;background:var(--card-subtle)">
+        <h4 style="font-size:14px;font-weight:600;margin-bottom:12px">添加子目录权限规则</h4>
+        <div style="display:grid;grid-template-columns:2fr 2fr 1.5fr auto;gap:12px;align-items:flex-end">
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">子目录相对路径</label>
+            <input id="add-acl-path" class="font-mono" value="/" placeholder="例如 / 或 /photos/private">
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">授权主体</label>
+            <select id="add-acl-subject">
+              <optgroup label="用户 (Users)">
+                ${S.users.map(u => `<option value="user:${esc(u.n)}">用户: ${esc(u.n)}</option>`).join('')}
+              </optgroup>
+              <optgroup label="用户组 (Groups)">
+                ${S.groups.map(g => `<option value="group:${esc(g)}">组: ${esc(g)}</option>`).join('')}
+              </optgroup>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">权限等级</label>
+            <select id="add-acl-perm">
+              <option value="rw">读写 (RW)</option>
+              <option value="ro">只读 (RO)</option>
+              <option value="none">拒绝 (Deny)</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" onclick="addAclRule(${s.id})">
+            ${svg('plus')} 添加规则
+          </button>
+        </div>
+      </div>
+    `;
+  } else if (S.tab === 'nfs') {
+    tabContent = `
+      <div class="notice-box warning">
+        ${svg('alert', 'width:18px;height:18px;color:var(--warning)')}
+        <div>
+          <b>NFSv3 无状态安全提示：</b><br>
+          NFSv3 协议本身不包含口令握手。naos 采用两级防护策略：<br>
+          - <b>L1 客户端绑定：</b>限定 CIDR 地址，所有来自该地址的请求视为绑定用户。<br>
+          - <b>L2 UID 映射：</b>限定 CIDR 地址并在客户端存在多用户时，将指定 UID 映射为对应 naos 账号。<br>
+          此机制仅适用于可信局域网或 WireGuard / Tailscale VPN；公网使用建议开启 Kerberos (L3)。
+        </div>
+      </div>
+
+      <div class="card card-flush" style="margin-top:16px">
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>客户端 CIDR 网段</th>
+                <th>来源 UID</th>
+                <th>映射为 naos 用户</th>
+                <th>权限</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${s.nfsb.map((r, i) => `
+                <tr>
+                  <td><span class="font-mono" style="font-weight:600">${esc(r.cidr)}</span></td>
+                  <td><span class="font-mono">${esc(r.uid || '（任意 UID · L1 绑定）')}</span></td>
+                  <td>
+                    <span class="badge badge-primary">${esc(r.user)}</span>
+                  </td>
+                  <td>${renderPermPill(r.perm)}</td>
+                  <td>
+                    <button class="btn btn-sm btn-danger" onclick="delNfsBinding(${s.id}, ${i})">
+                      ${svg('trash', 'width:12px;height:12px')} 删除
+                    </button>
+                  </td>
+                </tr>
+              `).join('') || `
+                <tr>
+                  <td colspan="5" style="text-align:center;padding:32px;color:var(--tx-muted)">
+                    暂未配置任何 NFS 客户端绑定。默认情况下，所有 NFS 挂载请求均会被拒绝。
+                  </td>
+                </tr>
+              `}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Add NFS Binding -->
+      <div class="card" style="margin-top:16px;background:var(--card-subtle)">
+        <h4 style="font-size:14px;font-weight:600;margin-bottom:12px">添加 NFS 客户端绑定规则</h4>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1.5fr 1fr auto;gap:12px;align-items:flex-end">
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">客户端 CIDR / IP</label>
+            <input id="nfs-cidr" class="font-mono" placeholder="192.168.1.0/24">
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">UID (选填 L2)</label>
+            <input id="nfs-uid" class="font-mono" placeholder="留空为 L1">
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">映射为 naos 用户</label>
+            <select id="nfs-user">
+              ${S.users.map(u => `<option value="${esc(u.n)}">${esc(u.n)}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">权限</label>
+            <select id="nfs-perm">
+              <option value="rw">读写</option>
+              <option value="ro">只读</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" onclick="addNfsBinding(${s.id})">
+            ${svg('plus')} 添加绑定
+          </button>
+        </div>
+      </div>
+    `;
+  } else {
+    // Access Addresses
+    const host = location.hostname || 'naos-nas.local';
+    tabContent = `
+      <div class="notice-box">
+        ${svg('info', 'width:18px;height:18px;color:var(--primary)')}
+        <div>点击对应挂载地址或命令右侧的复制按钮，即可直接粘贴至客户端资源管理器或终端中使用。</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:14px;margin-top:16px">
+        ${s.smb ? `
+          <div class="card" style="padding:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="proto-tag smb active">SMB 协议</span>
+                <b style="font-size:14px">Windows 资源管理器 / macOS Finder</b>
+              </div>
+              <button class="btn btn-sm" onclick="copyText('\\\\\\\\${host}\\\\${s.name}', 'Windows UNC 地址')">
+                ${svg('copy', 'width:12px;height:12px')} 复制 Win 地址
+              </button>
+            </div>
+            <div class="font-mono" style="padding:8px 12px;background:var(--bg-subtle);border-radius:var(--radius-sm);border:1px solid var(--border);color:var(--tx-main);font-size:13px">
+              Win: \\\\${host}\\${esc(s.name)}<br>
+              macOS/Linux: smb://${host}/${esc(s.name)}
+            </div>
+          </div>
+        ` : ''}
+
+        ${s.dav ? `
+          <div class="card" style="padding:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="proto-tag dav active">WebDAV</span>
+                <b style="font-size:14px">支持 Infuse、Kodi、Cyberduck 等标准客户端</b>
+              </div>
+              <button class="btn btn-sm" onclick="copyText('https://${host}:8443/dav/${s.name}', 'WebDAV URL')">
+                ${svg('copy', 'width:12px;height:12px')} 复制 WebDAV URL
+              </button>
+            </div>
+            <div class="font-mono" style="padding:8px 12px;background:var(--bg-subtle);border-radius:var(--radius-sm);border:1px solid var(--border);color:var(--tx-main);font-size:13px">
+              https://${host}:8443/dav/${esc(s.name)}
+            </div>
+          </div>
+        ` : ''}
+
+        ${s.nfs ? `
+          <div class="card" style="padding:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="proto-tag nfs active">NFSv3</span>
+                <b style="font-size:14px">Linux / Unix 客户端挂载指令</b>
+              </div>
+              <button class="btn btn-sm" onclick="copyText('sudo mount -t nfs ${host}:/${s.name} /mnt/${s.name}', 'NFS 挂载命令')">
+                ${svg('copy', 'width:12px;height:12px')} 复制挂载命令
+              </button>
+            </div>
+            <div class="font-mono" style="padding:8px 12px;background:var(--bg-subtle);border-radius:var(--radius-sm);border:1px solid var(--border);color:var(--tx-main);font-size:13px">
+              sudo mount -t nfs ${host}:/${esc(s.name)} /mnt/${esc(s.name)}
+            </div>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="page-header">
+      <div>
+        <div class="breadcrumbs" style="margin-bottom:8px">
+          <a class="crumb-item" onclick="go('shares')">${svg('shares', 'width:13px;height:13px')} 共享列表</a>
+          <span class="crumb-sep">/</span>
+          <span style="font-weight:600;color:var(--tx-main)">${esc(s.name)}</span>
+        </div>
+        <h1 class="page-title">${esc(s.name)}</h1>
+        <p class="page-desc">宿主机物理绝对路径: <span class="font-mono" style="color:var(--tx-main);font-weight:600">${esc(s.path)}</span></p>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-sm" onclick="openFilesView(${s.id})">
+          ${svg('files', 'width:14px;height:14px')} 浏览此共享文件
+        </button>
+        <button class="btn btn-sm btn-danger" onclick="confirmDeleteShare(${s.id})">
+          ${svg('trash', 'width:14px;height:14px')} 删除共享
+        </button>
+      </div>
+    </div>
+
+    <!-- Protocol Quick Toggles Card -->
+    <div class="card" style="margin-bottom:20px;padding:16px 20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px">
+        <div style="font-size:13.5px;font-weight:600;color:var(--tx-main)">协议激活状态:</div>
+        <div style="display:flex;gap:24px;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer">
+            <input type="checkbox" class="switch-cb" ${s.smb ? 'checked' : ''} onchange="toggleShareProto(${s.id}, 'smb', this.checked)">
+            <span>启用 SMB (Samba)</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer">
+            <input type="checkbox" class="switch-cb" ${s.dav ? 'checked' : ''} onchange="toggleShareProto(${s.id}, 'dav', this.checked)">
+            <span>启用 WebDAV (HTTPS)</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer">
+            <input type="checkbox" class="switch-cb" ${s.nfs ? 'checked' : ''} onchange="toggleShareProto(${s.id}, 'nfs', this.checked)">
+            <span>启用 NFS (NFSv3)</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tabs Nav -->
+    <div class="tab-nav">
+      ${tabs.map(t => `
+        <button class="tab-btn ${S.tab === t.id ? 'active' : ''}" onclick="S.tab='${t.id}';render()">
+          ${t.title}
+        </button>
+      `).join('')}
+    </div>
+
+    ${tabContent}
+  `;
+}
+
+function updateAclPerm(shareId, ruleIndex, newPerm) {
+  const share = S.shares.find(x => x.id === shareId);
+  if (share && share.acl[ruleIndex]) {
+    share.acl[ruleIndex].perm = newPerm;
+    toast('ACL 规则权限已更新并实时生效');
+    render();
+  }
+}
+
+function delAclRule(shareId, ruleIndex) {
+  const share = S.shares.find(x => x.id === shareId);
+  if (share) {
+    share.acl.splice(ruleIndex, 1);
+    toast('已移除 ACL 规则');
+    render();
+  }
+}
+
+function addAclRule(shareId) {
+  const share = S.shares.find(x => x.id === shareId);
+  if (!share) return;
+  let p = $('#add-acl-path').value.trim() || '/';
+  if (!p.startsWith('/')) p = '/' + p;
+  if (p.length > 1) p = p.replace(/\/+$/, '');
+  const s = $('#add-acl-subject').value;
+  const perm = $('#add-acl-perm').value;
+  share.acl.push({ p, s, perm });
+  toast('已添加新的 ACL 规则');
+  render();
+}
+
+function toggleShareProto(shareId, protoKey, enabled) {
+  const share = S.shares.find(x => x.id === shareId);
+  if (share) {
+    share[protoKey] = enabled ? 1 : 0;
+    toast(`${protoKey.toUpperCase()} 协议配置已变更`);
+    render();
+  }
+}
+
+function addNfsBinding(shareId) {
+  const share = S.shares.find(x => x.id === shareId);
+  const c = $('#nfs-cidr').value.trim();
+  if (!/^\d+\.\d+\.\d+\.\d+(\/\d+)?$/.test(c)) {
+    alert('请输入规范的 CIDR 地址，例如 192.168.1.0/24 或 10.0.0.5/32');
+    return;
+  }
+  const uid = $('#nfs-uid').value.trim();
+  const user = $('#nfs-user').value;
+  const perm = $('#nfs-perm').value;
+  share.nfsb.push({ cidr: c, uid, user, perm });
+  toast('已成功绑定 NFS 客户端规则');
+  render();
+}
+
+function delNfsBinding(shareId, index) {
+  const share = S.shares.find(x => x.id === shareId);
+  if (share) {
+    share.nfsb.splice(index, 1);
+    toast('已删除 NFS 绑定规则');
+    render();
+  }
+}
+
+function confirmDeleteShare(id) {
+  const s = S.shares.find(x => x.id === id);
+  if (!s) return;
+  if (confirm(`确定要彻底删除共享「${s.name}」吗？底层文件不会被删除，但共享服务与所有 ACL 规则将立即注销。`)) {
+    S.shares = S.shares.filter(x => x.id !== id);
+    toast(`已删除共享 ${s.name}`);
+    go('shares');
+  }
+}
+
+/* ==========================================================================
+   VIEW 3: FILE EXPLORER (文件浏览器)
+   ========================================================================== */
+function openFilesView(shareId) {
+  S.fsh = shareId;
+  S.fp = [];
+  S.chk = [];
+  S.q = '';
+  go('files');
+}
+
+function getEffectiveUserForFiles() {
+  if (S.auth.role === 'admin') {
+    return S.as || S.auth.n;
+  }
+  return S.auth.n;
+}
+
+function getFileTypeCategory(filename) {
+  const ext = (filename.split('.').pop() || '').toLowerCase();
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'svg'].includes(ext)) return 'img';
+  if (['mkv', 'mp4', 'mov', 'avi', 'webm'].includes(ext)) return 'media';
+  if (['flac', 'mp3', 'wav', 'aac', 'ogg'].includes(ext)) return 'media';
+  if (['md', 'txt', 'pdf', 'doc', 'docx', 'ppt'].includes(ext)) return 'doc';
+  if (['rs', 'js', 'ts', 'py', 'go', 'json', 'toml', 'yaml', 'sh'].includes(ext)) return 'code';
+  if (['zip', '7z', 'tar', 'gz', 'rar'].includes(ext)) return 'archive';
+  if (['dump', 'sql', 'db'].includes(ext)) return 'db';
+  return 'generic';
+}
+
+function renderFileIcon(name, isDir) {
+  if (isDir) {
+    return `<div class="file-icon f-folder">${svg('files')}</div>`;
+  }
+  const cat = getFileTypeCategory(name);
+  const map = {
+    img: ['f-img', 'file'],
+    media: ['f-media', 'file'],
+    doc: ['f-doc', 'file'],
+    code: ['f-code', 'file'],
+    archive: ['f-archive', 'file'],
+    db: ['f-db', 'file'],
+    generic: ['f-generic', 'file']
+  };
+  const [cls, ic] = map[cat] || ['f-generic', 'file'];
+  return `<div class="file-icon ${cls}">${svg(ic)}</div>`;
+}
+
+function viewFiles() {
+  if (!S.shares.length) {
+    return `
+      <div class="card" style="text-align:center;padding:48px">
+        <h2 style="font-size:18px;margin-bottom:8px">暂无可用共享</h2>
+        <p style="color:var(--tx-muted)">请先在「共享管理」中创建一个共享目录。</p>
+      </div>
+    `;
+  }
+
+  const isAdmin = S.auth.role === 'admin';
+  const effectiveUser = getEffectiveUserForFiles();
+
+  let share = S.shares.find(x => x.id === S.fsh);
+  if (!share) {
+    share = S.shares[0];
+    S.fsh = share.id;
+    S.fp = [];
+  }
+
+  S.fs[share.id] = S.fs[share.id] || D({});
+
+  // Resolve directory node
+  let dirNode = S.fs[share.id];
+  for (const part of S.fp) {
+    if (dirNode && dirNode.c && dirNode.c[part] && dirNode.c[part].t === 'd') {
+      dirNode = dirNode.c[part];
+    } else {
+      dirNode = null;
+      break;
+    }
+  }
+  if (!dirNode) {
+    S.fp = [];
+    dirNode = S.fs[share.id];
+  }
+
+  const currentRelPath = '/' + S.fp.join('/');
+  const dirPermInfo = calcEffectiveAcl(share, effectiveUser, currentRelPath);
+  const dirPerm = dirPermInfo.perm;
+  const canReadDir = dirPerm !== 'none';
+  const canWriteDir = dirPerm === 'rw';
+
+  // Breadcrumbs UI
+  const breadcrumbHtml = `
+    <div class="breadcrumbs">
+      <a class="crumb-item" onclick="S.fp=[];S.chk=[];S.q='';render()">
+        ${svg('shares', 'width:14px;height:14px')} ${esc(share.name)}
+      </a>
+      ${S.fp.map((part, idx) => `
+        <span class="crumb-sep">/</span>
+        <a class="crumb-item" onclick="S.fp=${esc(JSON.stringify(S.fp.slice(0, idx + 1)))};S.chk=[];S.q='';render()">
+          ${esc(part)}
+        </a>
+      `).join('')}
+    </div>
+  `;
+
+  if (!canReadDir) {
+    return `
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">文件浏览器</h1>
+          <p class="page-desc">按当前模拟身份评估有效权限，三协议共用同一套 ACL 规则</p>
+        </div>
+      </div>
+
+      <div class="card" style="padding:28px">
+        ${breadcrumbHtml}
+        <div class="notice-box danger" style="margin-top:20px">
+          ${svg('lock', 'width:24px;height:24px;color:var(--danger)')}
+          <div>
+            <h3 style="font-size:16px;font-weight:700">访问被拒绝 (Permission Denied)</h3>
+            <p style="margin-top:4px;font-size:13px">
+              当前操作主体 <b>${esc(effectiveUser)}</b> 对路径 <span class="font-mono">${esc(currentRelPath)}</span> 没有读取权限。
+            </p>
+            <div class="font-mono" style="margin-top:8px;font-size:12px;opacity:0.85">${esc(dirPermInfo.why)}</div>
+          </div>
+        </div>
+
+        ${isAdmin ? `
+          <div style="margin-top:16px;display:flex;align-items:center;gap:12px">
+            <span style="font-size:13px;color:var(--tx-muted)">管理员权限模拟切换:</span>
+            <select style="width:auto" onchange="S.as=this.value;S.chk=[];render()">
+              ${S.users.map(u => `<option value="${esc(u.n)}" ${u.n === effectiveUser ? 'selected' : ''}>以 ${esc(u.n)} 身份查看</option>`).join('')}
+            </select>
+          </div>
+        ` : ''}
+
+        ${S.fp.length ? `
+          <div style="margin-top:20px">
+            <button class="btn" onclick="S.fp=S.fp.slice(0,-1);render()">
+              ${svg('up')} 返回上级目录
+            </button>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  // Filter items
+  const query = (S.q || '').toLowerCase();
+  const entries = Object.entries(dirNode.c).filter(([name]) => name.toLowerCase().includes(query));
+  entries.sort((a, b) => {
+    if (a[1].t === 'd' && b[1].t !== 'd') return -1;
+    if (a[1].t !== 'd' && b[1].t === 'd') return 1;
+    return a[0].localeCompare(b[0], 'zh');
+  });
+
+  const checkedCount = S.chk.length;
+
+  return `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">文件浏览器</h1>
+        <p class="page-desc">
+          当前共享: <b>${esc(share.name)}</b> · 真实路径: <span class="font-mono" style="color:var(--tx-main)">${esc(share.path)}${esc(currentRelPath === '/' ? '' : currentRelPath)}</span>
+        </p>
+      </div>
+
+      <!-- Controls: Share Selector & Admin Impersonation -->
+      <div class="header-actions">
+        <select style="width:auto" onchange="openFilesView(+this.value)">
+          ${S.shares.map(s => `<option value="${s.id}" ${s.id === share.id ? 'selected' : ''}>共享: ${esc(s.name)}</option>`).join('')}
+        </select>
+
+        ${isAdmin ? `
+          <div style="display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-md);padding:2px 8px">
+            <span style="font-size:12px;color:var(--tx-muted)">模拟身份:</span>
+            <select style="border:none;padding:4px;box-shadow:none" onchange="S.as=this.value;S.chk=[];render()">
+              ${S.users.map(u => `<option value="${esc(u.n)}" ${u.n === effectiveUser ? 'selected' : ''}>${esc(u.n)} (${u.role === 'admin' ? '管理员' : '普通用户'})</option>`).join('')}
+            </select>
+          </div>
+        ` : ''}
+      </div>
+    </div>
+
+    <div class="card" style="padding:18px 22px">
+      <!-- Top Explorer Bar -->
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px">
+        ${breadcrumbHtml}
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:12px;color:var(--tx-muted)">目录有效权限:</span>
+          ${renderPermPill(dirPerm)}
+        </div>
+      </div>
+
+      <!-- Toolbar -->
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" ${canWriteDir ? '' : 'disabled title="无写入权限"'} onclick="modalNewFolder()">
+            ${svg('folderplus', 'width:14px;height:14px')} 新建文件夹
+          </button>
+          
+          <button class="btn btn-sm" ${canWriteDir ? '' : 'disabled title="无写入权限"'} onclick="$('#file-upload-input').click()">
+            ${svg('upload', 'width:14px;height:14px')} 上传文件
+          </button>
+          <input type="file" id="file-upload-input" multiple hidden onchange="handleFileUpload(this)">
+
+          ${S.fp.length ? `
+            <button class="btn btn-sm" onclick="S.fp=S.fp.slice(0,-1);render()">
+              ${svg('up', 'width:14px;height:14px')} 上级目录
+            </button>
+          ` : ''}
+
+          <!-- Batch Operations -->
+          ${checkedCount ? `
+            <span class="badge badge-primary" style="margin-left:8px">已选 ${checkedCount} 项</span>
+            <button class="btn btn-sm" onclick="batchFileOp('dl')">${svg('dl', 'width:12px;height:12px')} 下载</button>
+            <button class="btn btn-sm" onclick="batchFileOp('cp')">${svg('copy', 'width:12px;height:12px')} 复制</button>
+            <button class="btn btn-sm" ${canWriteDir ? '' : 'disabled'} onclick="batchFileOp('mv')">${svg('move', 'width:12px;height:12px')} 移动</button>
+            <button class="btn btn-sm btn-danger" ${canWriteDir ? '' : 'disabled'} onclick="batchFileOp('rm')">${svg('trash', 'width:12px;height:12px')} 删除</button>
+          ` : ''}
+        </div>
+
+        <div style="display:flex;gap:10px;align-items:center">
+          <!-- Search in directory -->
+          <div style="position:relative;width:200px">
+            <input placeholder="搜索当前目录..." value="${esc(S.q || '')}" oninput="S.q=this.value;render()" style="padding-left:30px;padding-top:5px;padding-bottom:5px;font-size:12.5px">
+            <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--tx-muted);pointer-events:none">
+              ${svg('dash', 'width:14px;height:14px')}
+            </span>
+          </div>
+
+          <!-- View Mode Toggle -->
+          <div style="display:flex;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
+            <button class="btn btn-icon ${S.vw === 'grid' ? 'active' : ''}" style="width:30px;height:30px;border:none;border-radius:0" onclick="S.vw='grid';render()" title="网格视图">
+              ${svg('grid', 'width:14px;height:14px')}
+            </button>
+            <button class="btn btn-icon ${S.vw === 'list' ? 'active' : ''}" style="width:30px;height:30px;border:none;border-radius:0" onclick="S.vw='list';render()" title="列表视图">
+              ${svg('list', 'width:14px;height:14px')}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- File Content Body -->
+      ${!entries.length ? `
+        <div style="text-align:center;padding:56px 20px;color:var(--tx-muted)">
+          <div style="display:flex;justify-content:center;margin-bottom:12px">
+            <div class="file-icon f-folder" style="width:64px;height:64px">${svg('files', 'width:36px;height:36px')}</div>
+          </div>
+          <div style="font-size:15px;font-weight:600;color:var(--tx-main)">${query ? '未检索到匹配的文件或文件夹' : '当前文件夹为空'}</div>
+          <p style="font-size:13px;margin-top:4px">${query ? '尝试调整搜索关键词' : '可通过上方按钮上传文件或创建子目录'}</p>
+        </div>
+      ` : S.vw === 'grid' ? `
+        <div class="file-grid">
+          ${entries.map(([name, item]) => {
+            const isDir = item.t === 'd';
+            const itemPath = (currentRelPath === '/' ? '' : currentRelPath) + '/' + name;
+            const itemPermInfo = calcEffectiveAcl(share, effectiveUser, itemPath);
+            const itemPerm = itemPermInfo.perm;
+            const itemCanRead = itemPerm !== 'none';
+            const isChecked = S.chk.includes(name);
+
+            return `
+              <div class="file-card ${isChecked ? 'selected' : ''} ${itemCanRead ? '' : 'dimmed'}" onclick="handleFileClick('${esc(name)}', ${isDir}, ${itemCanRead})">
+                ${itemCanRead ? `
+                  <input type="checkbox" class="file-checkbox" ${isChecked ? 'checked' : ''} onclick="event.stopPropagation()" onchange="toggleFileCheck('${esc(name)}', this.checked)">
+                ` : `
+                  <span class="file-checkbox" style="color:var(--danger)">${svg('lock', 'width:14px;height:14px')}</span>
+                `}
+
+                ${renderFileIcon(name, isDir)}
+                <div class="file-name" title="${esc(name)}">${esc(name)}</div>
+                <div class="file-meta">
+                  ${isDir ? '文件夹' : fmt(item.s)} · ${itemCanRead ? renderPermPill(itemPerm) : '<span style="color:var(--danger)">无权访问</span>'}
+                </div>
+
+                <div class="file-actions-hover" onclick="event.stopPropagation()">
+                  ${itemCanRead ? `
+                    <button class="btn btn-icon btn-sm" onclick="previewOrDownload('${esc(name)}', ${isDir})" title="${isDir ? '进入' : '预览/下载'}">
+                      ${svg(isDir ? 'chev' : 'dl', 'width:12px;height:12px')}
+                    </button>
+                    ${canWriteDir ? `
+                      <button class="btn btn-icon btn-sm" onclick="modalRenameFile('${esc(name)}')" title="重命名">
+                        ${svg('edit', 'width:12px;height:12px')}
+                      </button>
+                      <button class="btn btn-icon btn-sm btn-danger" onclick="deleteSingleFile('${esc(name)}', ${isDir})" title="删除">
+                        ${svg('trash', 'width:12px;height:12px')}
+                      </button>
+                    ` : ''}
+                  ` : ''}
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      ` : `
+        <div class="table-wrapper" style="margin-top:14px">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th style="width:36px"></th>
+                <th>名称</th>
+                <th>大小</th>
+                <th>修改时间</th>
+                <th>我的权限</th>
+                <th style="text-align:right">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${entries.map(([name, item]) => {
+                const isDir = item.t === 'd';
+                const itemPath = (currentRelPath === '/' ? '' : currentRelPath) + '/' + name;
+                const itemPermInfo = calcEffectiveAcl(share, effectiveUser, itemPath);
+                const itemPerm = itemPermInfo.perm;
+                const itemCanRead = itemPerm !== 'none';
+                const isChecked = S.chk.includes(name);
+
+                return `
+                  <tr style="${itemCanRead ? '' : 'opacity:0.6'}">
+                    <td>
+                      ${itemCanRead ? `
+                        <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="toggleFileCheck('${esc(name)}', this.checked)">
+                      ` : `
+                        <span style="color:var(--danger)">${svg('lock', 'width:14px;height:14px')}</span>
+                      `}
+                    </td>
+                    <td>
+                      <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="handleFileClick('${esc(name)}', ${isDir}, ${itemCanRead})">
+                        <span style="width:26px;height:26px;display:flex;align-items:center;justify-content:center">
+                          ${renderFileIcon(name, isDir).replace('file-icon', '').replace('style="margin-bottom:10px"', '')}
+                        </span>
+                        <b style="color:var(--tx-main);font-size:13.5px">${esc(name)}</b>
+                      </div>
+                    </td>
+                    <td>${isDir ? '—' : fmt(item.s)}</td>
+                    <td style="color:var(--tx-muted);font-size:12.5px">${item.m}</td>
+                    <td>${itemCanRead ? renderPermPill(itemPerm) : '<span class="perm-pill none">拒绝访问</span>'}</td>
+                    <td style="text-align:right">
+                      <div style="display:inline-flex;gap:4px">
+                        ${itemCanRead ? `
+                          <button class="btn btn-icon btn-sm" onclick="previewOrDownload('${esc(name)}', ${isDir})" title="${isDir ? '进入' : '预览'}">
+                            ${svg(isDir ? 'chev' : 'dl', 'width:12px;height:12px')}
+                          </button>
+                          ${canWriteDir ? `
+                            <button class="btn btn-icon btn-sm" onclick="modalRenameFile('${esc(name)}')" title="重命名">
+                              ${svg('edit', 'width:12px;height:12px')}
+                            </button>
+                            <button class="btn btn-icon btn-sm btn-danger" onclick="deleteSingleFile('${esc(name)}', ${isDir})" title="删除">
+                              ${svg('trash', 'width:12px;height:12px')}
+                            </button>
+                          ` : ''}
+                        ` : ''}
+                      </div>
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      `}
+
+      <!-- Footer Info -->
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:12px;color:var(--tx-muted)">
+        <span>共 ${entries.filter(x => x[1].t === 'd').length} 个文件夹，${entries.filter(x => x[1].t !== 'd').length} 个文件</span>
+        <span>当前身份权限: ${renderPermPill(dirPerm)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function handleFileClick(name, isDir, canRead) {
+  if (!canRead) {
+    toast('无权访问该项目', 'alert');
+    return;
+  }
+  if (isDir) {
+    S.fp.push(name);
+    S.chk = [];
+    S.q = '';
+    render();
+  } else {
+    previewOrDownload(name, false);
+  }
+}
+
+function toggleFileCheck(name, checked) {
+  S.chk = S.chk.filter(x => x !== name);
+  if (checked) S.chk.push(name);
+  render();
+}
+
+function previewOrDownload(name, isDir) {
+  if (isDir) {
+    S.fp.push(name);
+    render();
+    return;
+  }
+
+  const p = PREVIEWS[name];
+  if (p) {
+    if (p.type === 'img') {
+      modalDialog(`
+        <div class="dialog-header">
+          <h3 class="dialog-title">${esc(name)}</h3>
+          <button class="btn btn-icon btn-sm" onclick="$('#modal-dialog').close()">${svg('dash')}</button>
+        </div>
+        <div style="background:#000;border-radius:var(--radius-md);height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;position:relative;overflow:hidden">
+          <div style="font-size:42px;margin-bottom:8px">🖼️</div>
+          <div style="font-size:14px;font-weight:600">${esc(name)}</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:4px">${esc(p.desc)}</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px">
+          <span style="font-size:12px;color:var(--tx-muted)">高清原图预览已加载</span>
+          <button class="btn btn-primary btn-sm" onclick="downloadMock('${esc(name)}')">
+            ${svg('dl', 'width:12px;height:12px')} 下载原图
+          </button>
+        </div>
+      `);
+      return;
+    }
+
+    if (p.type === 'text' || p.type === 'code') {
+      modalDialog(`
+        <div class="dialog-header">
+          <h3 class="dialog-title">${esc(name)}</h3>
+          <button class="btn btn-icon btn-sm" onclick="$('#modal-dialog').close()">${svg('dash')}</button>
+        </div>
+        <pre class="font-mono" style="padding:14px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:var(--radius-md);max-height:300px;overflow-y:auto;font-size:12.5px;color:var(--tx-main);white-space:pre-wrap;line-height:1.6">${esc(p.content)}</pre>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px">
+          <button class="btn btn-sm" onclick="copyText('${esc(p.content.replace(/'/g, "\\'"))}', '文档内容')">
+            ${svg('copy', 'width:12px;height:12px')} 复制全部文本
+          </button>
+          <button class="btn btn-primary btn-sm" onclick="downloadMock('${esc(name)}')">
+            ${svg('dl', 'width:12px;height:12px')} 下载文件
+          </button>
+        </div>
+      `);
+      return;
+    }
+  }
+
+  downloadMock(name);
+}
+
+function downloadMock(name) {
+  toast(`已开始下载文件: ${name}`);
+  logAudit('DOWNLOAD', name, true);
+}
+
+function modalNewFolder() {
+  modalDialog(`
+    <div class="dialog-header">
+      <h3 class="dialog-title">新建文件夹</h3>
+      <button class="btn btn-icon btn-sm" onclick="$('#modal-dialog').close()">${svg('dash')}</button>
+    </div>
+    <div style="margin-bottom:14px">
+      <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:6px">文件夹名称</label>
+      <input id="new-folder-name" value="新建文件夹" autofocus onkeydown="if(event.key==='Enter')confirmNewFolder()">
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn" onclick="$('#modal-dialog').close()">取消</button>
+      <button class="btn btn-primary" onclick="confirmNewFolder()">创建</button>
+    </div>
+  `);
+  setTimeout(() => {
+    const el = $('#new-folder-name');
+    if (el) el.select();
+  }, 50);
+}
+
+function confirmNewFolder() {
+  const name = $('#new-folder-name').value.trim();
+  if (!name) return alert('文件夹名称不能为空');
+  if (/[\\/:*?"<>|]/.test(name)) return alert('文件夹名称不能包含 \\ / : * ? " < > |');
+
+  const share = S.shares.find(x => x.id === S.fsh);
+  let node = S.fs[share.id];
+  for (const p of S.fp) node = node.c[p];
+
+  if (node.c[name]) return alert('已存在同名项目');
+
+  node.c[name] = D({}, nowDate());
+  $('#modal-dialog').close();
+  toast(`已创建文件夹: ${name}`);
+  logAudit('MKDIR', name, true);
+  render();
+}
+
+function modalRenameFile(oldName) {
+  modalDialog(`
+    <div class="dialog-header">
+      <h3 class="dialog-title">重命名项目</h3>
+      <button class="btn btn-icon btn-sm" onclick="$('#modal-dialog').close()">${svg('dash')}</button>
+    </div>
+    <div style="margin-bottom:14px">
+      <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:6px">新名称</label>
+      <input id="rename-file-input" value="${esc(oldName)}" autofocus onkeydown="if(event.key==='Enter')confirmRenameFile('${esc(oldName)}')">
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn" onclick="$('#modal-dialog').close()">取消</button>
+      <button class="btn btn-primary" onclick="confirmRenameFile('${esc(oldName)}')">保存</button>
+    </div>
+  `);
+  setTimeout(() => {
+    const el = $('#rename-file-input');
+    if (el) el.select();
+  }, 50);
+}
+
+function confirmRenameFile(oldName) {
+  const newName = $('#rename-file-input').value.trim();
+  if (!newName || newName === oldName) {
+    $('#modal-dialog').close();
+    return;
+  }
+  const share = S.shares.find(x => x.id === S.fsh);
+  let node = S.fs[share.id];
+  for (const p of S.fp) node = node.c[p];
+
+  if (node.c[newName]) return alert('已存在同名项目');
+
+  const val = node.c[oldName];
+  delete node.c[oldName];
+  node.c[newName] = val;
+
+  $('#modal-dialog').close();
+  toast(`已重命名为: ${newName}`);
+  logAudit('RENAME', `${oldName} → ${newName}`, true);
+  render();
+}
+
+function deleteSingleFile(name, isDir) {
+  if (!confirm(`确定要删除 ${isDir ? '文件夹' : '文件'}「${name}」吗？此操作不可撤销。`)) return;
+  const share = S.shares.find(x => x.id === S.fsh);
+  let node = S.fs[share.id];
+  for (const p of S.fp) node = node.c[p];
+
+  delete node.c[name];
+  S.chk = S.chk.filter(x => x !== name);
+  toast(`已删除: ${name}`);
+  logAudit('DELETE', name, true);
+  render();
+}
+
+function batchFileOp(op) {
+  const count = S.chk.length;
+  if (!count) return;
+
+  if (op === 'dl') {
+    toast(`已开始批量打包下载 ${count} 项`);
+    logAudit('DOWNLOAD', `批量下载 ${count} 项`, true);
+    return;
+  }
+  if (op === 'rm') {
+    if (!confirm(`确定要批量彻底删除选中的 ${count} 个项目吗？`)) return;
+    const share = S.shares.find(x => x.id === S.fsh);
+    let node = S.fs[share.id];
+    for (const p of S.fp) node = node.c[p];
+
+    S.chk.forEach(n => delete node.c[n]);
+    toast(`已删除 ${count} 个项目`);
+    logAudit('DELETE', `批量删除 ${count} 项`, true);
+    S.chk = [];
+    render();
+  }
+}
+
+function handleFileUpload(input) {
+  const files = [...input.files];
+  if (!files.length) return;
+
+  const share = S.shares.find(x => x.id === S.fsh);
+  let node = S.fs[share.id];
+  for (const p of S.fp) node = node.c[p];
+
+  files.forEach(f => {
+    let n = f.name;
+    let i = 1;
+    while (node.c[n]) {
+      const parts = f.name.split('.');
+      if (parts.length > 1) {
+        const ext = parts.pop();
+        n = `${parts.join('.')} (${i++}).${ext}`;
+      } else {
+        n = `${f.name} (${i++})`;
+      }
+    }
+    node.c[n] = Fl(f.size, nowDate());
+    logAudit('UPLOAD', n, true);
+  });
+
+  input.value = '';
+  toast(`已成功上传 ${files.length} 个文件`);
+  render();
+}
+
+function logAudit(act, path, ok) {
+  const share = S.shares.find(x => x.id === S.fsh);
+  const u = getEffectiveUserForFiles();
+  S.audit.unshift([
+    nowTime(),
+    u,
+    'Web',
+    act,
+    share ? share.name : '—',
+    path,
+    '192.168.1.2',
+    ok ? 'ok' : 'deny',
+    ok ? '操作执行成功' : '权限拦截'
+  ]);
+}
+
+/* ==========================================================================
+   VIEW 4: USERS & GROUPS (用户与权限组)
+   ========================================================================== */
+function viewUsers() {
+  return `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">用户与权限组</h1>
+        <p class="page-desc">跨平台用户一致性：创建 naos 用户时，将在系统底层自动同步对应的 naos_ 前缀本地账号</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn" onclick="modalNewGroup()">
+          ${svg('plus')} 新建用户组
+        </button>
+        <button class="btn btn-primary" onclick="modalNewUser()">
+          ${svg('plus')} 新建用户
+        </button>
+      </div>
+    </div>
+
+    <div class="notice-box">
+      ${svg('info', 'width:18px;height:18px;color:var(--primary)')}
+      <div>
+        <b>每用户系统账号映射原则 (Design v0.2 §4.1)：</b><br>
+        Linux 下自动维护 <span class="font-mono">useradd -M -s /usr/sbin/nologin -G naos-users naos_{user}</span>；<br>
+        macOS 下通过 <span class="font-mono">sysadminctl</span> 建立隐藏系统账号；Windows 下通过 <span class="font-mono">New-LocalUser</span> 同步。<br>
+        由此确保 SMB / WebDAV / NFS 写入的文件真正归属于对应用户，彻底杜绝 <span class="font-mono">force user</span> 带来的安全漂移。
+      </div>
+    </div>
+
+    <!-- Users Table -->
+    <div class="card card-flush" style="margin-top:16px">
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>用户账号</th>
+              <th>系统映射 (sys_account)</th>
+              <th>角色</th>
+              <th>所属权限组</th>
+              <th>状态启用</th>
+              <th style="text-align:right">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${S.users.map((u, i) => `
+              <tr>
+                <td>
+                  <div style="display:flex;align-items:center;gap:12px">
+                    <span class="avatar" style="width:34px;height:34px;font-size:13px">${esc(u.n[0].toUpperCase())}</span>
+                    <div>
+                      <b style="font-size:14px;color:var(--tx-main)">${esc(u.n)}</b>
+                      <div style="font-size:12px;color:var(--tx-muted)">${esc(u.desc || '本地用户')}</div>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <span class="font-mono badge badge-subtle">naos_${esc(u.n)}</span>
+                </td>
+                <td>
+                  <span class="badge ${u.role === 'admin' ? 'badge-primary' : 'badge-subtle'}">
+                    ${u.role === 'admin' ? '超级管理员' : '普通用户'}
+                  </span>
+                </td>
+                <td>
+                  <div style="display:flex;gap:4px;flex-wrap:wrap">
+                    ${u.g.map(g => `<span class="badge badge-subtle">${esc(g)}</span>`).join('') || '<span style="color:var(--tx-dim)">—</span>'}
+                  </div>
+                </td>
+                <td>
+                  <label class="switch">
+                    <input type="checkbox" ${u.on ? 'checked' : ''} ${u.n === 'admin' ? 'disabled' : ''} onchange="toggleUserStatus(${i}, this.checked)">
+                    <span class="slider"></span>
+                  </label>
+                </td>
+                <td style="text-align:right">
+                  <div style="display:inline-flex;gap:6px">
+                    <button class="btn btn-sm" onclick="modalResetPassword('${esc(u.n)}')">改密</button>
+                    ${u.n === 'admin' ? '' : `
+                      <button class="btn btn-sm btn-danger btn-icon" onclick="deleteUser(${i})" title="删除用户">
+                        ${svg('trash', 'width:13px;height:13px')}
+                      </button>
+                    `}
+                  </div>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Groups Section -->
+    <div class="card" style="margin-top:20px">
+      <div class="card-header-line">
+        <div class="card-title">${svg('users', 'width:18px;height:18px;color:var(--primary)')} 现有用户组清单</div>
+        <button class="btn btn-sm" onclick="modalNewGroup()">${svg('plus')} 添加用户组</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(260px, 1fr));gap:14px">
+        ${S.groups.map(g => {
+          const members = S.users.filter(u => u.g.includes(g));
+          return `
+            <div style="padding:14px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--card-subtle)">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <b style="font-size:14px;color:var(--tx-main)">${esc(g)}</b>
+                <span class="badge badge-primary">${members.length} 位成员</span>
+              </div>
+              <div style="font-size:12px;color:var(--tx-muted);display:flex;gap:6px;flex-wrap:wrap">
+                ${members.map(m => `<span class="badge badge-subtle">${esc(m.n)}</span>`).join('') || '暂无成员'}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function toggleUserStatus(idx, enabled) {
+  S.users[idx].on = enabled ? 1 : 0;
+  toast(`用户 ${S.users[idx].n} 已${enabled ? '启用' : '禁用'}`);
+  render();
+}
+
+function deleteUser(idx) {
+  const u = S.users[idx];
+  if (!confirm(`确定要彻底删除用户「${u.n}」吗？\n将同步销毁其系统账号 naos_${u.n} 并清理所有关联 ACL 规则。`)) return;
+
+  S.shares.forEach(s => {
+    s.acl = s.acl.filter(r => r.s !== 'user:' + u.n);
+    s.nfsb = s.nfsb.filter(r => r.user !== u.n);
+  });
+
+  S.users.splice(idx, 1);
+  toast(`已删除用户: ${u.n}`);
+  render();
+}
+
+function modalNewUser() {
+  modalDialog(`
+    <div class="dialog-header">
+      <h3 class="dialog-title">新建 naos 用户</h3>
+      <button class="btn btn-icon btn-sm" onclick="$('#modal-dialog').close()">${svg('dash')}</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div>
+        <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">用户名 (小写字母开头，支持数字与下划线)</label>
+        <input id="new-u-name" placeholder="例如 david">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">初始密码 (至少 ${S.cfg.minPw} 位)</label>
+        <input id="new-u-pw" type="password" value="naos12345">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">账号角色</label>
+        <select id="new-u-role">
+          <option value="user">普通用户 (仅访问授权共享与修改自身密码)</option>
+          <option value="admin">系统管理员 (完全管理权限)</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">归属用户组</label>
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          ${S.groups.map(g => `
+            <label style="display:flex;gap:6px;align-items:center;font-size:13px;cursor:pointer">
+              <input type="checkbox" class="new-u-group-cb" value="${esc(g)}"> ${esc(g)}
+            </label>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+      <button class="btn" onclick="$('#modal-dialog').close()">取消</button>
+      <button class="btn btn-primary" onclick="confirmSaveUser()">保存并创建系统账号</button>
+    </div>
+  `);
+}
+
+function confirmSaveUser() {
+  const name = $('#new-u-name').value.trim();
+  const pw = $('#new-u-pw').value;
+  const role = $('#new-u-role').value;
+  const groups = [...$$('.new-u-group-cb:checked')].map(x => x.value);
+
+  if (!/^[a-z][a-z0-9_-]{1,31}$/.test(name)) {
+    return alert('用户名必须为小写字母开头，长度 2-32 位，仅允许字母、数字、下划线及短横线');
+  }
+  if (pw.length < S.cfg.minPw) {
+    return alert(`密码长度至少为 ${S.cfg.minPw} 位`);
+  }
+  if (S.users.some(u => u.n === name)) {
+    return alert('该用户名已存在');
+  }
+
+  S.users.push({
+    n: name,
+    pw,
+    role,
+    g: groups,
+    on: 1,
+    desc: '自定义用户'
+  });
+
+  $('#modal-dialog').close();
+  toast(`用户 ${name} 创建成功，底层系统账号 naos_${name} 已就绪`);
+  render();
+}
+
+function modalNewGroup() {
+  modalDialog(`
+    <div class="dialog-header">
+      <h3 class="dialog-title">新建权限用户组</h3>
+      <button class="btn btn-icon btn-sm" onclick="$('#modal-dialog').close()">${svg('dash')}</button>
+    </div>
+    <div style="margin-bottom:14px">
+      <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:6px">用户组标识 (例如 designers, ops)</label>
+      <input id="new-group-name" placeholder="组标识">
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn" onclick="$('#modal-dialog').close()">取消</button>
+      <button class="btn btn-primary" onclick="confirmSaveGroup()">创建</button>
+    </div>
+  `);
+}
+
+function confirmSaveGroup() {
+  const name = $('#new-group-name').value.trim();
+  if (!/^[\w-]+$/.test(name)) return alert('组名格式无效');
+  if (S.groups.includes(name)) return alert('该用户组已存在');
+
+  S.groups.push(name);
+  $('#modal-dialog').close();
+  toast(`用户组 ${name} 创建成功`);
+  render();
+}
+
+function modalResetPassword(username) {
+  modalDialog(`
+    <div class="dialog-header">
+      <h3 class="dialog-title">重置用户密码</h3>
+      <button class="btn btn-icon btn-sm" onclick="$('#modal-dialog').close()">${svg('dash')}</button>
+    </div>
+    <div style="margin-bottom:14px">
+      <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:6px">用户: <b>${esc(username)}</b></label>
+      <input id="reset-pw-val" type="password" placeholder="输入新密码 (至少 ${S.cfg.minPw} 位)">
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn" onclick="$('#modal-dialog').close()">取消</button>
+      <button class="btn btn-primary" onclick="confirmResetPassword('${esc(username)}')">确认改密</button>
+    </div>
+  `);
+}
+
+function confirmResetPassword(username) {
+  const val = $('#reset-pw-val').value;
+  if (val.length < S.cfg.minPw) return alert(`新密码至少需要 ${S.cfg.minPw} 位`);
+  const u = S.users.find(x => x.n === username);
+  if (u) {
+    u.pw = val;
+    $('#modal-dialog').close();
+    toast(`用户 ${username} 密码已重置，SMB 凭据已同步更新`);
+  }
+}
+
+/* ==========================================================================
+   VIEW 5: PERMISSION SIMULATOR (权限模拟器)
+   ========================================================================== */
+function viewSimulator() {
+  const q = S.simQ || {
+    sh: S.shares[0]?.id || 1,
+    u: 'bob',
+    p: '/private/notes.txt'
+  };
+
+  const share = S.shares.find(x => x.id === q.sh) || S.shares[0];
+  const result = share ? calcEffectiveAcl(share, q.u, q.p) : null;
+
+  return `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">权限求值模拟器 (ACL Simulator)</h1>
+        <p class="page-desc">交互式验证多层级 ACL 规则匹配。输入共享、目标用户与相对路径，实时展现判定链路与最终有效权限</p>
+      </div>
+    </div>
+
+    <!-- Interactive Query Sandbox -->
+    <div class="card" style="margin-bottom:20px">
+      <div style="display:grid;grid-template-columns:1.5fr 1.5fr 3fr auto;gap:14px;align-items:flex-end">
+        <div>
+          <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">测试共享</label>
+          <select id="sim-share" onchange="runSimQuery()">
+            ${S.shares.map(s => `<option value="${s.id}" ${s.id === q.sh ? 'selected' : ''}>${esc(s.name)} (${esc(s.path)})</option>`).join('')}
+          </select>
+        </div>
+
+        <div>
+          <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">测试主体 (User)</label>
+          <select id="sim-user" onchange="runSimQuery()">
+            ${S.users.map(u => `<option value="${esc(u.n)}" ${u.n === q.u ? 'selected' : ''}>${esc(u.n)} (所属组: ${u.g.join(',') || '无'})</option>`).join('')}
+          </select>
+        </div>
+
+        <div>
+          <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">相对路径 (rel_path)</label>
+          <input id="sim-path" class="font-mono" value="${esc(q.p)}" onchange="runSimQuery()" onkeydown="if(event.key==='Enter')runSimQuery()">
+        </div>
+
+        <button class="btn btn-primary" onclick="runSimQuery()">
+          ${svg('sim')} 重新推演
+        </button>
+      </div>
+
+      <!-- Quick Preset Tests -->
+      <div style="display:flex;gap:8px;align-items:center;margin-top:16px;flex-wrap:wrap">
+        <span style="font-size:12px;color:var(--tx-dim)">快捷预设场景:</span>
+        <button class="btn btn-sm" onclick="setSimPreset(1, 'alice', '/photos/2026/a.jpg')">
+          场景 1: Alice 访问相册原图 (预期读写)
+        </button>
+        <button class="btn btn-sm" onclick="setSimPreset(1, 'bob', '/private/notes.txt')">
+          场景 2: Bob 访问私密备忘录 (预期显式拒绝)
+        </button>
+        <button class="btn btn-sm" onclick="setSimPreset(2, 'bob', '/spec.md')">
+          场景 3: Bob 访问项目文档 (预期读写)
+        </button>
+        <button class="btn btn-sm" onclick="setSimPreset(1, 'carol', '/photos')">
+          场景 4: Carol 访问家庭相册 (预期默认拒绝)
+        </button>
+      </div>
+    </div>
+
+    <!-- Evaluation Result Banner -->
+    ${result ? `
+      <div class="card" style="border-left:5px solid ${result.perm === 'rw' ? 'var(--success)' : result.perm === 'ro' ? 'var(--warning)' : 'var(--danger)'}">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px">
+          <div>
+            <div style="font-size:12px;color:var(--tx-muted)">模拟计算最终结果</div>
+            <div style="font-size:20px;font-weight:700;display:flex;align-items:center;gap:10px;margin-top:2px">
+              <span>有效权限:</span>
+              ${renderPermPill(result.perm)}
+            </div>
+          </div>
+
+          <div style="text-align:right">
+            <span class="badge ${result.perm === 'none' ? 'badge-danger' : 'badge-success'}">
+              ${result.perm === 'none' ? '请求将被阻断' : '允许访问操作'}
+            </span>
+          </div>
+        </div>
+
+        <div style="padding:14px;background:var(--bg-subtle);border-radius:var(--radius-md);border:1px solid var(--border)">
+          <div style="font-size:13px;font-weight:600;margin-bottom:4px;color:var(--tx-main)">判定依据与命中推导：</div>
+          <div class="font-mono" style="font-size:12.5px;color:var(--tx-muted);line-height:1.6">${esc(result.why)}</div>
+        </div>
+      </div>
+    ` : ''}
+  `;
+}
+
+function runSimQuery() {
+  S.simQ = {
+    sh: +$('#sim-share').value,
+    u: $('#sim-user').value,
+    p: $('#sim-path').value.trim() || '/'
+  };
+  render();
+}
+
+function setSimPreset(shareId, user, path) {
+  S.simQ = { sh: shareId, u: user, p: path };
+  render();
+}
+
+/* ==========================================================================
+   VIEW 6: AUDIT LOG (审计日志)
+   ========================================================================== */
+function viewAudit() {
+  const filterResult = S.auditFilterResult || 'all';
+  const filterProto = S.auditFilterProto || 'all';
+  const searchKey = (S.auditSearch || '').toLowerCase();
+
+  const filteredRows = S.audit.filter(row => {
+    if (filterResult !== 'all' && row[7] !== filterResult) return false;
+    if (filterProto !== 'all' && row[2].toUpperCase() !== filterProto.toUpperCase()) return false;
+    if (searchKey) {
+      const line = row.join(' ').toLowerCase();
+      if (!line.includes(searchKey)) return false;
+    }
+    return true;
+  });
+
+  return `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">统一安全审计日志</h1>
+        <p class="page-desc">全协议日志聚合：进程内统一采集 WebDAV、NFS 及 Samba vfs_full_audit 产生的所有数据访问行为</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-sm" onclick="exportAuditCsv()">
+          ${svg('dl', 'width:14px;height:14px')} 导出 CSV 日志
+        </button>
+        <button class="btn btn-sm" onclick="toast('审计日志流已刷新');render()">
+          ${svg('refresh', 'width:14px;height:14px')} 刷新
+        </button>
+      </div>
+    </div>
+
+    <!-- Filters Bar -->
+    <div class="card" style="margin-bottom:16px;padding:14px 18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:12px;color:var(--tx-muted)">结果过滤:</span>
+            <select style="width:auto" onchange="S.auditFilterResult=this.value;render()">
+              <option value="all" ${filterResult === 'all' ? 'selected' : ''}>全部结果</option>
+              <option value="ok" ${filterResult === 'ok' ? 'selected' : ''}>仅显示允许 (OK)</option>
+              <option value="deny" ${filterResult === 'deny' ? 'selected' : ''}>仅显示拦截 (DENY)</option>
+            </select>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:12px;color:var(--tx-muted)">协议过滤:</span>
+            <select style="width:auto" onchange="S.auditFilterProto=this.value;render()">
+              <option value="all" ${filterProto === 'all' ? 'selected' : ''}>全部协议</option>
+              <option value="SMB" ${filterProto === 'SMB' ? 'selected' : ''}>SMB</option>
+              <option value="WebDAV" ${filterProto === 'WebDAV' ? 'selected' : ''}>WebDAV</option>
+              <option value="NFS" ${filterProto === 'NFS' ? 'selected' : ''}>NFS</option>
+              <option value="Web" ${filterProto === 'Web' ? 'selected' : ''}>Web 控制台</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="position:relative;width:240px">
+          <input placeholder="按用户/IP/路径过滤..." value="${esc(S.auditSearch || '')}" oninput="S.auditSearch=this.value;render()" style="padding-left:30px">
+          <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--tx-muted)">
+            ${svg('dash', 'width:14px;height:14px')}
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Logs Table -->
+    <div class="card card-flush">
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>时间戳</th>
+              <th>操作者</th>
+              <th>访问协议</th>
+              <th>动作 (Action)</th>
+              <th>目标共享</th>
+              <th>相对路径</th>
+              <th>客户端 IP</th>
+              <th>鉴权结果</th>
+              <th>详情说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filteredRows.map(a => `
+              <tr>
+                <td class="font-mono" style="font-size:12px;color:var(--tx-muted)">${esc(a[0])}</td>
+                <td>
+                  <span class="badge ${a[1] === '—' ? 'badge-subtle' : 'badge-primary'}">${esc(a[1])}</span>
+                </td>
+                <td><span class="proto-tag ${a[2].toLowerCase()} active">${esc(a[2])}</span></td>
+                <td>
+                  <span class="badge ${a[3] === 'WRITE' ? 'badge-primary' : a[3] === 'DELETE' ? 'badge-danger' : 'badge-subtle'}">
+                    ${esc(a[3])}
+                  </span>
+                </td>
+                <td><b>${esc(a[4])}</b></td>
+                <td><span class="font-mono" style="color:var(--tx-main);font-size:12.5px">${esc(a[5])}</span></td>
+                <td><span class="font-mono" style="font-size:12px;color:var(--tx-muted)">${esc(a[6])}</span></td>
+                <td>
+                  <span class="badge ${a[7] === 'ok' ? 'badge-success' : 'badge-danger'}">
+                    ${a[7] === 'ok' ? '允许 (OK)' : '拒绝 (DENY)'}
+                  </span>
+                </td>
+                <td style="font-size:12px;color:var(--tx-muted)">${esc(a[8] || '—')}</td>
+              </tr>
+            `).join('') || `
+              <tr>
+                <td colspan="9" style="text-align:center;padding:40px;color:var(--tx-muted)">
+                  无匹配的审计记录。
+                </td>
+              </tr>
+            `}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function exportAuditCsv() {
+  const headers = ['时间,操作者,协议,动作,共享,路径,客户端IP,鉴权结果,说明'];
+  const rows = S.audit.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','));
+  const blob = new Blob(['\uFEFF' + [headers, ...rows].join('\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `naos-audit-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('已导出审计日志 CSV 文件');
+}
+
+/* ==========================================================================
+   VIEW 7: SETTINGS & SYSTEM DOCTOR
+   ========================================================================== */
+function viewSettings() {
+  const c = S.cfg;
+  const tab = S.st || 'gen';
+
+  const tabs = [
+    { id: 'gen', title: '常规与 TLS' },
+    { id: 'sec', title: '安全与审计策略' },
+    { id: 'path', title: '共享黑名单目录' },
+    { id: 'nfs', title: 'NFS Kerberos (L3)' },
+    { id: 'doc', title: '系统环境诊断 (Doctor)' }
+  ];
+
+  let bodyHtml = '';
+
+  if (tab === 'gen') {
+    bodyHtml = `
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">Web 控制台监听地址</label>
+            <select id="cfg-listen">
+              <option value="127.0.0.1" ${c.listen === '127.0.0.1' ? 'selected' : ''}>127.0.0.1（仅限本机访问，默认安全）</option>
+              <option value="0.0.0.0" ${c.listen === '0.0.0.0' ? 'selected' : ''}>0.0.0.0（对外监听所有网卡，必须开启 TLS）</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">控制台端口号</label>
+            <input id="cfg-port" type="number" value="${c.port}">
+          </div>
+        </div>
+
+        <div style="padding:14px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--card-subtle)">
+          <label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;cursor:pointer">
+            <input type="checkbox" class="switch-cb" id="cfg-tls" ${c.tls ? 'checked' : ''}>
+            <span>启用 HTTPS (TLS 加密传输)</span>
+          </label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+            <div>
+              <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">TLS 证书文件路径</label>
+              <input id="cfg-cert" class="font-mono" value="${esc(c.cert)}">
+            </div>
+            <div>
+              <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">TLS 私钥文件路径</label>
+              <input id="cfg-key" class="font-mono" value="${esc(c.key)}">
+            </div>
+          </div>
+        </div>
+
+        <label style="display:flex;align-items:center;gap:10px;font-size:13.5px;cursor:pointer">
+          <input type="checkbox" id="cfg-redirect" ${c.redirect ? 'checked' : ''}>
+          <span>HTTP 请求自动跳转至 HTTPS 安全端口</span>
+        </label>
+
+        <div style="margin-top:10px">
+          <button class="btn btn-primary" onclick="saveGeneralConfig()">保存网络设置</button>
+        </div>
+      </div>
+    `;
+  } else if (tab === 'sec') {
+    bodyHtml = `
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">会话空闲超时时间 (分钟)</label>
+            <input id="cfg-sess" type="number" value="${c.sess}">
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">用户密码最小位数</label>
+            <input id="cfg-minpw" type="number" value="${c.minPw}">
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">登录最大连续失败次数 (防暴力破解)</label>
+            <input id="cfg-maxfail" type="number" value="${c.maxFail}">
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">触发阈值后锁定时长 (分钟)</label>
+            <input id="cfg-lockmin" type="number" value="${c.lockMin}">
+          </div>
+        </div>
+
+        <div>
+          <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">审计日志保留周期 (天)</label>
+          <input id="cfg-keep" type="number" value="${c.keep}">
+        </div>
+
+        <label style="display:flex;align-items:center;gap:10px;font-size:13.5px;cursor:pointer">
+          <input type="checkbox" id="cfg-smbaudit" ${c.smbAudit ? 'checked' : ''}>
+          <span>采集 SMB 协议操作审计 (Linux/macOS Samba vfs_full_audit; Windows 需开启对象审核策略)</span>
+        </label>
+
+        <div style="margin-top:10px">
+          <button class="btn btn-primary" onclick="saveSecConfig()">保存安全策略</button>
+        </div>
+      </div>
+    `;
+  } else if (tab === 'path') {
+    bodyHtml = `
+      <div class="notice-box">
+        ${svg('info', 'width:18px;height:18px;color:var(--primary)')}
+        <div>黑名单目录及其父级路径严禁被任何协议共享，创建共享时将强制校验。内置系统核心目录不可删除。</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
+        ${c.bl.map((p, idx) => {
+          const isBuiltin = BUILTIN_BLACKLIST.includes(p.toLowerCase());
+          return `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--card-subtle)">
+              <div style="display:flex;align-items:center;gap:10px">
+                <span class="font-mono" style="font-weight:600;color:var(--tx-main)">${esc(p)}</span>
+                ${isBuiltin ? '<span class="badge badge-subtle">系统保护</span>' : '<span class="badge badge-primary">自定义</span>'}
+              </div>
+              ${isBuiltin ? '' : `
+                <button class="btn btn-sm btn-danger btn-icon" onclick="removeBlacklist(${idx})" title="移除黑名单">
+                  ${svg('trash', 'width:12px;height:12px')}
+                </button>
+              `}
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:18px;align-items:flex-end">
+        <div style="flex:1">
+          <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">添加路径到黑名单</label>
+          <input id="new-bl-input" class="font-mono" placeholder="例如 /data/confidential 或 D:\\Secrets">
+        </div>
+        <button class="btn btn-primary" onclick="addBlacklist()">添加黑名单</button>
+      </div>
+    `;
+  } else if (tab === 'nfs') {
+    bodyHtml = `
+      <div class="notice-box">
+        ${svg('info', 'width:18px;height:18px;color:var(--primary)')}
+        <div>NFS L3 (RPCSEC_GSS) 依托 Kerberos 协议提供真正的用户强认证与全包防伪造加密，适用于企业内网 (Linux/macOS)。</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:16px;margin-top:16px">
+        <label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;cursor:pointer">
+          <input type="checkbox" id="cfg-krb" ${c.krb ? 'checked' : ''}>
+          <span>启用 RPCSEC_GSS Kerberos 强认证</span>
+        </label>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">服务 Keytab 凭证路径</label>
+            <input id="cfg-keytab" class="font-mono" value="${esc(c.keytab)}" placeholder="/etc/naos/nfs.keytab">
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">Kerberos Realm 域</label>
+            <input id="cfg-realm" value="${esc(c.realm)}" placeholder="EXAMPLE.COM">
+          </div>
+        </div>
+
+        <div style="margin-top:10px">
+          <button class="btn btn-primary" onclick="saveNfsConfig()">保存 NFS 认证配置</button>
+        </div>
+      </div>
+    `;
+  } else {
+    // System Doctor
+    const checks = [
+      ['Samba 服务 (SMB 协议适配器)', '已安装版本: 4.19.5 (Homebrew/apt)', 'ok'],
+      ['POSIX ACL 工具 (setfacl)', '二进制可用, 支持继承标志设置', 'ok'],
+      ['底层映射系统组 (naos-users)', 'GID: 1088 已建立', 'ok'],
+      ['SMB 协议端口 445', 'smbd 守护进程活跃监听', 'ok'],
+      ['NFS 协议端口 2049', '用户态 naos-nfs ONC-RPC 监听就绪', 'ok'],
+      ['WebDAV 端口 8443', 'axum TLS 协议栈就绪', 'ok'],
+      ['/data 文件系统类型', 'ext4: 具备 user_xattr 与 ACL 原生能力', 'ok'],
+      ['D:\\ 存储卷文件系统', 'NTFS: 支持完整 Windows DACL 映射', 'ok'],
+      ['TLS 证书链有效性', c.tls && c.cert ? '有效 (距到期还剩 362 天)' : '未配置证书', c.tls && c.cert ? 'ok' : 'warn'],
+      ['NFS Kerberos (RPCSEC_GSS)', c.krb ? (c.keytab ? '配置正常' : '缺失 Keytab') : '未开启 (当前以可信网络 L1/L2 运行)', c.krb && !c.keytab ? 'warn' : 'ok']
+    ];
+
+    bodyHtml = `
+      <div class="notice-box">
+        ${svg('sim', 'width:18px;height:18px;color:var(--primary)')}
+        <div>
+          <b>naosd doctor 自检体系：</b><br>
+          自动探测操作系统底层权限依赖、外部 Samba 适配器、文件系统 ACL 挂载选项与网络端口占用，确保无缝提供共享。
+        </div>
+      </div>
+
+      <div class="card card-flush" style="margin-top:16px">
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>诊断检测项</th>
+                <th>探测结果与状态说明</th>
+                <th>状态评级</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${checks.map(([item, detail, status]) => `
+                <tr>
+                  <td><b>${esc(item)}</b></td>
+                  <td style="font-size:12.5px;color:var(--tx-muted)">${esc(detail)}</td>
+                  <td>
+                    <span class="badge ${status === 'ok' ? 'badge-success' : 'badge-warning'}">
+                      ${status === 'ok' ? '● 正常' : '▲ 需注意'}
+                    </span>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style="margin-top:18px;display:flex;gap:12px">
+        <button class="btn btn-primary" onclick="toast('已重新执行 naosd doctor 深度扫描');render()">
+          ${svg('refresh')} 重新探测诊断
+        </button>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">系统设置与诊断</h1>
+        <p class="page-desc">配置 naos 守护进程核心参数、TLS 安全策略、路径黑名单与环境健康检查</p>
+      </div>
+    </div>
+
+    <div class="tab-nav">
+      ${tabs.map(t => `
+        <button class="tab-btn ${tab === t.id ? 'active' : ''}" onclick="S.st='${t.id}';render()">
+          ${t.title}
+        </button>
+      `).join('')}
+    </div>
+
+    <div class="card">
+      ${bodyHtml}
+    </div>
+  `;
+}
+
+function saveGeneralConfig() {
+  const listen = $('#cfg-listen').value;
+  const port = +$('#cfg-port').value;
+  const tls = $('#cfg-tls').checked;
+  const cert = $('#cfg-cert').value.trim();
+  const key = $('#cfg-key').value.trim();
+  const redirect = $('#cfg-redirect').checked;
+
+  if (listen === '0.0.0.0' && !tls) {
+    return alert('安全约束：当对外监听 0.0.0.0 时，必须强制启用 TLS，以避免管理口令明文暴露');
+  }
+  if (tls && (!cert || !key)) {
+    return alert('启用 TLS 时，证书与私钥路径均不能为空');
+  }
+
+  Object.assign(S.cfg, { listen, port, tls, cert, key, redirect });
+  toast('网络与 TLS 设置已保存');
+  render();
+}
+
+function saveSecConfig() {
+  const sess = +$('#cfg-sess').value;
+  const minPw = +$('#cfg-minpw').value;
+  const maxFail = +$('#cfg-maxfail').value;
+  const lockMin = +$('#cfg-lockmin').value;
+  const keep = +$('#cfg-keep').value;
+  const smbAudit = $('#cfg-smbaudit').checked;
+
+  Object.assign(S.cfg, { sess, minPw, maxFail, lockMin, keep, smbAudit });
+  toast('安全与审计策略已保存');
+  render();
+}
+
+function addBlacklist() {
+  const val = $('#new-bl-input').value.trim();
+  if (!val) return;
+  if (S.cfg.bl.some(x => x.toLowerCase() === val.toLowerCase())) return alert('该路径已存在于黑名单中');
+  S.cfg.bl.push(val);
+  toast(`已添加黑名单: ${val}`);
+  render();
+}
+
+function removeBlacklist(idx) {
+  const p = S.cfg.bl[idx];
+  S.cfg.bl.splice(idx, 1);
+  toast(`已移除黑名单: ${p}`);
+  render();
+}
+
+function saveNfsConfig() {
+  const krb = $('#cfg-krb').checked;
+  const keytab = $('#cfg-keytab').value.trim();
+  const realm = $('#cfg-realm').value.trim();
+  if (krb && !keytab) return alert('开启 Kerberos 必须指定有效 Keytab 路径');
+  Object.assign(S.cfg, { krb, keytab, realm });
+  toast('NFS Kerberos 设置已保存');
+  render();
+}
+
+/* ==========================================================================
+   VIEW 8: MY ACCOUNT (个人安全设置)
+   ========================================================================== */
+function viewMe() {
+  const u = S.auth;
+  return `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">个人账号中心</h1>
+        <p class="page-desc">当前登录: <b>${esc(u.n)}</b> · 权限角色: ${u.role === 'admin' ? '系统管理员' : '普通用户'}</p>
+      </div>
+    </div>
+
+    <div class="grid-12">
+      <div class="card col-6">
+        <h3 style="font-size:16px;font-weight:600;margin-bottom:14px">修改密码凭据</h3>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">当前密码</label>
+            <input id="my-old-pw" type="password">
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">新密码 (至少 ${S.cfg.minPw} 位)</label>
+            <input id="my-new-pw" type="password">
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">再次确认新密码</label>
+            <input id="my-confirm-pw" type="password">
+          </div>
+          <button class="btn btn-primary" onclick="confirmChangeMyPassword()" style="margin-top:6px">
+            确认修改
+          </button>
+        </div>
+
+        <div class="notice-box" style="margin-top:18px">
+          ${svg('info', 'width:18px;height:18px;color:var(--primary)')}
+          <div>修改密码后，将自动同步刷新底层系统账号 <span class="font-mono">naos_${esc(u.n)}</span> 与 Samba 认证密码。</div>
+        </div>
+      </div>
+
+      <div class="card col-6">
+        <h3 style="font-size:16px;font-weight:600;margin-bottom:14px">账号信息与属性</h3>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+            <span style="color:var(--tx-muted)">登录用户名</span>
+            <b>${esc(u.n)}</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+            <span style="color:var(--tx-muted)">底层映射账号</span>
+            <span class="font-mono">naos_${esc(u.n)}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+            <span style="color:var(--tx-muted)">用户角色</span>
+            <span class="badge ${u.role === 'admin' ? 'badge-primary' : 'badge-subtle'}">
+              ${u.role === 'admin' ? '超级管理员' : '普通用户'}
+            </span>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:10px 0">
+            <span style="color:var(--tx-muted)">归属权限组</span>
+            <span>${u.g.map(g => `<span class="badge badge-subtle">${esc(g)}</span>`).join(' ') || '无'}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function confirmChangeMyPassword() {
+  const oldPw = $('#my-old-pw').value;
+  const newPw = $('#my-new-pw').value;
+  const confirmPw = $('#my-confirm-pw').value;
+
+  if (oldPw !== S.auth.pw) return alert('当前原密码错误');
+  if (newPw.length < S.cfg.minPw) return alert(`新密码长度至少需要 ${S.cfg.minPw} 位`);
+  if (newPw !== confirmPw) return alert('两次输入的新密码不一致');
+  if (newPw === oldPw) return alert('新密码不能与原密码相同');
+
+  S.auth.pw = newPw;
+  toast('密码修改成功，所有协议访问凭据已同步生效');
+  render();
+}
+
+/* ==========================================================================
+   VIEW 9: LOGIN SCREEN (登录界面)
+   ========================================================================== */
+function renderLoginScreen() {
+  const isWarn = S.cfg.listen === '0.0.0.0' && !S.cfg.tls;
+
+  $('#login-container').innerHTML = `
+    <div class="login-screen">
+      <!-- Left Hero Banner -->
+      <div class="login-hero">
+        <div class="login-hero-glow"></div>
+        <div class="login-hero-glow2"></div>
+
+        <div>
+          <div style="display:flex;align-items:center;gap:12px;font-size:22px;font-weight:700">
+            <span class="brand-icon" style="box-shadow:none;background:rgba(255,255,255,0.2)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:22px;height:22px">
+                <rect x="3" y="4" width="18" height="16" rx="3"></rect>
+                <path d="M7 10h.01M7 14h.01"></path>
+                <path d="M12 12h5"></path>
+              </svg>
+            </span>
+            <span>naos</span>
+            <span class="brand-tag">v0.2 Core</span>
+          </div>
+
+          <h1 style="font-size:36px;font-weight:800;line-height:1.25;letter-spacing:-0.03em;margin:32px 0 16px">
+            把任意文件夹，<br>变成安全互通的存储云
+          </h1>
+          <p style="font-size:15px;color:#cbd5e1;max-width:440px;line-height:1.6">
+            跨平台轻量级 NAS 共享中枢 · Linux、macOS 与 Windows 统一声明式权限治理。
+          </p>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:16px;max-width:480px">
+          <div style="display:flex;align-items:center;gap:14px;background:rgba(255,255,255,0.06);padding:12px 16px;border-radius:var(--radius-md);border:1px solid rgba(255,255,255,0.1)">
+            ${svg('shares', 'width:22px;height:22px;color:#818cf8')}
+            <div>
+              <b style="font-size:13.5px">SMB · WebDAV · NFSv3 三协议聚合</b>
+              <div style="font-size:12px;color:#94a3b8;margin-top:2px">系统原生适配与自研内存路由兼备</div>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:14px;background:rgba(255,255,255,0.06);padding:12px 16px;border-radius:var(--radius-md);border:1px solid rgba(255,255,255,0.1)">
+            ${svg('sim', 'width:22px;height:22px;color:#34d399')}
+            <div>
+              <b style="font-size:13.5px">子目录级 ACL 继承与显式拒绝</b>
+              <div style="font-size:12px;color:#94a3b8;margin-top:2px">最近祖先覆盖，按真实系统账号精细落地</div>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:14px;background:rgba(255,255,255,0.06);padding:12px 16px;border-radius:var(--radius-md);border:1px solid rgba(255,255,255,0.1)">
+            ${svg('audit', 'width:22px;height:22px;color:#f472b6')}
+            <div>
+              <b style="font-size:13.5px">按用户可追溯的统一审计体系</b>
+              <div style="font-size:12px;color:#94a3b8;margin-top:2px">全访问行为入库，支持导出与异常预警</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size:12px;color:#64748b">
+          Designed with Rust & axum · Built for Home Lab & Small Teams
+        </div>
+      </div>
+
+      <!-- Right Login Pane -->
+      <div class="login-form-pane">
+        <div class="login-card-inner">
+          <div style="margin-bottom:28px">
+            <h2 style="font-size:24px;font-weight:700;color:var(--tx-main);letter-spacing:-0.02em">欢迎登录控制台</h2>
+            <p style="font-size:13.5px;color:var(--tx-muted);margin-top:4px">请输入您的管理员或成员凭据进行验证</p>
+          </div>
+
+          ${isWarn ? `
+            <div class="notice-box danger">
+              ${svg('alert', 'width:18px;height:18px;color:var(--danger)')}
+              <div>⚠ 当前控制台在未开启 TLS 的情况下对外监听，管理凭据可能明文泄漏，请尽快在设置中启用 HTTPS。</div>
+            </div>
+          ` : ''}
+
+          <form onsubmit="handleLoginSubmit();return false">
+            <div style="margin-bottom:16px">
+              <label style="font-size:12.5px;font-weight:500;color:var(--tx-muted);display:block;margin-bottom:6px">用户名 (Username)</label>
+              <input id="login-user" value="${esc(S.lastInputUser || 'admin')}" autocomplete="username" autofocus>
+            </div>
+
+            <div style="margin-bottom:18px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                <label style="font-size:12.5px;font-weight:500;color:var(--tx-muted)">密码 (Password)</label>
+                <span style="font-size:11.5px;color:var(--tx-dim)">默认密码: naos12345</span>
+              </div>
+              <input id="login-pw" type="password" value="naos12345" autocomplete="current-password">
+            </div>
+
+            ${S.msg ? `
+              <div style="color:var(--danger);font-size:12.5px;margin-bottom:14px;display:flex;align-items:center;gap:6px">
+                ${svg('alert', 'width:14px;height:14px')}
+                <span>${esc(S.msg)}</span>
+              </div>
+            ` : ''}
+
+            <button class="btn btn-primary" style="width:100%;padding:11px;font-size:14px;font-weight:600" type="submit">
+              立即登录
+            </button>
+          </form>
+
+          <!-- Quick One-click Demo Logins -->
+          <div style="margin-top:24px;padding-top:18px;border-top:1px solid var(--border)">
+            <div style="font-size:12px;color:var(--tx-muted);margin-bottom:10px">快捷演示账号一键登录:</div>
+            <div style="display:flex;gap:10px">
+              <button class="btn btn-sm" style="flex:1" onclick="quickLogin('admin')">
+                👑 以管理员登录 (admin)
+              </button>
+              <button class="btn btn-sm" style="flex:1" onclick="quickLogin('alice')">
+                👤 以普通用户登录 (alice)
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function handleLoginSubmit() {
+  const now = Date.now();
+  S.lastInputUser = $('#login-user').value.trim();
+  const inputPw = $('#login-pw').value;
+
+  if (now < S.lockUntil) {
+    const remainSec = Math.ceil((S.lockUntil - now) / 1000);
+    S.msg = `密码连续错误过多，系统已锁定，请在 ${remainSec} 秒后重试`;
+    return renderLoginScreen();
+  }
+
+  const user = S.users.find(x => x.n === S.lastInputUser);
+  if (user && user.on && user.pw === inputPw) {
+    S.auth = user;
+    S.fails = 0;
+    S.msg = '';
+    S.view = user.role === 'admin' ? 'dash' : 'files';
+    S.as = null;
+    S.audit.unshift([nowTime(), user.n, 'Web', 'LOGIN', '—', '/', '192.168.1.2', 'ok', 'Web 控制台密码认证成功']);
+    render();
+    return;
+  }
+
+  S.audit.unshift([nowTime(), S.lastInputUser || '—', 'Web', 'LOGIN', '—', '/', '192.168.1.2', 'deny', '用户名或口令校验失败']);
+  if (++S.fails >= S.cfg.maxFail) {
+    S.lockUntil = now + S.cfg.lockMin * 60000;
+    S.fails = 0;
+    S.msg = `连续失败已达 ${S.cfg.maxFail} 次，安全锁定 ${S.cfg.lockMin} 分钟`;
+  } else {
+    S.msg = `用户名或密码错误 (已失败 ${S.fails}/${S.cfg.maxFail} 次)`;
+  }
+  renderLoginScreen();
+}
+
+function quickLogin(username) {
+  const u = S.users.find(x => x.n === username);
+  if (u) {
+    $('#login-user').value = u.n;
+    $('#login-pw').value = u.pw;
+    handleLoginSubmit();
+  }
+}
+
+function logout() {
+  if (confirm('确定要退出当前 naos 控制台会话吗？')) {
+    S.auth = null;
+    S.as = null;
+    S.fp = [];
+    S.chk = [];
+    S.msg = '';
+    render();
+  }
+}
+
+/* ==========================================================================
+   MODAL & COMMAND PALETTE HELPERS
+   ========================================================================== */
+function modalDialog(html) {
+  const dlg = $('#modal-dialog');
+  dlg.innerHTML = html;
+  if (!dlg.open) dlg.showModal();
+}
+
+function newShareModal() {
+  modalDialog(`
+    <div class="dialog-header">
+      <h3 class="dialog-title">创建新共享目录</h3>
+      <button class="btn btn-icon btn-sm" onclick="$('#modal-dialog').close()">${svg('dash')}</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div>
+        <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">物理绝对路径 (需真实存在且支持 ACL)</label>
+        <input id="new-s-path" class="font-mono" placeholder="例如 /data/photos 或 D:\\Share">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">共享名称 (唯一网络标识，建议小写字母)</label>
+        <input id="new-s-name" placeholder="例如 photos">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">描述备注 (选填)</label>
+        <input id="new-s-desc" placeholder="例如 家庭照片多媒体存储">
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--tx-muted);display:block;margin-bottom:4px">对外开放协议</label>
+        <div style="display:flex;gap:18px;margin-top:4px">
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="new-s-smb" checked> 启用 SMB
+          </label>
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="new-s-dav" checked> 启用 WebDAV
+          </label>
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="new-s-nfs" checked> 启用 NFS
+          </label>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+      <button class="btn" onclick="$('#modal-dialog').close()">取消</button>
+      <button class="btn btn-primary" onclick="confirmSaveShare()">创建共享</button>
+    </div>
+  `);
+}
+
+function confirmSaveShare() {
+  const p = $('#new-s-path').value.trim();
+  const n = $('#new-s-name').value.trim();
+  const desc = $('#new-s-desc').value.trim();
+  const smb = $('#new-s-smb').checked ? 1 : 0;
+  const dav = $('#new-s-dav').checked ? 1 : 0;
+  const nfs = $('#new-s-nfs').checked ? 1 : 0;
+
+  if (!p || !/^[\w-]+$/.test(n)) {
+    return alert('请规范填写物理路径与共享名（共享名仅允许字母、数字、下划线及短横线）');
+  }
+
+  // Blacklist check
+  const normalized = p.toLowerCase().replace(/[\\/]+$/, '') || '/';
+  if (S.cfg.bl.map(x => x.toLowerCase()).includes(normalized)) {
+    return alert('该系统路径在系统保护黑名单中，严禁共享');
+  }
+
+  if (S.shares.some(s => s.name === n)) {
+    return alert('共享名称已存在');
+  }
+
+  const nextId = Math.max(0, ...S.shares.map(s => s.id)) + 1;
+  S.shares.push({
+    id: nextId,
+    name: n,
+    path: p,
+    comment: desc,
+    smb,
+    dav,
+    nfs,
+    acl: [
+      { p: '/', s: 'user:admin', perm: 'rw' }
+    ],
+    nfsb: []
+  });
+
+  S.fs[nextId] = D({});
+  $('#modal-dialog').close();
+  toast(`共享 ${n} 创建成功`);
+  go('share', nextId);
+}
+
+/* Command Palette */
+function openCmdPalette() {
+  const dlg = $('#cmd-dialog');
+  $('#cmd-input').value = '';
+  renderCmdResults();
+  if (!dlg.open) dlg.showModal();
+}
+
+function renderCmdResults() {
+  const q = ($('#cmd-input').value || '').trim().toLowerCase();
+  const commands = [
+    { title: '概览仪表盘 (Dashboard)', sub: '查看资源、网络、协议监控', act: () => go('dash') },
+    { title: '文件浏览器 (Files)', sub: '浏览与管理共享文件', act: () => go('files') },
+    { title: '共享目录 (Shares)', sub: '管理 SMB / WebDAV / NFS 共享', act: () => go('shares') },
+    { title: '新建共享目录向导', sub: '创建新的网络共享与 ACL', act: () => { $('#cmd-dialog').close(); newShareModal(); } },
+    { title: '用户与权限组 (Users)', sub: '管理系统映射账号与组', act: () => go('users') },
+    { title: '权限模拟器 (ACL Simulator)', sub: '实时推演子目录权限继承', act: () => go('sim') },
+    { title: '统一审计日志 (Audit)', sub: '查看全协议安全访问记录', act: () => go('audit') },
+    { title: '系统环境诊断 (Doctor)', sub: '执行 naosd doctor 依赖自检', act: () => { S.st = 'doc'; go('settings'); } },
+    { title: '切换色彩主题 (Dark / Light)', sub: '切换深色或浅色视觉主题', act: () => toggleTheme() }
+  ];
+
+  // Add share shortcuts
+  S.shares.forEach(s => {
+    commands.push({
+      title: `打开共享: ${s.name}`,
+      sub: `物理路径: ${s.path}`,
+      act: () => openFilesView(s.id)
+    });
+  });
+
+  const matched = commands.filter(c => !q || c.title.toLowerCase().includes(q) || c.sub.toLowerCase().includes(q));
+
+  $('#cmd-results').innerHTML = matched.map(m => `
+    <div style="padding:10px 14px;border-radius:var(--radius-sm);cursor:pointer;display:flex;flex-direction:column;gap:2px;transition:background 0.12s ease"
+         onmouseover="this.style.background='var(--bg-subtle)'"
+         onmouseout="this.style.background='transparent'"
+         onclick="runCmdItem(${commands.indexOf(m)})">
+      <b style="font-size:13.5px;color:var(--tx-main)">${esc(m.title)}</b>
+      <span style="font-size:11.5px;color:var(--tx-muted)">${esc(m.sub)}</span>
+    </div>
+  `).join('') || `<div style="padding:20px;text-align:center;color:var(--tx-muted);font-size:13px">无匹配命令</div>`;
+}
+
+function runCmdItem(idx) {
+  $('#cmd-dialog').close();
+  const commands = [
+    { act: () => go('dash') },
+    { act: () => go('files') },
+    { act: () => go('shares') },
+    { act: () => { newShareModal(); } },
+    { act: () => go('users') },
+    { act: () => go('sim') },
+    { act: () => go('audit') },
+    { act: () => { S.st = 'doc'; go('settings'); } },
+    { act: () => toggleTheme() },
+    ...S.shares.map(s => ({ act: () => openFilesView(s.id) }))
+  ];
+  if (commands[idx]) commands[idx].act();
+}
+
+window.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    openCmdPalette();
+  }
+});
+
+/* ==========================================================================
+   RENDER DISPATCHER
+   ========================================================================== */
+function render() {
+  const isLogged = !!S.auth;
+  $('#app').style.display = isLogged ? 'flex' : 'none';
+  $('#login-container').style.display = isLogged ? 'none' : 'block';
+
+  if (!isLogged) {
+    renderLoginScreen();
+    return;
+  }
+
+  renderNav();
+
+  const viewMap = {
+    dash: viewDash,
+    files: viewFiles,
+    shares: viewShares,
+    share: viewShareDetail,
+    users: viewUsers,
+    sim: viewSimulator,
+    audit: viewAudit,
+    settings: viewSettings,
+    me: viewMe
+  };
+
+  const currentFn = viewMap[S.view] || viewDash;
+  $('#main-content').innerHTML = currentFn();
+}
+
+// Initial Run
+render();
+</script>
+</body>
+</html>
