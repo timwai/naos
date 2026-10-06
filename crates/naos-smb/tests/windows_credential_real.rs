@@ -122,11 +122,7 @@ async fn run_round_trip(
         .run_with_stdin(spec.clone(), password.as_bytes().to_vec())
         .await?;
     if !output.success() {
-        return Err(format!(
-            "SMB client round trip failed: {}",
-            output.stderr.trim()
-        )
-        .into());
+        return Err(format!("SMB client round trip failed: {}", output.stderr.trim()).into());
     }
 
     adapter.rollback(&snapshot).await?;
