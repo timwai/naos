@@ -11,9 +11,7 @@ use naos_contract::{
 };
 use naos_core::{
     auth::{AuthService, AuthenticatedSession},
-    nfs::{
-        NfsBinding, NfsBindingInput, NfsBindingLevel, NfsBindingServiceError,
-    },
+    nfs::{NfsBinding, NfsBindingInput, NfsBindingLevel, NfsBindingServiceError},
 };
 use utoipa::OpenApi;
 
