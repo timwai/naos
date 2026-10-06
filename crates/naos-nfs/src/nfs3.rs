@@ -452,7 +452,7 @@ fn resolve_existing(context: &HandleContext) -> Result<PathBuf, NfsV3Error> {
 }
 
 fn child_path(parent: &RelativePath, name: &str) -> Result<RelativePath, NfsV3Error> {
-    if name.is_empty() || name.as_bytes().len() > MAX_NAME_BYTES || name.contains('/') {
+    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.contains('/') {
         return Err(NfsV3Error::Invalid);
     }
     let path = if parent.is_root() {
