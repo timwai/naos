@@ -4,7 +4,9 @@ use std::sync::Arc;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::command::{CommandError, CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};
+use crate::command::{
+    CommandError, CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner,
+};
 
 const ACCOUNT_MARKER: &str = "Managed by naos";
 const WINDOWS_ACCOUNT_ENV: &str = "NAOS_ACCOUNT";
@@ -164,7 +166,10 @@ impl SystemAccountManager {
             .await?;
 
         if existing.success() {
-            if existing.stdout.contains(&format!("RealName: {ACCOUNT_MARKER}")) {
+            if existing
+                .stdout
+                .contains(&format!("RealName: {ACCOUNT_MARKER}"))
+            {
                 return Ok(EnsureAccountResult::Existing);
             }
             return Err(AccountError::OwnershipConflict);
@@ -218,13 +223,7 @@ impl SystemAccountManager {
                 "NFSHomeDirectory",
                 "/var/empty",
             ]),
-            CommandSpec::new("dscl").args([
-                ".",
-                "-create",
-                user_path.as_str(),
-                "IsHidden",
-                "1",
-            ]),
+            CommandSpec::new("dscl").args([".", "-create", user_path.as_str(), "IsHidden", "1"]),
         ];
 
         for spec in commands {
@@ -439,11 +438,11 @@ mod tests {
 
         let commands = runner.commands();
         assert_eq!(commands.len(), 9);
-        assert!(commands.iter().any(|spec| {
-            spec.args
-                .windows(2)
-                .any(|args| args == ["IsHidden", "1"])
-        }));
+        assert!(
+            commands
+                .iter()
+                .any(|spec| { spec.args.windows(2).any(|args| args == ["IsHidden", "1"]) })
+        );
     }
 
     #[cfg(target_os = "windows")]
@@ -464,6 +463,11 @@ mod tests {
             commands[0].env,
             vec![(WINDOWS_ACCOUNT_ENV.to_owned(), "naos_alice".to_owned())]
         );
-        assert!(!commands[0].args.iter().any(|arg| arg.contains("naos_alice")));
+        assert!(
+            !commands[0]
+                .args
+                .iter()
+                .any(|arg| arg.contains("naos_alice"))
+        );
     }
 }
