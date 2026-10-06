@@ -1,7 +1,4 @@
-use std::{
-    net::SocketAddr,
-    sync::Arc,
-};
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     body::Body,
@@ -33,10 +30,7 @@ async fn webdav_enforces_the_same_ro_rw_none_acl_semantics() {
             .unwrap(),
     );
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
-    let user = auth
-        .bootstrap_admin("alice", PASSWORD, None)
-        .await
-        .unwrap();
+    let user = auth.bootstrap_admin("alice", PASSWORD, None).await.unwrap();
 
     sqlx::query(
         "INSERT INTO shares
@@ -47,7 +41,12 @@ async fn webdav_enforces_the_same_ro_rw_none_acl_semantics() {
              '2026-10-06T00:00:00Z', '2026-10-06T00:00:00Z')",
     )
     .bind(root.to_string_lossy().as_ref())
-    .bind(std::fs::canonicalize(&root).unwrap().to_string_lossy().as_ref())
+    .bind(
+        std::fs::canonicalize(&root)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref(),
+    )
     .execute(store.pool())
     .await
     .unwrap();
@@ -84,7 +83,10 @@ async fn webdav_enforces_the_same_ro_rw_none_acl_semantics() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
-    assert_eq!(std::fs::read(root.join("uploaded.txt")).unwrap(), b"uploaded");
+    assert_eq!(
+        std::fs::read(root.join("uploaded.txt")).unwrap(),
+        b"uploaded"
+    );
 
     set_permission(&store, "ro").await;
 

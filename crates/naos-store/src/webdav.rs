@@ -34,10 +34,7 @@ impl WebDavRepository for Store {
         .transpose()
     }
 
-    async fn list_acl_rules(
-        &self,
-        share_id: &str,
-    ) -> Result<Vec<AclRule>, WebDavRepositoryError> {
+    async fn list_acl_rules(&self, share_id: &str) -> Result<Vec<AclRule>, WebDavRepositoryError> {
         let rows = sqlx::query(
             "SELECT rel_path, subject_type, subject_id, perm, inherit
              FROM share_acl

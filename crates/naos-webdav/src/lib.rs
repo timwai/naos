@@ -5,15 +5,17 @@ use std::{
 };
 
 use axum::{
+    Router,
     body::{Body, Bytes},
     extract::{ConnectInfo, Path, Request, State},
     http::{
         HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri,
-        header::{ALLOW, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER, WWW_AUTHENTICATE},
+        header::{
+            ALLOW, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER, WWW_AUTHENTICATE,
+        },
     },
     response::Response,
     routing::any,
-    Router,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use http_body_util::BodyExt;
@@ -155,15 +157,7 @@ async fn dispatch(
         "PUT" => put(&resolver, &acl, principal, &relative, request).await,
         "MKCOL" => mkcol(&resolver, &acl, principal, &relative).await,
         "DELETE" => delete_resource(&resolver, &acl, principal, &relative).await,
-        "MOVE" => move_resource(
-            &share,
-            &resolver,
-            &acl,
-            principal,
-            &relative,
-            &headers,
-        )
-        .await,
+        "MOVE" => move_resource(&share, &resolver, &acl, principal, &relative, &headers).await,
         _ => method_not_allowed(),
     }
 }
@@ -282,11 +276,7 @@ async fn propfind(
                 Ok(path) => path,
                 Err(_) => continue,
             };
-            if !acl.authorize(
-                principal.clone(),
-                &child_relative,
-                FileOperation::Stat,
-            ) {
+            if !acl.authorize(principal.clone(), &child_relative, FileOperation::Stat) {
                 continue;
             }
 
@@ -461,12 +451,8 @@ async fn mkcol(
     };
     match fs::create_dir(&target).await {
         Ok(()) => empty(StatusCode::CREATED),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            method_not_allowed()
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            empty(StatusCode::CONFLICT)
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => method_not_allowed(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => empty(StatusCode::CONFLICT),
         Err(_) => empty(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
@@ -578,10 +564,7 @@ async fn move_resource(
     }
 }
 
-fn destination_relative(
-    headers: &HeaderMap,
-    share_name: &str,
-) -> Result<RelativePath, StatusCode> {
+fn destination_relative(headers: &HeaderMap, share_name: &str) -> Result<RelativePath, StatusCode> {
     let raw = headers
         .get(&DESTINATION)
         .and_then(|value| value.to_str().ok())
@@ -619,9 +602,8 @@ struct DavResource {
 }
 
 fn render_multistatus(resources: &[DavResource]) -> String {
-    let mut xml = String::from(
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\">",
-    );
+    let mut xml =
+        String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\">");
     for resource in resources {
         xml.push_str("<D:response><D:href>");
         xml.push_str(&resource.href);
@@ -635,9 +617,7 @@ fn render_multistatus(resources: &[DavResource]) -> String {
             xml.push_str(&resource.len.to_string());
             xml.push_str("</D:getcontentlength>");
         }
-        xml.push_str(
-            "</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>",
-        );
+        xml.push_str("</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>");
     }
     xml.push_str("</D:multistatus>");
     xml
@@ -671,9 +651,10 @@ fn child_relative(parent: &RelativePath, name: &str) -> Result<RelativePath, Pat
 }
 
 fn set_content_headers(response: &mut Response, len: u64) {
-    response
-        .headers_mut()
-        .insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
     if let Ok(value) = HeaderValue::from_str(&len.to_string()) {
         response.headers_mut().insert(CONTENT_LENGTH, value);
     }
@@ -697,9 +678,7 @@ fn path_error(error: PathError) -> Response {
         | PathError::PrivateDataPath
         | PathError::FilesystemRootForbidden
         | PathError::NestedShareConflict => empty(StatusCode::FORBIDDEN),
-        PathError::RootNotDirectory | PathError::Io => {
-            empty(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+        PathError::RootNotDirectory | PathError::Io => empty(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
@@ -745,12 +724,14 @@ mod tests {
     fn multistatus_does_not_advertise_locking() {
         let response = options_response();
         assert_eq!(response.headers().get(&DAV).unwrap(), "1");
-        assert!(!response
-            .headers()
-            .get(ALLOW)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .contains("LOCK"));
+        assert!(
+            !response
+                .headers()
+                .get(ALLOW)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("LOCK")
+        );
     }
 }

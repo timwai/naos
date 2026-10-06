@@ -22,13 +22,8 @@ pub trait WebDavRepository: Send + Sync {
         name: &str,
     ) -> Result<Option<WebDavShare>, WebDavRepositoryError>;
 
-    async fn list_acl_rules(
-        &self,
-        share_id: &str,
-    ) -> Result<Vec<AclRule>, WebDavRepositoryError>;
+    async fn list_acl_rules(&self, share_id: &str) -> Result<Vec<AclRule>, WebDavRepositoryError>;
 
-    async fn group_ids_for_user(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<String>, WebDavRepositoryError>;
+    async fn group_ids_for_user(&self, user_id: &str)
+    -> Result<Vec<String>, WebDavRepositoryError>;
 }
