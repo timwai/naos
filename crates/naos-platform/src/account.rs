@@ -10,6 +10,7 @@ use crate::command::{
     CommandError, CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner,
 };
 
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 const ACCOUNT_MARKER: &str = "Managed by naos";
 #[cfg(target_os = "windows")]
 const WINDOWS_ACCOUNT_ENV: &str = "NAOS_ACCOUNT";
