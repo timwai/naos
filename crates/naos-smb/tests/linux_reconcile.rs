@@ -8,9 +8,7 @@ use naos_core::{
     reconcile::Reconciler,
 };
 use naos_platform::{CommandOutput, CommandRunner, CommandSpec};
-use naos_smb::{
-    AttachPolicy, LinuxSambaAdapter, LinuxSambaConfig, SambaShareReconcileDriver,
-};
+use naos_smb::{AttachPolicy, LinuxSambaAdapter, LinuxSambaConfig, SambaShareReconcileDriver};
 use naos_store::Store;
 use tempfile::TempDir;
 
@@ -35,8 +33,7 @@ impl CommandRunner for FakeRunner {
             },
             "ss" => CommandOutput {
                 status: 0,
-                stdout: "LISTEN 0 50 0.0.0.0:445 0.0.0.0:* users:((smbd,pid=821,fd=45))"
-                    .to_owned(),
+                stdout: "LISTEN 0 50 0.0.0.0:445 0.0.0.0:* users:((smbd,pid=821,fd=45))".to_owned(),
                 stderr: String::new(),
             },
             "systemctl" if spec.args == ["is-active", "smbd"] => CommandOutput {
@@ -49,13 +46,11 @@ impl CommandRunner for FakeRunner {
                 stdout: "inactive\n".to_owned(),
                 stderr: String::new(),
             },
-            "testparm" if spec.args.iter().any(|arg| arg == "--parameter-name") => {
-                CommandOutput {
-                    status: 0,
-                    stdout: "/srv/media\n".to_owned(),
-                    stderr: String::new(),
-                }
-            }
+            "testparm" if spec.args.iter().any(|arg| arg == "--parameter-name") => CommandOutput {
+                status: 0,
+                stdout: "/srv/media\n".to_owned(),
+                stderr: String::new(),
+            },
             "testparm" => CommandOutput {
                 status: 0,
                 stdout: "Loaded services file OK.\n".to_owned(),
@@ -165,5 +160,9 @@ async fn samba_reconcile_advances_applied_generation_after_verify() {
 
     let commands = runner.commands.lock().unwrap();
     assert!(commands.iter().any(|command| command.program == "testparm"));
-    assert!(commands.iter().any(|command| command.program == "smbcontrol"));
+    assert!(
+        commands
+            .iter()
+            .any(|command| command.program == "smbcontrol")
+    );
 }

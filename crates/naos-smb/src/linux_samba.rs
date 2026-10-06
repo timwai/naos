@@ -1,9 +1,14 @@
 use std::{
     collections::BTreeSet,
-    fs::{self, OpenOptions},
-    io::Write,
+    fs,
     path::{Path, PathBuf},
     sync::Arc,
+};
+
+#[cfg(target_os = "linux")]
+use std::{
+    fs::OpenOptions,
+    io::Write,
 };
 
 use naos_platform::{
@@ -160,7 +165,11 @@ impl LinuxSambaAdapter {
     pub async fn preflight(&self) -> Result<(), SambaError> {
         ensure_linux()?;
 
-        let detection = self.detector.detect().await.map_err(|_| SambaError::Detection)?;
+        let detection = self
+            .detector
+            .detect()
+            .await
+            .map_err(|_| SambaError::Detection)?;
         if detection.platform != PlatformKind::Linux {
             return Err(SambaError::UnsupportedPlatform);
         }
@@ -216,7 +225,11 @@ impl LinuxSambaAdapter {
 
     pub async fn snapshot(&self) -> Result<SambaSnapshot, SambaError> {
         ensure_linux()?;
-        let detection = self.detector.detect().await.map_err(|_| SambaError::Detection)?;
+        let detection = self
+            .detector
+            .detect()
+            .await
+            .map_err(|_| SambaError::Detection)?;
 
         Ok(SambaSnapshot {
             main_config: fs::read_to_string(&self.config.main_config)?,
@@ -244,7 +257,10 @@ impl LinuxSambaAdapter {
             plan.include_config_content.as_bytes(),
         )?;
         if current_main != plan.main_config_content {
-            atomic_write(&self.config.main_config, plan.main_config_content.as_bytes())?;
+            atomic_write(
+                &self.config.main_config,
+                plan.main_config_content.as_bytes(),
+            )?;
         }
 
         self.testparm(&self.config.main_config).await?;
@@ -254,14 +270,20 @@ impl LinuxSambaAdapter {
     pub async fn verify(&self, plan: &SambaPlan) -> Result<SambaVerifyReport, SambaError> {
         ensure_linux()?;
 
-        let detection = self.detector.detect().await.map_err(|_| SambaError::Detection)?;
+        let detection = self
+            .detector
+            .detect()
+            .await
+            .map_err(|_| SambaError::Detection)?;
         if detection.provider != SmbProvider::Samba
             || detection.disposition == DetectionDisposition::Conflict
         {
             return Err(SambaError::PortConflict);
         }
         if !detection.running {
-            return Err(SambaError::Verify("Samba service is not running".to_owned()));
+            return Err(SambaError::Verify(
+                "Samba service is not running".to_owned(),
+            ));
         }
 
         let main = fs::read_to_string(&self.config.main_config)?;
@@ -380,7 +402,11 @@ impl LinuxSambaAdapter {
     }
 
     async fn reload_or_start(&self) -> Result<(), SambaError> {
-        let detection = self.detector.detect().await.map_err(|_| SambaError::Detection)?;
+        let detection = self
+            .detector
+            .detect()
+            .await
+            .map_err(|_| SambaError::Detection)?;
         if detection.running {
             self.reload_running().await
         } else {
@@ -655,7 +681,9 @@ fn atomic_write(path: &Path, content: &[u8]) -> Result<(), SambaError> {
     })?;
     let temp = parent.join(format!(".naos-write-{}", Ulid::new()));
 
-    let permissions = fs::metadata(path).ok().map(|metadata| metadata.permissions());
+    let permissions = fs::metadata(path)
+        .ok()
+        .map(|metadata| metadata.permissions());
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -739,7 +767,8 @@ async fn run_first_success<const N: usize>(
         }
     }
 
-    Err(last_failure.unwrap_or_else(|| SambaError::Verify("no reload command available".to_owned())))
+    Err(last_failure
+        .unwrap_or_else(|| SambaError::Verify("no reload command available".to_owned())))
 }
 
 #[cfg(test)]
@@ -758,11 +787,9 @@ mod tests {
 
     #[test]
     fn render_is_deterministic_and_acl_friendly() {
-        let rendered = render_include(&[
-            share("photos", "/srv/photos"),
-            share("media", "/srv/media"),
-        ])
-        .unwrap();
+        let rendered =
+            render_include(&[share("photos", "/srv/photos"), share("media", "/srv/media")])
+                .unwrap();
 
         assert!(rendered.starts_with(INCLUDE_HEADER));
         assert!(rendered.find("[media]").unwrap() < rendered.find("[photos]").unwrap());

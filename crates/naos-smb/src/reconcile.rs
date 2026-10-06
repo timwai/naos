@@ -7,9 +7,7 @@ use naos_core::{
 };
 use serde_json::{Value, json};
 
-use crate::linux_samba::{
-    LinuxSambaAdapter, SambaError, SambaPlan, SambaShareSpec, SambaSnapshot,
-};
+use crate::linux_samba::{LinuxSambaAdapter, SambaError, SambaPlan, SambaShareSpec, SambaSnapshot};
 
 pub struct SambaShareReconcileDriver {
     shares: Arc<dyn ShareApplyRepository>,
@@ -161,16 +159,16 @@ impl ReconcileDriver for SambaShareReconcileDriver {
         }
 
         serde_json::to_value(report).map_err(|_| {
-            ReconcileFailure::new("SAMBA_VERIFY_SERIALIZE_FAILED", "cannot encode verify report")
+            ReconcileFailure::new(
+                "SAMBA_VERIFY_SERIALIZE_FAILED",
+                "cannot encode verify report",
+            )
         })
     }
 
     async fn rollback(&self, snapshot: &Value) -> Result<Value, ReconcileFailure> {
         let snapshot: SambaSnapshot = serde_json::from_value(snapshot.clone()).map_err(|_| {
-            ReconcileFailure::new(
-                "SAMBA_SNAPSHOT_INVALID",
-                "stored Samba snapshot is invalid",
-            )
+            ReconcileFailure::new("SAMBA_SNAPSHOT_INVALID", "stored Samba snapshot is invalid")
         })?;
 
         if let Err(error) = self.adapter.rollback(&snapshot).await {
@@ -198,8 +196,6 @@ fn samba_failure(error: SambaError) -> ReconcileFailure {
     ReconcileFailure::new(error.code(), error.to_string())
 }
 
-fn repository_failure(
-    _error: naos_core::share::ShareApplyRepositoryError,
-) -> ReconcileFailure {
+fn repository_failure(_error: naos_core::share::ShareApplyRepositoryError) -> ReconcileFailure {
     ReconcileFailure::new("SHARE_STORE_UNAVAILABLE", "share store is unavailable")
 }

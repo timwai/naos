@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use naos_core::share::{
-    ShareApplyRepository, ShareApplyRepositoryError, ShareApplyTarget,
-};
+use naos_core::share::{ShareApplyRepository, ShareApplyRepositoryError, ShareApplyTarget};
 use sqlx::Row;
 
 use crate::Store;
@@ -93,9 +91,7 @@ impl ShareApplyRepository for Store {
 fn share_from_row(
     row: sqlx::sqlite::SqliteRow,
 ) -> Result<ShareApplyTarget, ShareApplyRepositoryError> {
-    let generation = row
-        .try_get::<i64, _>("generation")
-        .map_err(store_error)?;
+    let generation = row.try_get::<i64, _>("generation").map_err(store_error)?;
     let applied_generation = row
         .try_get::<i64, _>("applied_generation")
         .map_err(store_error)?;
