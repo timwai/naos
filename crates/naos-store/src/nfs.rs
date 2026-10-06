@@ -2,8 +2,7 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use naos_core::nfs::{
-    NfsBinding, NfsBindingPermission, NfsBindingRepository, NfsCidr, NfsExport,
-    NfsRepositoryError,
+    NfsBinding, NfsBindingPermission, NfsBindingRepository, NfsCidr, NfsExport, NfsRepositoryError,
 };
 use sqlx::Row;
 
