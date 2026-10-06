@@ -343,9 +343,7 @@ impl AuthRepository for Store {
 }
 
 fn user_from_row(row: sqlx::sqlite::SqliteRow) -> Result<UserAuthRecord, AuthRepositoryError> {
-    let role_text = row
-        .try_get::<String, _>("role")
-        .map_err(auth_store_error)?;
+    let role_text = row.try_get::<String, _>("role").map_err(auth_store_error)?;
     let role = parse_role(role_text)?;
 
     Ok(UserAuthRecord {

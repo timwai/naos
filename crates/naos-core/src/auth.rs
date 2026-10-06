@@ -248,10 +248,7 @@ pub struct AuthService {
 }
 
 impl AuthService {
-    pub fn new(
-        repository: Arc<dyn AuthRepository>,
-        config: AuthConfig,
-    ) -> Result<Self, AuthError> {
+    pub fn new(repository: Arc<dyn AuthRepository>, config: AuthConfig) -> Result<Self, AuthError> {
         let dummy_password_hash = hash_password_sync("naos-invalid-login-sentinel")?;
         let throttle = LoginThrottle::new(config.max_login_failures, config.lock_minutes);
 
@@ -317,10 +314,7 @@ impl AuthService {
     ) -> Result<SessionGrant, AuthError> {
         let username_key = username.to_ascii_lowercase();
         let ip_key = client_ip.as_deref().unwrap_or("unknown");
-        let keys = [
-            format!("username:{username_key}"),
-            format!("ip:{ip_key}"),
-        ];
+        let keys = [format!("username:{username_key}"), format!("ip:{ip_key}")];
 
         if let Some(retry_after_seconds) = self.throttle.check(&keys) {
             return Err(AuthError::RateLimited {
@@ -528,12 +522,7 @@ impl AuthService {
         let now = now_rfc3339()?;
         if !self
             .repository
-            .update_password_and_revoke_others(
-                &session.user.id,
-                &password_hash,
-                &now,
-                &session.id,
-            )
+            .update_password_and_revoke_others(&session.user.id, &password_hash, &now, &session.id)
             .await?
         {
             return Err(AuthError::SessionInvalid);
@@ -683,7 +672,8 @@ impl LoginThrottle {
                 if let Some(until) = state.locked_until {
                     if until > now {
                         let seconds = until.duration_since(now).as_secs().max(1);
-                        retry_after = Some(retry_after.map_or(seconds, |current: u64| current.max(seconds)));
+                        retry_after =
+                            Some(retry_after.map_or(seconds, |current: u64| current.max(seconds)));
                     } else {
                         state.failures = 0;
                         state.locked_until = None;
@@ -705,7 +695,8 @@ impl LoginThrottle {
             if let Some(until) = state.locked_until {
                 if until > now {
                     let seconds = until.duration_since(now).as_secs().max(1);
-                    retry_after = Some(retry_after.map_or(seconds, |current: u64| current.max(seconds)));
+                    retry_after =
+                        Some(retry_after.map_or(seconds, |current: u64| current.max(seconds)));
                     continue;
                 }
                 state.failures = 0;

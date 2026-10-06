@@ -22,7 +22,11 @@ use tower::ServiceExt;
 
 async fn test_app() -> (Router, TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(Store::connect_path(dir.path().join("naos.db")).await.unwrap());
+    let store = Arc::new(
+        Store::connect_path(dir.path().join("naos.db"))
+            .await
+            .unwrap(),
+    );
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
     let app = router(AppState {
         readiness: store,

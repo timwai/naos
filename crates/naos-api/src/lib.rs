@@ -1,8 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    net::SocketAddr,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -133,7 +129,11 @@ async fn setup_admin(
 
     let user = state
         .auth
-        .bootstrap_admin(&input.username, &input.password, Some(peer.ip().to_string()))
+        .bootstrap_admin(
+            &input.username,
+            &input.password,
+            Some(peer.ip().to_string()),
+        )
         .await?;
 
     Ok((StatusCode::CREATED, Json(user_dto(user))).into_response())
@@ -202,7 +202,9 @@ async fn auth_session(
         .into_response()),
         Err(AuthError::SessionInvalid) => {
             let mut response = Json(unauthenticated_session()).into_response();
-            response.headers_mut().append(SET_COOKIE, clear_session_cookie());
+            response
+                .headers_mut()
+                .append(SET_COOKIE, clear_session_cookie());
             Ok(response)
         }
         Err(error) => Err(error.into()),
@@ -226,7 +228,9 @@ async fn logout(
         .await?;
 
     let mut response = StatusCode::NO_CONTENT.into_response();
-    response.headers_mut().append(SET_COOKIE, clear_session_cookie());
+    response
+        .headers_mut()
+        .append(SET_COOKIE, clear_session_cookie());
     Ok(response)
 }
 
@@ -308,11 +312,7 @@ async fn revoke_session(
 ) -> Result<Response, ApiError> {
     state
         .auth
-        .revoke_session(
-            &session,
-            &target_session_id,
-            Some(peer.ip().to_string()),
-        )
+        .revoke_session(&session, &target_session_id, Some(peer.ip().to_string()))
         .await?;
 
     let mut response = StatusCode::NO_CONTENT.into_response();
@@ -332,8 +332,7 @@ pub async fn auth_middleware(
     let session = state.auth.authenticate_session(&token).await?;
 
     if is_mutating(request.method()) {
-        let csrf = header_text(request.headers(), CSRF_HEADER)
-            .ok_or(AuthError::CsrfInvalid)?;
+        let csrf = header_text(request.headers(), CSRF_HEADER).ok_or(AuthError::CsrfInvalid)?;
         state.auth.verify_csrf(&session, &csrf)?;
     }
 
@@ -341,10 +340,7 @@ pub async fn auth_middleware(
     Ok(next.run(request).await)
 }
 
-pub async fn admin_middleware(
-    request: Request,
-    next: Next,
-) -> Result<Response, ApiError> {
+pub async fn admin_middleware(request: Request, next: Next) -> Result<Response, ApiError> {
     let session = request
         .extensions()
         .get::<AuthenticatedSession>()
@@ -387,9 +383,7 @@ fn session_cookie(token: &str, max_age_seconds: u64) -> Result<HeaderValue, ApiE
 }
 
 fn clear_session_cookie() -> HeaderValue {
-    HeaderValue::from_static(
-        "naos_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0",
-    )
+    HeaderValue::from_static("naos_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0")
 }
 
 fn unauthenticated_session() -> AuthSessionResponse {
@@ -462,14 +456,8 @@ impl From<AuthError> for ApiError {
                 Self::unauthorized("SESSION_INVALID", "会话已失效，请重新登录")
             }
             AuthError::CsrfInvalid => Self::forbidden("CSRF_INVALID", "CSRF 校验失败"),
-            AuthError::Forbidden => {
-                Self::forbidden("ADMIN_REQUIRED", "需要管理员权限")
-            }
-            AuthError::NotFound => Self::new(
-                StatusCode::NOT_FOUND,
-                "NOT_FOUND",
-                "资源不存在",
-            ),
+            AuthError::Forbidden => Self::forbidden("ADMIN_REQUIRED", "需要管理员权限"),
+            AuthError::NotFound => Self::new(StatusCode::NOT_FOUND, "NOT_FOUND", "资源不存在"),
             AuthError::RateLimited {
                 retry_after_seconds,
             } => {
