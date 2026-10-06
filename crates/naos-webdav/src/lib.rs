@@ -21,7 +21,7 @@ use naos_core::{
     path::{PathError, RelativePath, SafePathResolver},
     webdav::{WebDavRepository, WebDavShare},
 };
-use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
+use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde::Deserialize;
 use tokio::{
     fs,
@@ -35,12 +35,6 @@ const DESTINATION: HeaderName = HeaderName::from_static("destination");
 const OVERWRITE: HeaderName = HeaderName::from_static("overwrite");
 const MS_AUTHOR_VIA: HeaderName = HeaderName::from_static("ms-author-via");
 const ALLOW_VALUE: &str = "OPTIONS, PROPFIND, GET, HEAD, PUT, MKCOL, DELETE, MOVE";
-const DAV_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
-    .add(b' ')
-    .add(b'!')
-    .add(b'"')
-    .add(b'#')
-    .add(b'
 
 #[derive(Clone)]
 pub struct WebDavState {
@@ -642,7 +636,12 @@ fn resource_href(share_name: &str, relative: &RelativePath, is_dir: bool) -> Str
 }
 
 fn encode_segment(value: &str) -> String {
-    utf8_percent_encode(value, DAV_SEGMENT_ENCODE_SET).to_string()
+    utf8_percent_encode(value, NON_ALPHANUMERIC)
+        .to_string()
+        .replace("%2D", "-")
+        .replace("%2E", ".")
+        .replace("%5F", "_")
+        .replace("%7E", "~")
 }
 
 fn child_relative(parent: &RelativePath, name: &str) -> Result<RelativePath, PathError> {
