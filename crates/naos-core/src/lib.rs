@@ -1,4 +1,6 @@
+pub mod acl;
 pub mod auth;
+pub mod path;
 
 use async_trait::async_trait;
 use thiserror::Error;
