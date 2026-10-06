@@ -169,11 +169,8 @@ async fn authenticate(
         .and_then(|value| value.strip_prefix("Basic "))
         .ok_or_else(|| Box::new(unauthorized()))?;
 
-    let decoded = STANDARD
-        .decode(raw)
-        .map_err(|_| Box::new(unauthorized()))?;
-    let credentials =
-        std::str::from_utf8(&decoded).map_err(|_| Box::new(unauthorized()))?;
+    let decoded = STANDARD.decode(raw).map_err(|_| Box::new(unauthorized()))?;
+    let credentials = std::str::from_utf8(&decoded).map_err(|_| Box::new(unauthorized()))?;
     let (username, password) = credentials
         .split_once(':')
         .ok_or_else(|| Box::new(unauthorized()))?;
