@@ -19,6 +19,7 @@ use naos_api::{AppState, router};
 use naos_core::{
     auth::{AuthConfig, AuthService},
     doctor::{SmbDoctorCapabilities, SmbDoctorReport, StaticSmbDoctorProbe},
+    nfs::NfsBindingService,
     operation::{OperationKind, OperationRequest, OperationService, OperationState},
     reconcile::{ReadinessReconcileDriver, ReconcileDriver, ReconcileFailure, Reconciler},
 };

@@ -283,6 +283,21 @@ async fn nfs_binding_crud_normalizes_and_rejects_duplicates() {
     let response = app
         .clone()
         .oneshot(request(
+            Method::GET,
+            "/api/v1/shares/shr_nfs/nfs-bindings",
+            None,
+            peer,
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(json_body(response).await["items"].as_array().unwrap().is_empty());
+
+    let response = app
+        .clone()
+        .oneshot(request(
             Method::POST,
             "/api/v1/shares/shr_nfs/nfs-bindings",
             Some(json!({
