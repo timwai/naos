@@ -1,4 +1,7 @@
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
+
+#[cfg(target_os = "macos")]
+use std::path::Path;
 
 use serde::Serialize;
 use thiserror::Error;
@@ -467,7 +470,7 @@ fn classify_windows_listener(listener: &PortListener) -> SmbProvider {
     }
 }
 
-fn is_port_445_token(token: &&str) -> bool {
+fn is_port_445_token(token: &str) -> bool {
     token.ends_with(":445")
 }
 
