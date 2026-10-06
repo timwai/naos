@@ -279,7 +279,7 @@ impl MacOsSmbAdapter {
 
         let shares = self.list_shares().await?;
         let share = shares.get(&record_name).cloned();
-        if registry.shares.get(share_id).is_none() && share.is_some() {
+        if !registry.shares.contains_key(share_id) && share.is_some() {
             return Err(MacOsSmbError::OwnershipConflict);
         }
 
