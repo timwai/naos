@@ -149,6 +149,14 @@ pub struct DirectoryEntryPlus {
     pub file_handle: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ReadDirPlusArgs {
+    pub cookie: u64,
+    pub cookie_verifier: [u8; 8],
+    pub dircount: u32,
+    pub maxcount: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct ReadDirPlusResult {
     pub directory_attributes: NfsAttributes,
@@ -617,11 +625,14 @@ impl NfsV3Service {
         client_ip: IpAddr,
         credential: &RpcCredential,
         directory_handle: &[u8],
-        cookie: u64,
-        cookie_verifier: [u8; 8],
-        dircount: u32,
-        maxcount: u32,
+        args: ReadDirPlusArgs,
     ) -> Result<ReadDirPlusResult, NfsV3Error> {
+        let ReadDirPlusArgs {
+            cookie,
+            cookie_verifier,
+            dircount,
+            maxcount,
+        } = args;
         if maxcount < 256 || dircount < 32 {
             return Err(NfsV3Error::TooSmall);
         }
@@ -1465,10 +1476,12 @@ async fn readdirplus_reply(service: &NfsV3Service, client_ip: IpAddr, call: &Rpc
             client_ip,
             &call.credential,
             &directory,
-            cookie,
-            cookie_verifier,
-            dircount,
-            maxcount,
+            ReadDirPlusArgs {
+                cookie,
+                cookie_verifier,
+                dircount,
+                maxcount,
+            },
         )
         .await
     {
@@ -1916,10 +1929,12 @@ mod tests {
                 client_ip,
                 &credential,
                 &archive.file_handle,
-                0,
-                [0; 8],
-                4096,
-                16 * 1024,
+                ReadDirPlusArgs {
+                    cookie: 0,
+                    cookie_verifier: [0; 8],
+                    dircount: 4096,
+                    maxcount: 16 * 1024,
+                },
             )
             .await
             .unwrap();
@@ -1962,10 +1977,12 @@ mod tests {
                 client_ip,
                 &credential,
                 &root_handle,
-                0,
-                [0; 8],
-                4096,
-                16 * 1024,
+                ReadDirPlusArgs {
+                    cookie: 0,
+                    cookie_verifier: [0; 8],
+                    dircount: 4096,
+                    maxcount: 16 * 1024,
+                },
             )
             .await
             .unwrap();
@@ -1976,10 +1993,12 @@ mod tests {
                     client_ip,
                     &credential,
                     &root_handle,
-                    cookie,
-                    [9; 8],
-                    4096,
-                    16 * 1024,
+                    ReadDirPlusArgs {
+                        cookie,
+                        cookie_verifier: [9; 8],
+                        dircount: 4096,
+                        maxcount: 16 * 1024,
+                    },
                 )
                 .await,
             Err(NfsV3Error::BadCookie)
