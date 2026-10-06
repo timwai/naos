@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn long_or_dotted_usernames_get_stable_collision_resistant_names() {
-        let first = SystemAccountName::from_username("alice.smith@example").unwrap();
+        let first = SystemAccountName::from_username("alice.smith.example.user").unwrap();
         let second = SystemAccountName::from_username("alice-smith-example").unwrap();
 
         assert_eq!(first.as_str().len(), 20);
@@ -376,7 +376,7 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(
             first,
-            SystemAccountName::from_username("alice.smith@example").unwrap()
+            SystemAccountName::from_username("alice.smith.example.user").unwrap()
         );
     }
 
