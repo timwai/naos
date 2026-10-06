@@ -283,7 +283,10 @@ async fn nfs_binding_crud_normalizes_and_rejects_duplicates() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(json_body(response).await["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json_body(response).await["items"].as_array().unwrap().len(),
+        1
+    );
 
     let response = app
         .clone()
@@ -312,7 +315,12 @@ async fn nfs_binding_crud_normalizes_and_rejects_duplicates() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(json_body(response).await["items"].as_array().unwrap().is_empty());
+    assert!(
+        json_body(response).await["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     let response = app
         .clone()
