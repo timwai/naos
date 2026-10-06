@@ -45,6 +45,12 @@ const NFSPROC3_LOOKUP: u32 = 3;
 const NFSPROC3_ACCESS: u32 = 4;
 const NFSPROC3_READ: u32 = 6;
 const NFSPROC3_WRITE: u32 = 7;
+const NFSPROC3_CREATE: u32 = 8;
+const NFSPROC3_MKDIR: u32 = 9;
+const NFSPROC3_REMOVE: u32 = 12;
+const NFSPROC3_RMDIR: u32 = 13;
+const NFSPROC3_RENAME: u32 = 14;
+const NFSPROC3_READDIRPLUS: u32 = 17;
 const NFSPROC3_FSINFO: u32 = 19;
 const NFSPROC3_PATHCONF: u32 = 20;
 const NFSPROC3_COMMIT: u32 = 21;
@@ -53,10 +59,16 @@ const NFS3_OK: u32 = 0;
 const NFS3ERR_NOENT: u32 = 2;
 const NFS3ERR_IO: u32 = 5;
 const NFS3ERR_ACCES: u32 = 13;
+const NFS3ERR_EXIST: u32 = 17;
+const NFS3ERR_XDEV: u32 = 18;
+const NFS3ERR_NOTDIR: u32 = 20;
 const NFS3ERR_ISDIR: u32 = 21;
 const NFS3ERR_INVAL: u32 = 22;
+const NFS3ERR_NOTEMPTY: u32 = 66;
 const NFS3ERR_STALE: u32 = 70;
 const NFS3ERR_BADHANDLE: u32 = 10001;
+const NFS3ERR_BAD_COOKIE: u32 = 10003;
+const NFS3ERR_TOOSMALL: u32 = 10005;
 const NFS3ERR_SERVERFAULT: u32 = 10006;
 
 const NF3REG: u32 = 1;
@@ -1041,6 +1053,12 @@ pub async fn dispatch_nfs3_rpc(
         NFSPROC3_ACCESS => access_reply(service, client_ip, &call).await,
         NFSPROC3_READ => read_reply(service, client_ip, &call).await,
         NFSPROC3_WRITE => write_reply(service, client_ip, &call).await,
+        NFSPROC3_CREATE => create_reply(service, client_ip, &call).await,
+        NFSPROC3_MKDIR => mkdir_reply(service, client_ip, &call).await,
+        NFSPROC3_REMOVE => remove_reply(service, client_ip, &call).await,
+        NFSPROC3_RMDIR => rmdir_reply(service, client_ip, &call).await,
+        NFSPROC3_RENAME => rename_reply(service, client_ip, &call).await,
+        NFSPROC3_READDIRPLUS => readdirplus_reply(service, client_ip, &call).await,
         NFSPROC3_FSINFO => fsinfo_reply(service, client_ip, &call).await,
         NFSPROC3_PATHCONF => pathconf_reply(service, client_ip, &call).await,
         NFSPROC3_COMMIT => commit_reply(service, client_ip, &call).await,
@@ -1218,6 +1236,269 @@ async fn write_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) 
     accepted_success(call.xid, &writer.into_bytes())
 }
 
+async fn create_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let directory = match reader.opaque(MAX_HANDLE_BYTES) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let name = match reader.string(MAX_NAME_BYTES) {
+        Ok(name) => name,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let create_mode = match reader.u32() {
+        Ok(mode @ 0..=2) => mode,
+        _ => return accepted_garbage_args(call.xid),
+    };
+    let exclusive = match create_mode {
+        0 => {
+            if decode_sattr3(&mut reader).is_err() {
+                return accepted_garbage_args(call.xid);
+            }
+            false
+        }
+        1 => {
+            if decode_sattr3(&mut reader).is_err() {
+                return accepted_garbage_args(call.xid);
+            }
+            true
+        }
+        2 => {
+            if reader.fixed_opaque(8).is_err() {
+                return accepted_garbage_args(call.xid);
+            }
+            true
+        }
+        _ => unreachable!(),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let mut writer = XdrWriter::new();
+    match service
+        .create(client_ip, &call.credential, &directory, &name, exclusive)
+        .await
+    {
+        Ok(result) => {
+            writer.u32(NFS3_OK);
+            if encode_post_fh(&mut writer, Some(&result.file_handle)).is_err() {
+                return accepted_system_error(call.xid);
+            }
+            encode_post_attr(&mut writer, Some(&result.object_attributes));
+            encode_wcc_after(&mut writer, Some(&result.directory_attributes));
+        }
+        Err(error) => {
+            writer.u32(nfs_status(error));
+            encode_wcc_after(&mut writer, None);
+        }
+    }
+    accepted_success(call.xid, &writer.into_bytes())
+}
+
+async fn mkdir_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let directory = match reader.opaque(MAX_HANDLE_BYTES) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let name = match reader.string(MAX_NAME_BYTES) {
+        Ok(name) => name,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if decode_sattr3(&mut reader).is_err() || reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let mut writer = XdrWriter::new();
+    match service
+        .mkdir(client_ip, &call.credential, &directory, &name)
+        .await
+    {
+        Ok(result) => {
+            writer.u32(NFS3_OK);
+            if encode_post_fh(&mut writer, Some(&result.file_handle)).is_err() {
+                return accepted_system_error(call.xid);
+            }
+            encode_post_attr(&mut writer, Some(&result.object_attributes));
+            encode_wcc_after(&mut writer, Some(&result.directory_attributes));
+        }
+        Err(error) => {
+            writer.u32(nfs_status(error));
+            encode_wcc_after(&mut writer, None);
+        }
+    }
+    accepted_success(call.xid, &writer.into_bytes())
+}
+
+async fn remove_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    directory_name_mutation_reply(service, client_ip, call, false).await
+}
+
+async fn rmdir_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    directory_name_mutation_reply(service, client_ip, call, true).await
+}
+
+async fn directory_name_mutation_reply(
+    service: &NfsV3Service,
+    client_ip: IpAddr,
+    call: &RpcCall,
+    remove_directory: bool,
+) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let directory = match reader.opaque(MAX_HANDLE_BYTES) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let name = match reader.string(MAX_NAME_BYTES) {
+        Ok(name) => name,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let result = if remove_directory {
+        service
+            .rmdir(client_ip, &call.credential, &directory, &name)
+            .await
+    } else {
+        service
+            .remove(client_ip, &call.credential, &directory, &name)
+            .await
+    };
+
+    let mut writer = XdrWriter::new();
+    match result {
+        Ok(directory_attributes) => {
+            writer.u32(NFS3_OK);
+            encode_wcc_after(&mut writer, Some(&directory_attributes));
+        }
+        Err(error) => {
+            writer.u32(nfs_status(error));
+            encode_wcc_after(&mut writer, None);
+        }
+    }
+    accepted_success(call.xid, &writer.into_bytes())
+}
+
+async fn rename_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let source_directory = match reader.opaque(MAX_HANDLE_BYTES) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let source_name = match reader.string(MAX_NAME_BYTES) {
+        Ok(name) => name,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let target_directory = match reader.opaque(MAX_HANDLE_BYTES) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let target_name = match reader.string(MAX_NAME_BYTES) {
+        Ok(name) => name,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let mut writer = XdrWriter::new();
+    match service
+        .rename(
+            client_ip,
+            &call.credential,
+            &source_directory,
+            &source_name,
+            &target_directory,
+            &target_name,
+        )
+        .await
+    {
+        Ok(result) => {
+            writer.u32(NFS3_OK);
+            encode_wcc_after(&mut writer, Some(&result.source_directory_attributes));
+            encode_wcc_after(&mut writer, Some(&result.target_directory_attributes));
+        }
+        Err(error) => {
+            writer.u32(nfs_status(error));
+            encode_wcc_after(&mut writer, None);
+            encode_wcc_after(&mut writer, None);
+        }
+    }
+    accepted_success(call.xid, &writer.into_bytes())
+}
+
+async fn readdirplus_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let directory = match reader.opaque(MAX_HANDLE_BYTES) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let cookie = match reader.u64() {
+        Ok(cookie) => cookie,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let cookie_verifier = match reader.fixed_opaque(8) {
+        Ok(value) => match <[u8; 8]>::try_from(value.as_slice()) {
+            Ok(value) => value,
+            Err(_) => return accepted_garbage_args(call.xid),
+        },
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let dircount = match reader.u32() {
+        Ok(value) => value,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let maxcount = match reader.u32() {
+        Ok(value) => value,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let mut writer = XdrWriter::new();
+    match service
+        .readdirplus(
+            client_ip,
+            &call.credential,
+            &directory,
+            cookie,
+            cookie_verifier,
+            dircount,
+            maxcount,
+        )
+        .await
+    {
+        Ok(result) => {
+            writer.u32(NFS3_OK);
+            encode_post_attr(&mut writer, Some(&result.directory_attributes));
+            writer.fixed_opaque(&result.cookie_verifier);
+            for entry in result.entries {
+                writer.u32(1);
+                writer.u64(entry.fileid);
+                if writer.string(&entry.name).is_err() {
+                    return accepted_system_error(call.xid);
+                }
+                writer.u64(entry.cookie);
+                encode_post_attr(&mut writer, Some(&entry.attributes));
+                if encode_post_fh(&mut writer, Some(&entry.file_handle)).is_err() {
+                    return accepted_system_error(call.xid);
+                }
+            }
+            writer.u32(0);
+            writer.u32(u32::from(result.eof));
+        }
+        Err(error) => {
+            writer.u32(nfs_status(error));
+            encode_post_attr(&mut writer, None);
+        }
+    }
+    accepted_success(call.xid, &writer.into_bytes())
+}
+
 async fn fsinfo_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
     let handle = match decode_single_handle(&call.body) {
         Ok(handle) => handle,
@@ -1298,6 +1579,58 @@ async fn commit_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall)
     accepted_success(call.xid, &writer.into_bytes())
 }
 
+fn decode_sattr3(reader: &mut XdrReader<'_>) -> Result<(), ()> {
+    decode_optional_u32(reader)?;
+    decode_optional_u32(reader)?;
+    decode_optional_u32(reader)?;
+    decode_optional_u64(reader)?;
+    decode_set_time(reader)?;
+    decode_set_time(reader)?;
+    Ok(())
+}
+
+fn decode_optional_u32(reader: &mut XdrReader<'_>) -> Result<(), ()> {
+    match reader.u32().map_err(|_| ())? {
+        0 => Ok(()),
+        1 => {
+            reader.u32().map_err(|_| ())?;
+            Ok(())
+        }
+        _ => Err(()),
+    }
+}
+
+fn decode_optional_u64(reader: &mut XdrReader<'_>) -> Result<(), ()> {
+    match reader.u32().map_err(|_| ())? {
+        0 => Ok(()),
+        1 => {
+            reader.u64().map_err(|_| ())?;
+            Ok(())
+        }
+        _ => Err(()),
+    }
+}
+
+fn decode_set_time(reader: &mut XdrReader<'_>) -> Result<(), ()> {
+    match reader.u32().map_err(|_| ())? {
+        0 | 1 => Ok(()),
+        2 => {
+            reader.u32().map_err(|_| ())?;
+            reader.u32().map_err(|_| ())?;
+            Ok(())
+        }
+        _ => Err(()),
+    }
+}
+
+fn encode_post_fh(writer: &mut XdrWriter, handle: Option<&[u8]>) -> Result<(), ()> {
+    writer.u32(u32::from(handle.is_some()));
+    if let Some(handle) = handle {
+        writer.opaque(handle).map_err(|_| ())?;
+    }
+    Ok(())
+}
+
 fn decode_single_handle(body: &[u8]) -> Result<Vec<u8>, ()> {
     let mut reader = XdrReader::new(body);
     let handle = reader.opaque(MAX_HANDLE_BYTES).map_err(|_| ())?;
@@ -1344,8 +1677,14 @@ fn nfs_status(error: NfsV3Error) -> u32 {
         NfsV3Error::BadHandle => NFS3ERR_BADHANDLE,
         NfsV3Error::Stale => NFS3ERR_STALE,
         NfsV3Error::NotFound => NFS3ERR_NOENT,
+        NfsV3Error::AlreadyExists => NFS3ERR_EXIST,
         NfsV3Error::AccessDenied => NFS3ERR_ACCES,
         NfsV3Error::IsDirectory => NFS3ERR_ISDIR,
+        NfsV3Error::NotDirectory => NFS3ERR_NOTDIR,
+        NfsV3Error::NotEmpty => NFS3ERR_NOTEMPTY,
+        NfsV3Error::CrossDevice => NFS3ERR_XDEV,
+        NfsV3Error::BadCookie => NFS3ERR_BAD_COOKIE,
+        NfsV3Error::TooSmall => NFS3ERR_TOOSMALL,
         NfsV3Error::Invalid => NFS3ERR_INVAL,
         NfsV3Error::Io => NFS3ERR_IO,
         NfsV3Error::Repository => NFS3ERR_SERVERFAULT,
