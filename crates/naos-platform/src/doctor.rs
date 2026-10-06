@@ -306,11 +306,8 @@ mod tests {
             (PlatformKind::Windows, SmbProvider::WindowsNative, true),
             (PlatformKind::Macos, SmbProvider::MacosNative, false),
         ] {
-            let report = report_from_detection(detection(
-                platform,
-                provider,
-                DetectionDisposition::Stopped,
-            ));
+            let report =
+                report_from_detection(detection(platform, provider, DetectionDisposition::Stopped));
             assert_eq!(report.status, "stopped");
             assert_eq!(
                 report.findings[0].automatic_fix_allowed,
@@ -330,8 +327,11 @@ mod tests {
         ));
         assert!(!report.capabilities.credential_management);
         assert!(report.capabilities.requires_existing_provider);
-        assert!(report.findings.iter().any(|finding| {
-            finding.code == "MACOS_SMB_CREDENTIAL_MANAGEMENT_UNSUPPORTED"
-        }));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| { finding.code == "MACOS_SMB_CREDENTIAL_MANAGEMENT_UNSUPPORTED" })
+        );
     }
 }

@@ -120,7 +120,6 @@ pub mod operation {
     }
 }
 
-
 pub mod doctor {
     use serde::Serialize;
     use utoipa::ToSchema;

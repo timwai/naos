@@ -18,9 +18,7 @@ use http_body_util::BodyExt;
 use naos_api::{AppState, router};
 use naos_core::{
     auth::{AuthConfig, AuthService},
-    doctor::{
-        SmbDoctorCapabilities, SmbDoctorReport, StaticSmbDoctorProbe,
-    },
+    doctor::{SmbDoctorCapabilities, SmbDoctorReport, StaticSmbDoctorProbe},
     operation::{OperationKind, OperationRequest, OperationService, OperationState},
     reconcile::{ReadinessReconcileDriver, ReconcileDriver, ReconcileFailure, Reconciler},
 };
