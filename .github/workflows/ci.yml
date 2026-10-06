@@ -33,3 +33,12 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y samba smbclient
       - name: Run real Samba read/write smoke test
         run: sudo bash scripts/ci/samba-real-smoke.sh
+
+
+  windows-smb-integration:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run real Windows SMB read/write smoke test
+        shell: powershell
+        run: ./scripts/ci/windows-smb-real-smoke.ps1
