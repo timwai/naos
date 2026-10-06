@@ -1,3 +1,5 @@
+mod operation_api;
+
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use axum::{
@@ -32,6 +34,8 @@ const CSRF_HEADER: &str = "x-csrf-token";
 pub struct AppState {
     pub readiness: Arc<dyn ReadinessProbe>,
     pub auth: Arc<AuthService>,
+    pub operations: Arc<naos_core::operation::OperationService>,
+    pub reconciler: Arc<naos_core::reconcile::Reconciler>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -46,6 +50,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/password", post(change_password))
         .route("/auth/sessions", get(list_sessions))
         .route("/auth/sessions/{id}", delete(revoke_session))
+        .merge(operation_api::routes())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -535,5 +540,7 @@ impl IntoResponse for ApiError {
 struct ApiDoc;
 
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    ApiDoc::openapi()
+    let mut document = ApiDoc::openapi();
+    document.merge(operation_api::openapi());
+    document
 }

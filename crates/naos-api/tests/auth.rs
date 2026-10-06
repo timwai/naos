@@ -14,7 +14,11 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use naos_api::{AppState, router};
-use naos_core::auth::{AuthConfig, AuthService};
+use naos_core::{
+    auth::{AuthConfig, AuthService},
+    operation::OperationService,
+    reconcile::Reconciler,
+};
 use naos_store::Store;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -28,9 +32,13 @@ async fn test_app() -> (Router, TempDir) {
             .unwrap(),
     );
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
+    let operations = Arc::new(OperationService::new(store.clone()));
+    let reconciler = Arc::new(Reconciler::new(operations.clone()));
     let app = router(AppState {
         readiness: store,
         auth,
+        operations,
+        reconciler,
     });
     (app, dir)
 }

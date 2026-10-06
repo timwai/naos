@@ -1,3 +1,5 @@
+mod operation;
+
 use std::{path::Path, str::FromStr, time::Duration};
 
 use async_trait::async_trait;

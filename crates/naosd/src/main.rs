@@ -6,7 +6,11 @@ use std::{
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use naos_api::AppState;
-use naos_core::auth::{AuthConfig, AuthService};
+use naos_core::{
+    auth::{AuthConfig, AuthService},
+    operation::OperationService,
+    reconcile::Reconciler,
+};
 use naos_platform::SmbDetector;
 use naos_store::Store;
 use tokio::net::TcpListener;
@@ -72,10 +76,14 @@ async fn main() -> anyhow::Result<()> {
         AuthService::new(store.clone(), AuthConfig::default())
             .context("initialize authentication service")?,
     );
+    let operations = Arc::new(OperationService::new(store.clone()));
+    let reconciler = Arc::new(Reconciler::new(operations.clone()));
 
     let app = naos_api::router(AppState {
         readiness: store,
         auth,
+        operations,
+        reconciler,
     });
     let address = (cli.listen, cli.port);
     let listener = TcpListener::bind(address)

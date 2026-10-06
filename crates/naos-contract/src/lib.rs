@@ -91,3 +91,32 @@ pub mod health {
         }
     }
 }
+
+
+pub mod operation {
+    use serde::Serialize;
+    use utoipa::ToSchema;
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct OperationDto {
+        pub id: String,
+        pub kind: String,
+        pub state: String,
+        pub actor_user_id: Option<String>,
+        pub resource_type: Option<String>,
+        pub resource_id: Option<String>,
+        pub progress: u8,
+        pub phase: Option<String>,
+        pub error_code: Option<String>,
+        pub error_detail_json: Option<String>,
+        pub created_at: String,
+        pub started_at: Option<String>,
+        pub finished_at: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct AcceptedOperation {
+        pub operation_id: String,
+        pub state: String,
+    }
+}
