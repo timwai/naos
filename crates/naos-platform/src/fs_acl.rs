@@ -200,6 +200,7 @@ fn path_text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn linux_specs(target: &Path, entry: &EffectiveAclEntry, is_dir: bool) -> Vec<CommandSpec> {
     let account = entry.account.as_str();
     let permission = match entry.permission {
@@ -233,6 +234,7 @@ fn linux_specs(target: &Path, entry: &EffectiveAclEntry, is_dir: bool) -> Vec<Co
     specs
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn macos_specs(target: &Path, entry: &EffectiveAclEntry, current_acl: &str) -> Vec<CommandSpec> {
     let account = entry.account.as_str();
     let path = path_text(target);
@@ -287,6 +289,7 @@ fn macos_specs(target: &Path, entry: &EffectiveAclEntry, current_acl: &str) -> V
     specs
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn macos_account_indexes(output: &str, account: &str) -> Vec<usize> {
     let marker = format!("user:{account} ");
     output
@@ -304,6 +307,7 @@ fn macos_account_indexes(output: &str, account: &str) -> Vec<usize> {
         .collect()
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn windows_specs(target: &Path, entry: &EffectiveAclEntry) -> Vec<CommandSpec> {
     let account = entry.account.as_str();
     let path = path_text(target);
