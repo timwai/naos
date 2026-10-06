@@ -36,6 +36,7 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
     );
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
     let operations = Arc::new(OperationService::new(store.clone()));
+    let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
     let reconciler = Arc::new(Reconciler::new(operations.clone()));
     let smb_doctor = Arc::new(StaticSmbDoctorProbe::new(SmbDoctorReport {
         status: "ready".to_owned(),
@@ -60,6 +61,7 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
         readiness: store.clone(),
         auth,
         operations,
+        nfs_bindings,
         reconciler,
         smb_doctor,
     });

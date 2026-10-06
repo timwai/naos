@@ -92,6 +92,35 @@ pub mod health {
     }
 }
 
+pub mod nfs {
+    use serde::{Deserialize, Serialize};
+    use utoipa::ToSchema;
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct NfsBindingUpsertRequest {
+        pub cidr: String,
+        pub uid: Option<u32>,
+        pub user_id: String,
+        pub permission: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct NfsBindingDto {
+        pub id: String,
+        pub share_id: String,
+        pub cidr: String,
+        pub uid: Option<u32>,
+        pub user_id: String,
+        pub permission: String,
+        pub level: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct NfsBindingsResponse {
+        pub items: Vec<NfsBindingDto>,
+    }
+}
+
 pub mod operation {
     use serde::Serialize;
     use utoipa::ToSchema;

@@ -9,6 +9,7 @@ use naos_api::AppState;
 use naos_core::{
     auth::{AuthConfig, AuthService},
     doctor::SmbDoctorProbe,
+    nfs::NfsBindingService,
     operation::OperationService,
     reconcile::Reconciler,
 };
@@ -79,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
             .context("initialize authentication service")?,
     );
     let operations = Arc::new(OperationService::new(store.clone()));
+    let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
     let reconciler = Arc::new(Reconciler::new(operations.clone()));
     let smb_doctor = Arc::new(SmbDoctor::default());
 
@@ -87,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
         readiness: store.clone(),
         auth: auth.clone(),
         operations,
+        nfs_bindings,
         reconciler,
         smb_doctor,
     })

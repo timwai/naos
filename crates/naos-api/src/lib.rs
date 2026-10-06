@@ -1,4 +1,5 @@
 mod doctor_api;
+mod nfs_api;
 mod operation_api;
 
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
@@ -36,6 +37,7 @@ pub struct AppState {
     pub readiness: Arc<dyn ReadinessProbe>,
     pub auth: Arc<AuthService>,
     pub operations: Arc<naos_core::operation::OperationService>,
+    pub nfs_bindings: Arc<naos_core::nfs::NfsBindingService>,
     pub reconciler: Arc<naos_core::reconcile::Reconciler>,
     pub smb_doctor: Arc<dyn naos_core::doctor::SmbDoctorProbe>,
 }
@@ -54,6 +56,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/sessions/{id}", delete(revoke_session))
         .merge(operation_api::routes())
         .merge(doctor_api::routes())
+        .merge(nfs_api::routes())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -436,6 +439,20 @@ impl ApiError {
         )
     }
 
+    fn validation(field: &str, message: &str) -> Self {
+        let mut field_errors = BTreeMap::new();
+        field_errors.insert(field.to_owned(), vec![message.to_owned()]);
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body: ErrorResponse {
+                code: "VALIDATION_FAILED".to_owned(),
+                message: "请求参数校验失败".to_owned(),
+                field_errors: Some(field_errors),
+            },
+            retry_after_seconds: None,
+        }
+    }
+
     fn new(status: StatusCode, code: &str, message: &str) -> Self {
         Self {
             status,
@@ -546,5 +563,6 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     let mut document = ApiDoc::openapi();
     document.merge(operation_api::openapi());
     document.merge(doctor_api::openapi());
+    document.merge(nfs_api::openapi());
     document
 }
