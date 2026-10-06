@@ -227,9 +227,11 @@ fn sse_event(event: &OperationEvent) -> Event {
 impl From<OperationError> for ApiError {
     fn from(error: OperationError) -> Self {
         match error {
-            OperationError::NotFound => {
-                ApiError::new(StatusCode::NOT_FOUND, "OPERATION_NOT_FOUND", "Operation 不存在")
-            }
+            OperationError::NotFound => ApiError::new(
+                StatusCode::NOT_FOUND,
+                "OPERATION_NOT_FOUND",
+                "Operation 不存在",
+            ),
             OperationError::InvalidTransition => ApiError::new(
                 StatusCode::CONFLICT,
                 "OPERATION_STATE_CONFLICT",

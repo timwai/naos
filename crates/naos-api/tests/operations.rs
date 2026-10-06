@@ -278,10 +278,7 @@ impl ReconcileDriver for VerifyFailDriver {
 
     async fn rollback(&self, _snapshot: &Value) -> Result<Value, ReconcileFailure> {
         if self.rollback_fails {
-            Err(ReconcileFailure::new(
-                "ROLLBACK_FAILED",
-                "rollback failed",
-            ))
+            Err(ReconcileFailure::new("ROLLBACK_FAILED", "rollback failed"))
         } else {
             Ok(json!({"status": "restored"}))
         }

@@ -163,8 +163,8 @@ impl OperationRepository for Store {
         &self,
         record: &ApplyHistoryRecord,
     ) -> Result<(), OperationRepositoryError> {
-        let plan_json =
-            serde_json::to_string(&record.plan).map_err(|_| OperationRepositoryError::Unavailable)?;
+        let plan_json = serde_json::to_string(&record.plan)
+            .map_err(|_| OperationRepositoryError::Unavailable)?;
         let rollback_json = record
             .rollback
             .as_ref()
@@ -271,10 +271,8 @@ async fn insert_event(
 }
 
 fn operation_from_row(row: sqlx::sqlite::SqliteRow) -> Result<Operation, OperationRepositoryError> {
-    let state = OperationState::from_str(
-        &row.try_get::<String, _>("state").map_err(store_error)?,
-    )
-    .map_err(|_| OperationRepositoryError::Unavailable)?;
+    let state = OperationState::from_str(&row.try_get::<String, _>("state").map_err(store_error)?)
+        .map_err(|_| OperationRepositoryError::Unavailable)?;
     let progress = row.try_get::<i64, _>("progress").map_err(store_error)?;
     let progress = u8::try_from(progress).map_err(|_| OperationRepositoryError::Unavailable)?;
     let error_detail = row

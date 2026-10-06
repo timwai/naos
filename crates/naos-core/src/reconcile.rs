@@ -113,7 +113,9 @@ impl Reconciler {
             )
             .await?;
         if let Err(error) = driver.validate().await {
-            return self.fail_without_rollback(operation_id, "validate", error).await;
+            return self
+                .fail_without_rollback(operation_id, "validate", error)
+                .await;
         }
 
         self.operations

@@ -92,7 +92,6 @@ pub mod health {
     }
 }
 
-
 pub mod operation {
     use serde::Serialize;
     use utoipa::ToSchema;
