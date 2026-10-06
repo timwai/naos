@@ -1,26 +1,28 @@
 # naos 设计文档
 
 > 跨平台 NAS 管理面板：把任意文件夹通过 SMB / WebDAV / NFS 共享，带多用户、目录级权限与统一审计。  
-> 版本 **v0.3 · Draft** · 后端 Rust · 前端 React/TypeScript
+> 版本 **v0.4 · Draft** · 后端 Rust · 前端 React/TypeScript
 
 ---
 
-## 0. v0.3 变更摘要
+## 0. v0.4 变更摘要
 
-v0.3 在 v0.2 的协议、ACL、系统账号映射与部署设计基础上，补齐“可直接进入工程实现”的前后端设计。
+v0.4 在 v0.3 的前后端实现规范基础上，正式加入 **内置 SMB2/SMB3 Server** 的长期架构路线。当前系统 SMB（Samba / Windows SMB）保留为迁移期 fallback，自研 SMB 先以同仓库独立 crates 和 standalone 测试程序推进，成熟后嵌入 `naosd`。
 
 | # | 决策 | 影响 |
 | --- | --- | --- |
-| 1 | 前端明确采用 **React + TypeScript + Vite** | 原单文件 HTML 原型仅作为交互/视觉参考，正式实现进入 `web/` 工程 |
-| 2 | 前端服务端状态统一使用 **TanStack Query** | 缓存、失效、重试、加载/错误态有统一规范 |
-| 3 | Rust API 以 **OpenAPI** 作为前后端契约 | Rust DTO 生成 OpenAPI，前端自动生成 TypeScript 类型与 client |
-| 4 | 管理 API 固定 `/api/v1`，同源 Cookie Session + CSRF | 不把 token 放 `localStorage`；避免管理面 token 泄露 |
-| 5 | 需要系统变更的写操作统一抽象为 **Operation** | `202 Accepted + operation_id`，通过 SSE 推送 Apply/Verify/Rollback 进度 |
-| 6 | API 层、应用层、领域层、基础设施层明确分层 | handler 不直接访问 SQLite，也不直接执行系统命令 |
-| 7 | 引入资源 `generation/applied_generation` | 明确 desired state 与实际状态是否一致，可展示 `pending/degraded` |
-| 8 | 文件访问 API 改为“共享 ID + 相对路径” | 普通用户 API 不接受宿主机任意绝对路径，减少越权面 |
-| 9 | 增补幂等、并发更新、分页、错误码、请求 ID | 前端可稳定处理重复提交、冲突、异步失败 |
-| 10 | 明确构建链：`web build → rust-embed → naosd` | 最终仍保持单二进制交付 |
+| 1 | SMB 长期改为 **Rust 内置 SMB Server** | Linux / macOS / Windows 最终不再依赖 Samba 或 Windows SMB Server，真正满足单二进制数据面 |
+| 2 | `naos-smb` **先不拆独立 Git 仓库** | 使用 monorepo + 独立 crate 边界，降低协议早期迭代与联调成本；稳定后可无痛拆仓 |
+| 3 | SMB 拆为 `naos-smb-protocol` / `naos-smb-server` / `naos-smb-adapter` | wire protocol、server state machine、naos 业务集成三层隔离 |
+| 4 | `naos-smb-protocol` / `naos-smb-server` 不依赖 `naos-core` | 协议实现保持可复用；只有 adapter 知道 naos 用户、ACL、审计和文件系统 |
+| 5 | 自研 SMB 初始仅 Direct TCP/445，**禁止 SMB1** | 首先完成 SMB2.1 基线互操作，再补 SMB3.1.1、安全与高级能力 |
+| 6 | SMB signing 为首期必须能力 | 兼容现代 Windows 默认安全策略；不能以关闭客户端签名作为正常使用前提 |
+| 7 | NTLMv2 credential 与 Web 登录 Argon2 verifier 分离 | Argon2 hash 无法直接验证 NTLM challenge；需维护加密的 SMB password-equivalent material |
+| 8 | 自研 SMB 直接调用 `acl-engine` 与统一文件后端 | 三协议共享权限语义，逐步消除“naos ACL ↔ 系统 SMB ACL”漂移 |
+| 9 | 迁移期保留 `system` SMB 实现 | builtin 未成熟前不阻塞 naos；可按全局 `builtin/system` 切换并支持失败回滚 |
+| 10 | 新增 standalone `naos-smbd` 开发工具 | 可在不启动完整 naos 的情况下做 Windows/macOS/Linux SMB 互操作和 fuzz 测试 |
+
+v0.3 已确定的 React/OpenAPI/REST/SSE/Operation/分层架构继续有效；本版重点只改变 SMB 的长期实现方式与相关身份、权限、审计和交付路径。
 
 ---
 
@@ -49,7 +51,7 @@ v0.3 在 v0.2 的协议、ACL、系统账号映射与部署设计基础上，补
 
 ## 2. 总体架构
 
-### 2.1 运行时拓扑
+### 2.1 目标运行时拓扑
 
 ```text
                          ┌──────────────────── Browser ────────────────────┐
@@ -77,26 +79,66 @@ v0.3 在 v0.2 的协议、ACL、系统账号映射与部署设计基础上，补
 │             │ validation     │                                               │
 │             └───────┬────────┘                                               │
 │                     │                                                        │
-│        ┌────────────┼─────────────────────────┐                              │
-│        ▼            ▼                         ▼                              │
-│   naos-store   naos-platform            protocol adapters                    │
-│   SQLite       user/fs ACL/service      SMB / WebDAV / NFS                  │
-│                                                │                              │
-└────────────────────────────────────────────────┼──────────────────────────────┘
-                                                 │
-                      ┌──────────────────────────┼─────────────────────────┐
-                      ▼                          ▼                         ▼
-                  Samba/SMB                WebDAV endpoint             NFSv3
-                 / Win SMB API             /dav/<share>                :2049
+│       ┌─────────────┼───────────────────────────────────────────┐            │
+│       ▼             ▼                         ▼                 ▼            │
+│  naos-store    naos-platform          naos-smb-adapter    WebDAV / NFS       │
+│  SQLite        user/fs/backend              │               servers           │
+│                                             ▼                                 │
+│                                      naos-smb-server                          │
+│                                             │                                 │
+│                                      TCP :445 (SMB2/3)                        │
+└───────────────────────────────────────────────────────────────────────────────┘
+                     │                         │                 │
+                     ▼                         ▼                 ▼
+              host filesystem             SMB clients      DAV/NFS clients
 ```
 
-### 2.2 控制面与数据面
+### 2.2 迁移期拓扑
+
+自研 SMB 未达到生产准入标准前，`naosd` 仍支持系统 SMB fallback：
+
+```text
+                         SMB implementation (global)
+                                  │
+                       ┌──────────┴──────────┐
+                       ▼                     ▼
+                 builtin SMB            system SMB
+              naos-smb-server      Samba / Windows SMB
+                       │                     │
+                       └──────────┬──────────┘
+                                  ▼
+                           host filesystem
+```
+
+同一时刻只能有一个实现监听 TCP/445。切换实现必须走 Operation：
+
+```text
+preflight
+→ stop current implementation
+→ bind/start target
+→ verify negotiate + share visibility
+→ success
+
+failure
+→ stop target
+→ restore previous implementation
+→ verify rollback
+```
+
+### 2.3 控制面与数据面
 
 **控制面**包括 Web UI、REST API、用户/共享/ACL 管理、协议启停、系统诊断、审计查询和 Reconciler。控制面数据量小，但安全要求高。
 
-**数据面**包括 SMB、WebDAV 和 NFS 的真实文件读写。数据面不得经过管理 API。对于 WebDAV/NFS，协议实现可调用 `acl-engine`；对于 SMB，通过真实系统用户和文件系统 ACL 强制执行。
+**数据面**包括 SMB、WebDAV 和 NFS 的真实文件读写。数据面不得经过管理 API。
 
-### 2.3 技术选型
+目标状态下三协议均在进程内或通过受控文件后端调用统一 `acl-engine`。其中：
+
+- SMB：`naos-smb-server → naos-smb-adapter → acl-engine/FileBackend/AuditSink`；
+- WebDAV：协议 handler → `acl-engine` → FileBackend；
+- NFS：RPC handler → identity mapping → `acl-engine` → FileBackend；
+- 系统 SMB fallback：仍依赖真实系统用户 + 文件系统 ACL 强制执行，并通过 Verify 检查与 naos ACL 的一致性。
+
+### 2.4 技术选型
 
 | 层 | 选型 | 说明 |
 | --- | --- | --- |
@@ -105,8 +147,10 @@ v0.3 在 v0.2 的协议、ACL、系统账号映射与部署设计基础上，补
 | 序列化 | `serde` / `serde_json` | API 与持久化 DTO |
 | OpenAPI | `utoipa`（或等价方案） | Rust DTO/route 生成 API 契约 |
 | DB | `sqlx` + SQLite | migrations、事务、离线可部署 |
-| 密码 | `argon2id` | 用户密码与 bootstrap 管理员密码 |
+| 密码 | `argon2id` | Web/UI、WebDAV Basic 等可直接校验明文密码的入口 |
+| SMB credential | NTLM verifier material + AEAD at rest | 仅 SMB auth 使用，视作 password-equivalent secret |
 | Session | 随机 opaque session + DB hash | 可注销、可撤销、可统一失效 |
+| SMB | 自研 `naos-smb-protocol` + `naos-smb-server` | 目标内置；迁移期保留 Samba/Windows SMB fallback |
 | WebDAV | `dav-server` | 注入 ACL 与真实用户身份 |
 | NFS | 自研 ONC-RPC/XDR + NFSv3/MOUNT/NLM | v1 只做 NFSv3 |
 | 前端 | React + TypeScript + Vite | SPA，静态产物嵌入 Rust |
@@ -116,7 +160,7 @@ v0.3 在 v0.2 的协议、ACL、系统账号映射与部署设计基础上，补
 | CSS | CSS Variables + CSS Modules | 复用现有原型 design tokens，不绑定大型 UI 框架 |
 | 前端 API 类型 | OpenAPI 自动生成 | 禁止手写重复 DTO |
 | 静态资源 | `rust-embed` | 单二进制部署 |
-| 日志 | `tracing` + `tracing-subscriber` | request_id / operation_id 贯通 |
+| 日志 | `tracing` + `tracing-subscriber` | request_id / operation_id / smb session 关联 |
 
 ---
 
@@ -279,7 +323,7 @@ invalidate audit.list
 - canonicalize 后是否落入黑名单；
 - 是否与其它共享嵌套冲突；
 - 文件系统是否支持 ACL；
-- 当前平台是否具备 Samba/PowerShell 依赖；
+- 当前选择的 SMB implementation 是否可用：builtin 检查 TCP/445、crypto/auth capability；system fallback 检查 Samba/PowerShell 依赖；
 - NFS 端口/特权能力是否可用。
 
 后端 `422` 可返回字段级错误：
@@ -969,7 +1013,7 @@ GET /api/v1/protocols
       "protocol": "smb",
       "available": true,
       "state": "running",
-      "implementation": "samba",
+      "implementation": "builtin",
       "connections": 4,
       "message": null
     }
@@ -1037,7 +1081,7 @@ GET /api/v1/audit/export.csv?...same filters...
 | Method | Path | 说明 |
 | --- | --- | --- |
 | GET | `/system/info` | OS、版本、hostname、uptime |
-| GET | `/system/capabilities` | Samba、ACL、Kerberos 等能力 |
+| GET | `/system/capabilities` | builtin SMB、system SMB fallback、ACL、Kerberos 等能力 |
 | POST | `/system/doctor` | 深度诊断，Operation |
 | POST | `/system/verify` | desired/applied 一致性巡检，Operation |
 | GET | `/settings` | 可编辑设置 |
@@ -1057,16 +1101,22 @@ GET /api/v1/audit/export.csv?...same filters...
 naos/
 ├─ Cargo.toml
 ├─ crates/
-│  ├─ naosd/             # 进程入口、依赖装配、监听器、生命周期
-│  ├─ naos-api/          # axum routes/handlers/middleware
-│  ├─ naos-contract/     # API DTO、错误码、OpenAPI schema
-│  ├─ naos-core/         # domain + application services
-│  ├─ naos-store/        # sqlx repositories + migrations
-│  ├─ naos-platform/     # 用户/ACL/服务/文件系统能力
-│  ├─ naos-smb/          # Samba / Windows SMB adapter
-│  ├─ naos-webdav/       # WebDAV server + ACL integration
-│  ├─ naos-nfs/          # ONC-RPC/XDR/NFSv3/MOUNT/NLM/GSS
-│  └─ naos-audit/        # 审计归一化、解析、retention
+│  ├─ naosd/                 # 进程入口、依赖装配、监听器、生命周期
+│  ├─ naos-api/              # axum routes/handlers/middleware
+│  ├─ naos-contract/         # API DTO、错误码、OpenAPI schema
+│  ├─ naos-core/             # domain + application services
+│  ├─ naos-store/            # sqlx repositories + migrations
+│  ├─ naos-platform/         # 用户/FS ACL/安全文件操作/系统服务
+│  │
+│  ├─ naos-smb-protocol/     # SMB2/3 wire codec、常量、packet、crypto primitives
+│  ├─ naos-smb-server/       # connection/session/tree/open/lease 状态机
+│  ├─ naos-smb-adapter/      # naos identity/ACL/FileBackend/Audit ↔ SMB
+│  │                         # + system SMB fallback（迁移期）
+│  ├─ naos-webdav/           # WebDAV server + ACL integration
+│  ├─ naos-nfs/              # ONC-RPC/XDR/NFSv3/MOUNT/NLM/GSS
+│  └─ naos-audit/            # 审计归一化、retention
+├─ tools/
+│  └─ naos-smbd/             # standalone SMB interoperability 开发工具
 ├─ web/
 ├─ docs/
 ├─ packaging/
@@ -1076,12 +1126,23 @@ naos/
 ### 6.2 依赖方向
 
 ```text
+naos-smb-protocol
+       ▲
+       │
+naos-smb-server
+       ▲
+       │
+naos-smb-adapter ─────► naos-core / naos-platform / naos-audit
+       ▲
+       │
+     naosd
+
 naosd
   ├── naos-api
   ├── naos-core
   ├── naos-store
   ├── naos-platform
-  ├── naos-smb
+  ├── naos-smb-adapter
   ├── naos-webdav
   ├── naos-nfs
   └── naos-audit
@@ -1090,7 +1151,7 @@ naos-api ───────► naos-contract
 naos-api ───────► naos-core
 naos-store ─────► naos-core
 naos-platform ──► naos-core (只实现 trait，不把 OS 细节反灌 core)
-protocol crates ─► naos-core
+WebDAV/NFS ─────► naos-core
 ```
 
 核心规则：
@@ -1100,6 +1161,10 @@ protocol crates ─► naos-core
 - `naos-api` 不直接调用 `Command`。
 - `naos-store` 不包含 HTTP DTO。
 - API DTO 与 domain entity 分离，转换显式实现。
+- **`naos-smb-protocol` 不依赖任何 `naos-*` 业务 crate。**
+- **`naos-smb-server` 不依赖 `naos-core`、`naos-store` 或 `naos-platform`。**
+- 只有 `naos-smb-adapter` 可以把 SMB 请求映射为 naos identity、share、ACL、file operation 和 audit。
+- `naos-smbd` 只能依赖通用 SMB crates + 测试 backend，不允许成为正式运行时依赖。
 
 ### 6.3 API 层
 
@@ -1224,7 +1289,74 @@ pub trait ProtocolAdapter: Send + Sync {
 }
 ```
 
-SMB 为外部服务适配器；WebDAV/NFS 为进程内动态配置。
+`ProtocolAdapter` 是**控制面生命周期接口**，不是数据面文件访问接口。
+
+- builtin SMB：`apply` 更新内存 share registry / listener policy；通常不需要生成 Samba 配置。
+- system SMB fallback：`apply` 渲染 Samba 配置或调用 Windows SMB cmdlets。
+- WebDAV/NFS：`apply` 更新进程内路由/export/binding。
+- SMB implementation 的切换属于 host 级 Operation，不能按单个 share 同时混用两个监听 TCP/445 的实现。
+
+### 6.8 SMB 数据面 contracts
+
+`naos-smb-server` 只依赖通用 callback/trait：
+
+```rust
+#[async_trait]
+pub trait SmbFileSystem: Send + Sync {
+    async fn open(&self, ctx: &SmbRequestContext, path: &SmbPath, opts: OpenOptions)
+        -> SmbResult<FileHandle>;
+    async fn read(&self, ctx: &SmbRequestContext, handle: &FileHandle, offset: u64, len: u32)
+        -> SmbResult<Bytes>;
+    async fn write(&self, ctx: &SmbRequestContext, handle: &FileHandle, offset: u64, data: Bytes)
+        -> SmbResult<u32>;
+    async fn query_directory(&self, ctx: &SmbRequestContext, handle: &FileHandle, query: DirQuery)
+        -> SmbResult<Vec<DirEntry>>;
+    async fn set_info(&self, ctx: &SmbRequestContext, handle: &FileHandle, info: SetInfo)
+        -> SmbResult<()>;
+    async fn close(&self, ctx: &SmbRequestContext, handle: FileHandle)
+        -> SmbResult<()>;
+}
+
+#[async_trait]
+pub trait SmbAuthProvider: Send + Sync {
+    async fn begin(&self, request: AuthBegin) -> SmbResult<AuthChallenge>;
+    async fn step(&self, request: AuthStep) -> SmbResult<AuthResult>;
+}
+
+pub trait SmbAuditSink: Send + Sync {
+    fn emit(&self, event: SmbAuditEvent);
+}
+```
+
+这些 trait 中不得出现：
+
+- `sqlx` connection；
+- naos DB entity；
+- host absolute path；
+- `AclEngine` concrete type；
+- Samba / PowerShell 类型。
+
+`naos-smb-adapter` 提供 `NaosSmbFs` / `NaosSmbAuth` / `NaosSmbAudit` 实现，在调用真实文件系统前执行 ACL 和 containment 检查。
+
+### 6.9 Monorepo 与未来拆仓
+
+v0.4 阶段 **不新建 `naos-smb` Git 仓库**。独立性由 crate 依赖边界保证。
+
+只有满足以下至少一项时再考虑拆仓：
+
+- SMB server 已稳定，可被 naos 之外的项目复用；
+- 需要独立 crates.io release；
+- SMB 有独立维护/发布周期；
+- protocol/server API 已基本稳定，不再跟随 naos domain 高频变化。
+
+未来拆仓只移动：
+
+```text
+naos-smb-protocol
+naos-smb-server
+```
+
+`naos-smb-adapter` 永远留在 naos 仓库。
 
 ---
 
@@ -1278,6 +1410,8 @@ generation > applied_generation   => pending/applying/degraded
 8. SSE 发布最终状态
 ```
 
+> 例外：密码/credential 更新包含不可逆的外部密码变更，不套用“任何失败都恢复旧状态”的普通 rollback 假设；按 §9.2.6 使用 forward-recovery + degraded 状态。
+
 ### 7.3 锁
 
 避免两个管理员同时变更同一资源：
@@ -1298,7 +1432,7 @@ validate
 → filesystem capability
 → account changes
 → filesystem ACL
-→ SMB config
+→ SMB desired state（builtin share registry / listener policy；fallback 为系统 SMB config）
 → WebDAV route
 → NFS export/binding
 → protocol reload/hot swap
@@ -1313,20 +1447,24 @@ Rollback 必须按反序执行。
 
 ### 8.1 用户模型
 
-naos 用户创建时同步创建真实系统账号：
+naos 用户仍同步创建真实系统账号，但 **builtin SMB 的认证不再依赖系统账号密码**。系统账号主要承担文件 ownership、宿主机 ACL、防御纵深和 system SMB fallback。
 
-| 平台 | 创建账号 | SMB 凭据 |
-| --- | --- | --- |
-| Linux | `useradd -M -s /usr/sbin/nologin -G naos-users naos_<name>` | `smbpasswd -a` |
-| macOS | `sysadminctl` / `dscl` 隐藏账号 | Homebrew Samba `smbpasswd` |
-| Windows | `New-LocalUser` + 拒绝交互登录 | 系统本地账号 |
+| 平台 | 系统账号 | builtin SMB 凭据 | system SMB fallback |
+| --- | --- | --- | --- |
+| Linux | `useradd -M -s /usr/sbin/nologin -G naos-users naos_<name>` | naos SMB credential store | `smbpasswd` |
+| macOS | `sysadminctl` / `dscl` 隐藏账号 | naos SMB credential store | Homebrew Samba `smbpasswd` |
+| Windows | 本地 `naos_<name>` 账号 + 拒绝交互登录 | naos SMB credential store | Windows 本地账号/SMB |
 
 约束：
 
 - `naos_` 前缀保留；
 - 只管理 naos 自己创建并登记的系统账号；
-- 删除前检查文件 ownership 影响；
+- builtin SMB 登录成功后得到 `NaosUserId`，再映射到 `sys_account/sys_uid/SID` 用于 ownership；
+- 删除用户前检查文件 ownership 影响；
 - 密码不写日志、不进入 operation detail；
+- 用户创建、本人改密、管理员重置密码必须同时刷新 Web verifier 与 SMB credential material；
+- system SMB fallback 已安装/已配置时，即使当前运行 builtin，也应同步系统 SMB credential，尽量保持 fallback ready；
+- 密码更新属于**部分不可逆外部操作**：一旦 Windows/Samba credential 已成功更新，不承诺自动恢复旧密码；后续步骤失败时优先 forward recovery，无法恢复则标记 degraded 并要求管理员重新执行密码重置；
 - 外部命令只传参数数组，禁止 shell 字符串拼接。
 
 ### 8.2 RBAC
@@ -1388,28 +1526,383 @@ permission ∈ none | ro | rw
 
 ### 9.1 协议矩阵
 
+目标状态：
+
 | 协议 | Linux | macOS | Windows |
 | --- | --- | --- | --- |
-| SMB | Samba | Homebrew Samba | Windows SMB cmdlets |
+| SMB2/SMB3 | **内置 naos-smb** | **内置 naos-smb** | **内置 naos-smb** |
 | WebDAV | 内置 | 内置 | 内置 |
 | NFSv3 | 内置 | 内置 | 内置 |
 
-### 9.2 SMB
+迁移期 SMB fallback：
+
+| 实现 | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| `system` | Samba | Homebrew Samba | Windows SMB cmdlets |
+| `builtin` | naos-smb | naos-smb | naos-smb |
+
+SMB implementation 是**主机级设置**，不允许 share A 用 builtin、share B 用 system 并同时争用 445 端口。
+
+### 9.2 自研 SMB Server
+
+#### 9.2.1 目标
+
+自研 SMB 的目标不是完整复刻 Windows File Server，而是提供 naos NAS 场景所需的、安全且可验证的 SMB2/SMB3 文件服务：
+
+```text
+SMB client
+   │
+   ▼
+naos-smb-protocol
+   │ decode / encode / signing / crypto
+   ▼
+naos-smb-server
+   │ connection / session / tree / open state
+   ▼
+naos-smb-adapter
+   ├─ identity → naos user
+   ├─ tree name → share_id
+   ├─ acl-engine
+   ├─ FileBackend
+   └─ AuditSink
+   │
+   ▼
+host filesystem
+```
+
+协议 crate 只实现 SMB 语义，不知道 SQLite、naos ACL、系统账号和实际共享绝对路径。
+
+#### 9.2.2 路径边界
+
+客户端路径：
+
+```text
+\\server\media\photos\2026\a.jpg
+```
+
+在 SMB 层只表达为：
+
+```text
+tree = "media"
+relative_path = "/photos/2026/a.jpg"
+```
+
+禁止 `naos-smb-server` 构造：
+
+```text
+/data/media/photos/2026/a.jpg
+D:\Media\photos\2026\a.jpg
+```
+
+绝对路径映射只能由 `naos-smb-adapter/FileBackend` 完成，并执行 runtime containment、symlink/reparse-point 防逃逸检查。
+
+Share name 在 SMB namespace 中按 case-insensitive 规则保证唯一；创建共享时必须拒绝仅大小写不同的重名。
+
+#### 9.2.3 规范基线
+
+实现以 Microsoft Open Specifications 为协议权威来源：
+
+- `[MS-SMB2]`：SMB Protocol Versions 2 and 3；
+- `[MS-SPNG]`：SPNEGO；
+- `[MS-NLMP]`：NTLM；
+- 后续 Kerberos 对接参考 `[MS-KILE]`。
+
+v0.4 设计时的 `[MS-SMB2]` published revision 为 **88.0（2026-09-28）**。实际开始协议开发时，在 `docs/protocol/smb-spec-baseline.md` 固定使用的 revision，后续升级规范必须经过兼容性回归。
+
+参考入口：
+
+```text
+https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/
+https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/
+```
+
+#### 9.2.4 Dialect 与功能分阶段
+
+> P0 的 packet framing、状态机、NEGOTIATE/SESSION_SETUP/TREE_CONNECT/CREATE、FileBackend、share-mode、LOCK、credit、NTSTATUS、fuzz 与编码顺序详见 [naos SMB P0 实现设计](naos%20SMB%20P0%20%E5%AE%9E%E7%8E%B0%E8%AE%BE%E8%AE%A1.md)。本节只保留产品级能力边界。
+
+**明确禁止 SMB1。**
+
+P0 — standalone 可读写：
+
+| 能力 | 要求 |
+| --- | --- |
+| Transport | Direct TCP，默认 445；开发工具允许非特权端口 |
+| Dialect | SMB 2.1 baseline |
+| Signing | **必须支持** HMAC-SHA256 signing；客户端要求签名时可正常连接 |
+| Auth | SPNEGO + NTLMv2，本地 naos 用户 |
+| Commands | NEGOTIATE、SESSION_SETUP、LOGOFF、TREE_CONNECT、TREE_DISCONNECT、CREATE、CLOSE、FLUSH、READ、WRITE、QUERY_DIRECTORY、QUERY_INFO、SET_INFO、LOCK、CANCEL、ECHO |
+| Compound | 支持常见 related compound request，不能假设一 TCP frame 只有一个命令 |
+| Credits | 正确处理基础 credit accounting，设置明确上限 |
+| 文件语义 | create/open/disposition、rename/delete、目录枚举、EOF/basic info |
+| Guest | 默认不支持 |
+
+P1 — builtin experimental：
+
+| 能力 | 要求 |
+| --- | --- |
+| Dialect | SMB 3.1.1 |
+| Negotiate contexts | pre-auth integrity、signing/cipher capability negotiation |
+| Signing | AES-CMAC / AES-GMAC 按 dialect/capability 协商 |
+| Encryption | 至少 AES-128-GCM；可配置 share/server require encryption |
+| Oplock/Lease | 先做保守语义，以正确性优先于客户端缓存性能 |
+| Lock | P0 已有基础 byte-range lock；P1 补等待/异步与更完整客户端兼容语义 |
+| Change Notify | 满足 Explorer/Finder 常用目录刷新场景 |
+| IOCTL | 只实现客户端互操作必需子集，其余显式 `STATUS_NOT_SUPPORTED` |
+
+P2 — production hardening：
+
+- Kerberos/GSSAPI；
+- durable handle v2；
+- reconnect / network interruption recovery；
+- 更完整 lease/oplock break；
+- large MTU / 多 credit 性能；
+- cancellation / async command 压测；
+- metadata/xattr/ACL 映射细化；
+- Windows/macOS/Linux 大文件和并发压力测试。
+
+首期明确**不做**：
+
+- SMB1；
+- SMB over QUIC；
+- SMB Direct / RDMA；
+- SMB Multichannel；
+- DFS namespace；
+- clustered/persistent handles；
+- printer sharing；
+- 通用 named pipe server；
+- AD Domain Controller 能力。
+
+任何未实现 capability 都不得在 NEGOTIATE 中宣称支持。
+
+#### 9.2.5 Signing 与 Encryption
+
+signing 是 P0，而不是可选“增强项”。原因：
+
+- 现代 Windows 可以默认要求 SMB signing；
+- 如果客户端要求 signing，服务端必须能够正确签名和校验；
+- 不允许把“让用户关闭 Windows signing”作为正常兼容方案。
+
+配置建议：
+
+```toml
+[smb.security]
+signing = "required"       # required | enabled
+encryption = "enabled"     # disabled | enabled | required
+```
+
+在只支持 SMB2.1 的阶段，`encryption` 必须报告 unavailable；不能静默接受配置。
+
+进入 SMB3.1.1 后再开放 encryption。加密后的消息不重复依赖普通 message signing 语义，具体按 negotiated dialect/spec 执行。
+
+#### 9.2.6 NTLMv2 与 credential storage
+
+现有：
+
+```text
+password → Argon2id → pw_hash
+```
+
+只能用于“服务端拿到明文密码再验证”的认证入口，**不能从 Argon2 hash 反推出 NTLMv2 challenge 所需 key material**。
+
+因此 builtin SMB 需要单独保存 SMB credential material：
+
+```text
+user sets password
+        │
+        ├─ Argon2id ─────────────► users.pw_hash
+        │
+        └─ NTLM key derivation ──► encrypt(AEAD, machine_master_key)
+                                   └► smb_credentials
+```
+
+安全要求：
+
+- SMB credential material 视为 **password-equivalent secret**；
+- DB 中只能存 AEAD ciphertext，不存明文 NT hash；
+- API 永远不返回；
+- 日志、panic、trace、operation detail 永远不打印；
+- 解密只发生在 SMB authentication 所需的最短生命周期内；
+- machine master key 不与 SQLite 放在同一明文安全边界；
+- Linux 默认 root-only `0600` secret file，可后续接 systemd credentials；
+- macOS 优先 Keychain/受限系统存储；
+- Windows 优先 DPAPI machine scope；
+- key 带 `key_version`，支持轮换；
+- 关闭 builtin SMB 后仍可保留密文，删除用户时必须删除。
+
+用户创建/密码更新流程：
+
+```text
+validate password
+→ derive Argon2 hash
+→ derive SMB credential material
+→ encrypt SMB material
+→ persist/update naos verifiers
+→ if system fallback provider is configured: sync system SMB credential
+→ verify every configured credential provider
+→ success | degraded(forward recovery required)
+```
+
+不能出现“UI 密码更新成功，但某个已配置 SMB provider 仍使用旧密码”的静默部分成功。
+
+密码变更与普通 share/ACL Apply 不同：系统账号密码通常无法在没有旧明文密码的情况下安全回滚。因此该 Operation 使用 **forward-recovery** 语义：
+
+- 若外部 credential 尚未改变，失败可回退 DB verifier；
+- 若任一外部 credential 已成功改变，后续失败不得伪装成完整 rollback；
+- operation 标记 `degraded`，UI 明确要求重新提交同一新密码或执行一次新的密码重置；
+- plaintext password 只在当前 Operation 内存生命周期存在，完成后 zeroize，不为自动恢复而落盘保存。
+
+默认不支持 guest/anonymous SMB。
+
+#### 9.2.7 SMB 状态模型
+
+`naos-smb-server` 自己维护协议状态：
+
+```text
+Server
+└─ Connection
+   ├─ negotiated dialect/capabilities
+   ├─ credits
+   └─ Sessions
+      └─ Session
+         ├─ authenticated identity
+         ├─ signing/encryption keys
+         └─ Trees
+            └─ Tree
+               ├─ share_id (opaque to protocol core)
+               └─ Opens
+                  └─ Open/FileHandle
+```
+
+约束：
+
+- client-supplied ID 永不直接作为数组索引或裸指针；
+- SessionId / TreeId / FileId 使用不可预测或受状态表验证的标识；
+- 所有 table 设置硬上限与 idle timeout，防止内存 DoS；
+- connection 关闭时清理 session/channel/open 引用；
+- open handle 由 server 分配，不能编码宿主机绝对路径；
+- parser 对长度/offset/compound next-command 做 checked arithmetic。
+
+#### 9.2.8 ACL、文件 ownership 与审计
+
+builtin SMB 请求流程：
+
+```text
+SMB CREATE/READ/WRITE/SET_INFO
+        │
+        ▼
+authenticated SmbIdentity
+        │
+        ▼
+tree → share_id
+relative SMB path
+        │
+        ▼
+naos-smb-adapter
+        │
+        ├─ acl-engine.check(...)
+        ├─ FileBackend operation
+        ├─ ownership/sys-account mapping
+        └─ AuditSink.emit(...)
+```
+
+ACL 拒绝必须在实际文件 IO 之前发生。
+
+builtin SMB 下文件系统 ACL 仍保留，作用变为：
+
+1. 防御纵深；
+2. 保证宿主机本地访问的 ownership/ACL 语义；
+3. 保持 system SMB fallback 随时可切回；
+4. 与 WebDAV/NFS 创建文件保持 owner 一致。
+
+因此 v0.4 **不删除系统账号映射和 FS ACL 同步**，但 SMB 的最终授权不再依赖系统 SMB 自己解释规则。
+
+builtin SMB 审计直接写统一 `AuditSink`，不再需要解析 Samba/Event Log；fallback 模式继续使用旧审计采集路径。
+
+#### 9.2.9 system fallback
+
+迁移期实现：
 
 Linux/macOS：
 
-- naos 维护独立 include 文件，不改用户原有主配置块；
-- `testparm` 验证后再 reload；
-- 使用真实 `naos_*` 用户；
+- naos 维护 Samba 独立 include；
+- `testparm` 成功才 reload；
 - `wide links = no`；
-- 通过文件系统 ACL 强制权限；
+- 文件系统 ACL 强制权限；
 - `vfs_full_audit` 采集审计。
 
 Windows：
 
 - PowerShell cmdlet 使用结构化参数；
-- 共享级权限与 NTFS ACL 同步；
-- 通过 Windows Event Log 获取审计。
+- share ACL + NTFS ACL；
+- Event Log 获取 SMB 审计。
+
+配置：
+
+```toml
+[smb]
+implementation = "system" # system | builtin
+listen = "0.0.0.0:445"
+```
+
+切换到 `system` 前必须 preflight：
+
+- 系统 SMB provider 已安装且可启动；
+- enabled users 的 system SMB credential 已 provision；
+- 文件系统 ACL 已通过 Verify；
+- TCP/445 可被目标 provider 获取。
+
+若某些用户在 builtin-only 环境创建/改密，而系统 provider 当时未安装，naos **不能从 Argon2 hash 或 NT hash 安全还原 Windows/Samba 所需的用户明文密码**。此时 `system` 切换必须被阻止，并要求管理员对受影响用户执行 credential reprovision/password reset；不得偷偷保存用户明文密码来换取 fallback。
+
+在 builtin 达到 production gate 前，release 默认值保持 `system`；达到 gate 后新安装默认改为 `builtin`，升级安装不自动切换，必须由管理员显式确认。
+
+#### 9.2.10 standalone `naos-smbd`
+
+开发工具：
+
+```text
+tools/naos-smbd
+   │
+   ├─ StaticAuthProvider / test credential store
+   ├─ LocalFsBackend
+   ├─ ConsoleAuditSink
+   └─ naos-smb-server
+```
+
+示例：
+
+```bash
+cargo run -p naos-smbd -- \
+  --listen 127.0.0.1:1445 \
+  --root ./target/smb-fixture \
+  --user alice
+```
+
+用途：
+
+- Wireshark 抓包；
+- Windows/macOS/Linux client 联调；
+- protocol regression；
+- fuzz corpus 生成；
+- 不启动 SQLite/REST/UI 即可开发 SMB。
+
+`naos-smbd` **不是正式部署组件**，发布包默认不安装。
+
+#### 9.2.11 builtin 切换准入标准
+
+builtin SMB 成为默认实现前必须满足：
+
+- Windows 11 当前版本：认证、签名、Explorer copy/rename/delete、share-mode 与 Office 常见文件锁场景；
+- macOS 当前版本：Finder mount/copy/rename/delete；
+- Linux kernel cifs：mount/read/write/rename；
+- 1 B、空文件、4 KiB、1 MiB、1 GiB+ 文件；
+- Unicode、空格、长文件名、深目录；
+- 断连/reconnect 不造成已确认写入的数据损坏；
+- 并发 open/write/rename/delete 行为可解释且有测试；
+- signing required 客户端可连接；
+- malformed packet/fuzz 无 panic、OOM、越界；
+- ACL consistency matrix 与 WebDAV/NFS 一致；
+- soak test 24h 无 handle/session 泄漏；
+- fallback 切换与 rollback 测试通过。
 
 ### 9.3 WebDAV
 
@@ -1469,6 +1962,15 @@ users(
   sys_uid INTEGER,
   generation INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+// SMB NTLM verifier material。该字段为 password-equivalent secret，永不通过 API 返回。
+smb_credentials(
+  user_id TEXT PRIMARY KEY,
+  nt_hash_ciphertext BLOB NOT NULL,
+  nonce BLOB NOT NULL,
+  key_version INTEGER NOT NULL,
   updated_at TEXT NOT NULL
 );
 
@@ -1666,8 +2168,22 @@ naos data directory on every platform
 | 管理 API | middleware + application service |
 | WebDAV | 进程内直接写 |
 | NFS | 进程内直接写 |
-| SMB Linux/macOS | Samba `vfs_full_audit` 解析 |
-| SMB Windows | Event Log 订阅 |
+| SMB builtin | `naos-smb-adapter → AuditSink`，直接产生结构化事件 |
+| SMB system Linux/macOS | Samba `vfs_full_audit` 解析 |
+| SMB system Windows | Event Log 订阅 |
+
+builtin SMB 审计额外关联：
+
+```text
+connection_id
+session_id
+tree_id/share_id
+open_id (如适用)
+dialect
+signed/encrypted
+```
+
+这些 ID 只用于关联，不记录 signing/encryption key 或 NTLM secret。
 
 ### 12.2 审计类别
 
@@ -1715,6 +2231,10 @@ system.verify
 | 命令注入 | `Command::args`，绝不使用 shell 拼接 |
 | 配置覆盖用户文件 | naos 只维护自己的 include/config block |
 | NFS AUTH_SYS 伪造 | L1/L2 仅可信网络；敏感环境使用 L3 |
+| SMB parser / state machine 漏洞 | checked parsing、资源上限、fuzz、协议状态约束、无 unsafe 为默认 |
+| SMB downgrade/中间人 | 禁 SMB1；signing P0；SMB3.1.1 pre-auth integrity；不宣称未实现 capability |
+| NTLM verifier 泄露 | password-equivalent secret 单独 AEAD 加密；master key 分离；永不 API/log 输出 |
+| SMB session/handle DoS | connection/session/tree/open/credit 上限 + idle timeout + backpressure |
 | 异步状态漂移 | generation/applied_generation + verify |
 | 管理员并发覆盖 | ETag / If-Match |
 | 双击创建 | Idempotency-Key |
@@ -1808,6 +2328,15 @@ retention_days = 90
 smb_enabled = true
 webdav_enabled = true
 nfs_enabled = true
+
+[smb]
+implementation = "system" # migration: system | builtin
+listen = "0.0.0.0:445"
+workgroup = "WORKGROUP"
+
+[smb.security]
+signing = "required"
+encryption = "enabled" # SMB3.1.1 可用后生效
 
 [nfs]
 kerberos_enabled = false
@@ -1947,7 +2476,59 @@ user × group × path × operation × expected_permission
 
 SMB/WebDAV/NFS 结果必须一致。
 
-### 18.5 NFS
+### 18.5 SMB
+
+分四层：
+
+**codec / parser unit**
+
+- 每个 request/response structure round-trip；
+- offset/length/align；
+- compound `NextCommand`；
+- malformed/truncated/oversized packet；
+- crypto test vector；
+- SMB2 header flags/status mapping。
+
+**state machine**
+
+- negotiate → session setup → tree connect → create/read/write/close；
+- invalid SessionId/TreeId/FileId；
+- credit exhaustion/replenish；
+- duplicate/replayed request；
+- connection close cleanup；
+- timeout/resource limit。
+
+**interoperability**
+
+- Windows 11；
+- macOS Finder；
+- Linux kernel cifs；
+- signing required；
+- Unicode/long filename；
+- 1 GiB+ streaming；
+- rename/delete while handles are open；
+- common Office temporary-file/lock behavior。
+
+**fuzz**
+
+- packet parser；
+- negotiate contexts；
+- security blob/SPNEGO envelope；
+- CREATE contexts；
+- QUERY/SET_INFO；
+- compound messages；
+- encryption transform header（支持后）。
+
+所有网络 parser fuzz target 必须满足：
+
+```text
+no panic
+no OOM from attacker-controlled allocation
+no integer overflow
+bounded CPU per bounded input
+```
+
+### 18.6 NFS
 
 - Linux `nfs-utils`；
 - macOS client；
@@ -1958,7 +2539,7 @@ SMB/WebDAV/NFS 结果必须一致。
 - forged handle；
 - UID/CIDR spoof case。
 
-### 18.6 安全测试
+### 18.7 安全测试
 
 - traversal；
 - symlink/reparse escape；
@@ -1969,7 +2550,13 @@ SMB/WebDAV/NFS 结果必须一致。
 - command argument injection；
 - stale ETag overwrite；
 - duplicate POST；
-- rollback failure。
+- rollback failure；
+- SMB unsigned request when signing required；
+- SMB invalid signature；
+- SMB invalid encrypted transform；
+- SMB auth replay / malformed NTLM；
+- SMB connection/session/open exhaustion；
+- SMB share/path case collision。
 
 ---
 
@@ -1996,7 +2583,9 @@ platform
 
 e2e
 ├─ browser E2E
-├─ Samba integration (Linux)└─ protocol smoke tests
+├─ SMB builtin interoperability smoke
+├─ SMB system fallback integration
+└─ WebDAV/NFS protocol smoke tests
 
 package
 ├─ linux
@@ -2010,20 +2599,28 @@ package
 
 ## 20. 交付计划
 
+SMB 自研不与 naos 主线“绑死”：system fallback 始终提供可运行出口，builtin 按 gate 逐步晋级。
+
 | 阶段 | 工作流 | 出口标准 |
 | --- | --- | --- |
 | 1 | workspace + contract + store + api 骨架 | OpenAPI 生成、migration、health 可用 |
 | 2 | auth/session/CSRF/RBAC | 登录、注销、会话撤销、安全测试通过 |
-| 3 | core + ACL + path validation | ACL/path 单测矩阵全绿 |
+| 3 | core + ACL + path validation + FileBackend | ACL/path 单测矩阵全绿，协议可共享文件后端 |
 | 4 | platform 三平台账号/FS ACL | 增删改幂等、rollback 可验证 |
 | 5 | operations + reconciler | SSE、generation、rollback、degraded 状态完整 |
-| 6 | SMB adapter | Linux/macOS/Windows 真机读写/拒绝通过 |
-| 7 | WebDAV | ACL 一致性矩阵通过 |
-| 8 | NFS L1/L2 | 三系统客户端 mount/read/write |
-| 9 | NFS L3（feature） | Linux/macOS krb5 测试通过 |
-| 10 | React Web UI | 原型核心页面全部 API 化，不再依赖 mock |
-| 11 | 审计/Doctor/Verify | 可检索、可导出、漂移可发现 |
-| 12 | 打包/E2E/安全测试 | 三平台可安装、升级、卸载 |
+| 6 | **SMB system fallback** | Samba/Windows SMB 三平台真机读写/拒绝通过，保证主线可用 |
+| 7 | **naos-smb P0 standalone** | SMB2.1 + NTLMv2 + signing；Windows/macOS/Linux 基础 copy/rename/delete |
+| 8 | **naos-smb adapter integration** | builtin SMB 直接接 identity/ACL/FileBackend/Audit；不依赖系统 SMB |
+| 9 | **naos-smb P1 / SMB3.1.1** | pre-auth、现代 signing、encryption、lock/lease/change notify 基线通过 |
+| 10 | builtin SMB experimental | UI 可显式切 builtin/system；失败自动 rollback；system 仍默认 |
+| 11 | WebDAV | ACL 一致性矩阵通过 |
+| 12 | NFS L1/L2 | 三系统客户端 mount/read/write |
+| 13 | NFS L3（feature） | Linux/macOS krb5 测试通过 |
+| 14 | React Web UI | 原型核心页面全部 API 化，不再依赖 mock |
+| 15 | 审计/Doctor/Verify | 可检索、可导出、漂移可发现 |
+| 16 | builtin SMB production gate | §9.2.11 全部通过，安全 fuzz/soak/interop 达标 |
+| 17 | 打包/E2E/安全测试 | 三平台可安装、升级、卸载 |
+| 18 | builtin SMB 默认化 | 新安装默认 builtin；升级用户显式迁移；system 继续作为 fallback |
 
 ---
 
@@ -2036,13 +2633,21 @@ package
 3. `naos-core` 不得依赖 `axum`/`sqlx`/PowerShell/Samba。
 4. 所有宿主机文件路径在信任前必须 canonicalize/containment 检查。
 5. 外部命令不得通过 shell 拼接。
-6. 密码、session、keytab、TLS 私钥不得进入普通日志或 API response。
+6. 密码、session、SMB credential、keytab、TLS 私钥不得进入普通日志或 API response。
 7. 所有会改变外部系统状态的操作必须走 Reconciler/Operation。
 8. 变更共享/ACL/协议后必须有 Verify。
 9. 资源更新必须使用 generation/ETag 防止静默覆盖。
 10. 前端不得把管理 session token 放入 `localStorage`。
 11. 文件 API 对普通用户只能接受 `share_id + rel_path`，不得接受任意绝对路径。
 12. SMB/WebDAV/NFS 权限结果必须由同一套用例矩阵验证一致。
+13. **`naos-smb-protocol` / `naos-smb-server` 不得依赖 `naos-core`、DB 或 host absolute path。**
+14. **SMB protocol core 不得自行实现一套 naos ACL。**
+15. **SMB1 永不启用。**
+16. **未实现的 SMB capability 不得在 NEGOTIATE 中 advertise。**
+17. **不得要求用户关闭 SMB signing 来换取兼容。**
+18. **NTLM verifier material 按 password-equivalent secret 处理。**
+19. attacker-controlled SMB length/count 不得直接决定无上限 allocation。
+20. system/builtin SMB 切换必须可 rollback，且同一时刻只能有一个实现占用 445。
 
 ---
 
@@ -2050,13 +2655,18 @@ package
 
 | 风险/问题 | 影响 | 当前建议 |
 | --- | --- | --- |
-| 自研 NFS 兼容性工作量 | 最大工期风险 | 仅 NFSv3；先 Linux，再 macOS/Windows；持续 fuzz |
+| **自研 SMB 兼容性与数据正确性** | 新的最大工程风险；错误可能导致文件损坏 | 分 P0/P1/P2；system fallback 不移除；interop + fuzz + soak 作为 production gate |
+| SMB NTLM credential 是 password-equivalent secret | DB/主机泄露风险增加 | 独立 AEAD 加密、master key 分离、严格 redaction、后续优先 Kerberos |
+| SMB lock/lease/oplock 语义复杂 | Office/Finder/Explorer 兼容与缓存一致性 | 首先保守实现；正确性优先；高级缓存能力不提前 advertise |
+| SMB 大小写/Unicode 文件名语义 | Linux/macOS/Windows 行为不一致 | 建立专门 compatibility matrix；share 名 case-insensitive unique；目录查找策略在 P0 interop 后固化 |
+| SMB system → builtin 迁移 | 连接中断/行为变化 | host-level Operation、preflight、显式确认、自动 rollback；升级不自动切 |
+| 自研 NFS 兼容性工作量 | 工期风险 | 仅 NFSv3；先 Linux，再 macOS/Windows；持续 fuzz |
 | NFS L1/L2 可被同网段伪造 | 越权 | 明示风险；敏感环境使用 VPN/隔离网/L3 |
 | Windows L3 GSS 路径复杂 | L3 跨平台不一致 | v1 L3 仅 Linux/macOS |
-| SMB 外部状态与 DB 漂移 | 权限/可用性异常 | generation + verify + 定时巡检 |
-| 文件系统不支持 ACL | 子目录权限失效 | 创建共享时拒绝或明确降级 |
-| Windows 审计依赖策略 | SMB 审计不完整 | Doctor 检测并给启用指引 |
-| root/SYSTEM 运行 | 攻击面 | 特权逻辑集中、依赖最小、严格审计 |
+| system SMB 外部状态与 DB 漂移 | 权限/可用性异常 | generation + verify + 定时巡检；builtin 默认化后显著降低 |
+| 文件系统不支持 ACL | 子目录权限防御纵深下降 | 创建共享时拒绝或明确降级；builtin 仍必须执行 acl-engine |
+| Windows system SMB 审计依赖策略 | fallback 审计不完整 | Doctor 检测；builtin SMB 使用直接 AuditSink |
+| root/SYSTEM 运行 | 攻击面 | 特权逻辑集中、依赖最小、严格审计；网络 parser 尽量无 unsafe |
 | SQLite 高量审计增长 | 查询/空间 | 索引 + retention + 可选归档 |
 | 多实例 | 锁/状态一致性 | v1 明确只支持单实例管理同一主机 |
 | 前端 API schema 漂移 | 构建失败/运行错误 | OpenAPI codegen + CI diff gate |
@@ -2071,12 +2681,18 @@ package
 - UI 与 API 同源为默认且推荐部署。
 - OpenAPI 由后端生成，前端只消费。
 - React 原型重构时优先保留现有交互与视觉语言，不引入大型企业 UI 框架重做视觉。
+- **长期 SMB 默认实现为 builtin `naos-smb`。**
+- **短中期保留 system SMB，直到 builtin 通过明确 production gate。**
+- **`naos-smb` 当前保留在 monorepo，不提前拆仓。**
+- **先保证 SMB2.1 + signing + NTLMv2 的正确互操作，再扩 SMB3.1.1；不一次性追求完整 SMB3 feature set。**
+- **系统账号映射与文件系统 ACL 暂不删除：builtin SMB 使用其作为 ownership 与防御纵深，fallback 仍依赖它们。**
+- **Kerberos 是 SMB 长期首选认证方向，但不阻塞 P0 NTLMv2 本地用户场景。**
 
 ---
 
 ## 23. Definition of Done
 
-v0.3 设计落地完成的最低标准：
+v0.4 设计落地完成的最低标准：
 
 - `cargo build` 能构建后端，生产构建包含 Web SPA；
 - OpenAPI 可稳定生成，前端类型全部由契约生成；
@@ -2085,7 +2701,27 @@ v0.3 设计落地完成的最低标准：
 - 共享和 ACL 写操作返回 Operation 并通过 SSE 展示进度；
 - Apply 失败可回滚，失败后状态可诊断；
 - Dashboard/文件/共享/用户/模拟器/审计/设置/个人页均脱离 mock；
+- system SMB fallback 在 Linux/macOS/Windows 可用；
+- `naos-smbd` 可独立启动并通过 Windows/macOS/Linux 基础互操作；
+- builtin SMB 至少完成 SMB2.1、SPNEGO/NTLMv2、signing、核心文件命令；
+- builtin SMB 的请求直接经过统一 `acl-engine`、FileBackend 与 AuditSink；
+- SMB credential material 加密存储且无 API/log 泄露路径；
+- builtin/system 切换有 preflight、verify、rollback；
 - 三协议 ACL 一致性用例通过；
 - Linux/macOS/Windows 至少完成安装、服务启动与核心 smoke test；
+- SMB/NFS 网络 parser 的关键 fuzz target 通过；
 - 关键安全测试通过；
 - 管理 API、协议操作、拒绝访问均有审计记录。
+
+### 23.1 builtin SMB 成为默认实现的额外 gate
+
+以下条件未全部满足前，正式 release 不把 builtin SMB 设为默认：
+
+- §9.2.11 客户端互操作矩阵通过；
+- signing-required Windows 客户端无需降低安全策略即可连接；
+- SMB3.1.1 若被 advertise，则 pre-auth/signing/encryption 对应测试全部通过；
+- 24h soak 无持续增长的 connection/session/tree/open handle；
+- 并发/断连场景未发现已确认写入的数据损坏；
+- fuzz/sanitizer/资源耗尽测试不存在 blocker；
+- system → builtin → system rollback 演练通过；
+- 有至少一个 release cycle 的 opt-in experimental 使用反馈。
