@@ -350,8 +350,7 @@ fn parse_linux_listener(output: &str) -> Option<PortListener> {
         }
 
         let pid = extract_number_after(line, "pid=");
-        let process = extract_between(line, "((\"", "\"")
-            .or_else(|| parse_netstat_process(line));
+        let process = parse_ss_process(line).or_else(|| parse_netstat_process(line));
 
         let local_address = line
             .split_whitespace()
@@ -429,10 +428,9 @@ fn parse_windows_tasklist_process(output: &str) -> Option<String> {
         return None;
     }
 
-    trimmed
-        .strip_prefix('"')
-        .and_then(|value| value.split("",").next())
-        .map(str::to_owned)
+    let first = trimmed.split(',').next()?.trim();
+    let process = first.trim_matches(char::from(34));
+    (!process.is_empty()).then(|| process.to_owned())
 }
 
 fn classify_linux_listener(listener: &PortListener) -> SmbProvider {
@@ -483,10 +481,17 @@ fn extract_number_after(value: &str, marker: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
-fn extract_between(value: &str, start: &str, end: &str) -> Option<String> {
-    let tail = value.split_once(start)?.1;
-    let content = tail.split_once(end)?.0;
-    (!content.is_empty()).then(|| content.to_owned())
+fn parse_ss_process(line: &str) -> Option<String> {
+    let tail = line.split_once("users:")?.1;
+    let raw = tail.split_once(",pid=")?.0;
+    let process = raw.trim_matches(|character: char| {
+        !character.is_ascii_alphanumeric()
+            && character != '_'
+            && character != '-'
+            && character != '.'
+    });
+
+    (!process.is_empty()).then(|| process.to_owned())
 }
 
 fn parse_netstat_process(line: &str) -> Option<String> {
