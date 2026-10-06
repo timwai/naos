@@ -6,7 +6,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 2
 fi
 
-for command in smbd smbpasswd smbclient testparm setsid; do
+for command in smbd smbpasswd smbclient smbcontrol testparm; do
   command -v "$command" >/dev/null
 done
 
@@ -17,10 +17,21 @@ PASSWORD="naos-ci-password-$(date +%s)-$$"
 PORT=1445
 SMBD_PID=""
 
+dump_samba_logs() {
+  for log in "$ROOT"/log.*; do
+    if [[ -f "$log" ]]; then
+      echo "----- $log -----" >&2
+      cat "$log" >&2 || true
+    fi
+  done
+}
+
 cleanup() {
+  if [[ -f "$ROOT/smb.conf" ]]; then
+    smbcontrol --configfile="$ROOT/smb.conf" smbd shutdown >/dev/null 2>&1 || true
+  fi
   if [[ -n "$SMBD_PID" ]] && kill -0 "$SMBD_PID" 2>/dev/null; then
     kill "$SMBD_PID" 2>/dev/null || true
-    wait "$SMBD_PID" 2>/dev/null || true
   fi
   smbpasswd -x -c "$ROOT/smb.conf" "$USER_NAME" >/dev/null 2>&1 || true
   userdel "$USER_NAME" >/dev/null 2>&1 || true
@@ -35,6 +46,7 @@ if getent passwd "$USER_NAME" >/dev/null; then
 fi
 useradd -M -s /usr/sbin/nologin -g "$GROUP_NAME" -c "Managed by naos" "$USER_NAME"
 
+chmod 755 "$ROOT"
 mkdir -p "$ROOT"/{cache,lock,private,state,share}
 chmod 700 "$ROOT/private"
 chown "$USER_NAME:$GROUP_NAME" "$ROOT/share"
@@ -80,8 +92,21 @@ testparm -s "$ROOT/smb.conf" >/dev/null
 printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" |
   smbpasswd -s -a -c "$ROOT/smb.conf" "$USER_NAME" >/dev/null
 
-setsid smbd -F -s "$ROOT/smb.conf" -p "$PORT" </dev/null >"$ROOT/smbd.stdout" 2>&1 &
-SMBD_PID=$!
+smbd -D -s "$ROOT/smb.conf" -p "$PORT"
+
+for _ in $(seq 1 50); do
+  if [[ -f "$ROOT/smbd.pid" ]]; then
+    SMBD_PID="$(cat "$ROOT/smbd.pid")"
+    break
+  fi
+  sleep 0.1
+done
+
+if [[ -z "$SMBD_PID" ]] || ! kill -0 "$SMBD_PID" 2>/dev/null; then
+  echo "smbd failed to stay running" >&2
+  dump_samba_logs
+  exit 5
+fi
 
 smbclient_secure() {
   local client_command="$1"
@@ -94,22 +119,22 @@ smbclient_secure() {
 
 READY=0
 for _ in $(seq 1 50); do
-  if ! kill -0 "$SMBD_PID" 2>/dev/null; then
-    echo "smbd exited before becoming ready" >&2
-    cat "$ROOT/smbd.stdout" >&2 || true
-    exit 5
-  fi
   if smbclient_secure 'ls' >/dev/null 2>&1; then
     READY=1
     break
+  fi
+  if ! kill -0 "$SMBD_PID" 2>/dev/null; then
+    echo "smbd exited before becoming ready" >&2
+    dump_samba_logs
+    exit 6
   fi
   sleep 0.1
 done
 
 if [[ "$READY" -ne 1 ]]; then
   echo "smbd did not become ready on port $PORT" >&2
-  cat "$ROOT/smbd.stdout" >&2 || true
-  exit 6
+  dump_samba_logs
+  exit 7
 fi
 
 printf 'hello from naos samba smoke\n' >"$ROOT/local.txt"
