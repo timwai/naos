@@ -1,8 +1,12 @@
-use std::{net::IpAddr, sync::Arc};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use naos_api::AppState;
+use naos_core::auth::{AuthConfig, AuthService};
 use naos_store::Store;
 use tokio::net::TcpListener;
 use tracing::info;
@@ -50,8 +54,15 @@ async fn main() -> anyhow::Result<()> {
             .await
             .context("initialize sqlite store")?,
     );
+    let auth = Arc::new(
+        AuthService::new(store.clone(), AuthConfig::default())
+            .context("initialize authentication service")?,
+    );
 
-    let app = naos_api::router(AppState { readiness: store });
+    let app = naos_api::router(AppState {
+        readiness: store,
+        auth,
+    });
     let address = (cli.listen, cli.port);
     let listener = TcpListener::bind(address)
         .await
@@ -59,10 +70,13 @@ async fn main() -> anyhow::Result<()> {
 
     info!(listen = %cli.listen, port = cli.port, "naosd started");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("serve management API")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("serve management API")?;
 
     Ok(())
 }
