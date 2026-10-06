@@ -18,6 +18,9 @@ use http_body_util::BodyExt;
 use naos_api::{AppState, router};
 use naos_core::{
     auth::{AuthConfig, AuthService},
+    doctor::{
+        SmbDoctorCapabilities, SmbDoctorReport, StaticSmbDoctorProbe,
+    },
     operation::{OperationKind, OperationRequest, OperationService, OperationState},
     reconcile::{ReadinessReconcileDriver, ReconcileDriver, ReconcileFailure, Reconciler},
 };
@@ -36,11 +39,31 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
     let operations = Arc::new(OperationService::new(store.clone()));
     let reconciler = Arc::new(Reconciler::new(operations.clone()));
+    let smb_doctor = Arc::new(StaticSmbDoctorProbe::new(SmbDoctorReport {
+        status: "ready".to_owned(),
+        platform: "test".to_owned(),
+        provider: "test_provider".to_owned(),
+        expected_provider: "test_provider".to_owned(),
+        installed: true,
+        running: true,
+        service_name: Some("test-smb".to_owned()),
+        config_mode: "native".to_owned(),
+        managed_by_naos: false,
+        listener_445: None,
+        capabilities: SmbDoctorCapabilities {
+            share_management: true,
+            credential_management: true,
+            requires_existing_provider: false,
+            manages_tcp_445_listener: false,
+        },
+        findings: Vec::new(),
+    }));
     let app = router(AppState {
         readiness: store.clone(),
         auth,
         operations,
         reconciler,
+        smb_doctor,
     });
     (app, store, dir)
 }

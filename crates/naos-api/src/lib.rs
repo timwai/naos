@@ -1,3 +1,4 @@
+mod doctor_api;
 mod operation_api;
 
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
@@ -36,6 +37,7 @@ pub struct AppState {
     pub auth: Arc<AuthService>,
     pub operations: Arc<naos_core::operation::OperationService>,
     pub reconciler: Arc<naos_core::reconcile::Reconciler>,
+    pub smb_doctor: Arc<dyn naos_core::doctor::SmbDoctorProbe>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -51,6 +53,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/sessions", get(list_sessions))
         .route("/auth/sessions/{id}", delete(revoke_session))
         .merge(operation_api::routes())
+        .merge(doctor_api::routes())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -542,5 +545,6 @@ struct ApiDoc;
 pub fn openapi() -> utoipa::openapi::OpenApi {
     let mut document = ApiDoc::openapi();
     document.merge(operation_api::openapi());
+    document.merge(doctor_api::openapi());
     document
 }

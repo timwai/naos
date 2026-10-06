@@ -8,10 +8,11 @@ use clap::{Parser, Subcommand};
 use naos_api::AppState;
 use naos_core::{
     auth::{AuthConfig, AuthService},
+    doctor::SmbDoctorProbe,
     operation::OperationService,
     reconcile::Reconciler,
 };
-use naos_platform::SmbDetector;
+use naos_platform::SmbDoctor;
 use naos_store::Store;
 use tokio::net::TcpListener;
 use tracing::info;
@@ -55,11 +56,11 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         Some(Command::DoctorSmb) => {
-            let detection = SmbDetector::default()
-                .detect()
+            let report = SmbDoctor::default()
+                .inspect()
                 .await
-                .context("detect SMB provider")?;
-            println!("{}", serde_json::to_string_pretty(&detection)?);
+                .context("inspect SMB provider")?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
             return Ok(());
         }
         None => {}
@@ -78,12 +79,14 @@ async fn main() -> anyhow::Result<()> {
     );
     let operations = Arc::new(OperationService::new(store.clone()));
     let reconciler = Arc::new(Reconciler::new(operations.clone()));
+    let smb_doctor = Arc::new(SmbDoctor::default());
 
     let app = naos_api::router(AppState {
         readiness: store,
         auth,
         operations,
         reconciler,
+        smb_doctor,
     });
     let address = (cli.listen, cli.port);
     let listener = TcpListener::bind(address)

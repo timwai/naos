@@ -119,3 +119,50 @@ pub mod operation {
         pub state: String,
     }
 }
+
+
+pub mod doctor {
+    use serde::Serialize;
+    use utoipa::ToSchema;
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct SmbDoctorListenerDto {
+        pub local_address: String,
+        pub pid: Option<u32>,
+        pub process: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct SmbDoctorCapabilitiesDto {
+        pub share_management: bool,
+        pub credential_management: bool,
+        pub requires_existing_provider: bool,
+        pub manages_tcp_445_listener: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct SmbDoctorFindingDto {
+        pub code: String,
+        pub severity: String,
+        pub summary: String,
+        pub detail: String,
+        pub remediation: String,
+        pub automatic_fix_allowed: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct SmbDoctorResponse {
+        pub status: String,
+        pub platform: String,
+        pub provider: String,
+        pub expected_provider: String,
+        pub installed: bool,
+        pub running: bool,
+        pub service_name: Option<String>,
+        pub config_mode: String,
+        pub managed_by_naos: bool,
+        pub listener_445: Option<SmbDoctorListenerDto>,
+        pub capabilities: SmbDoctorCapabilitiesDto,
+        pub findings: Vec<SmbDoctorFindingDto>,
+    }
+}

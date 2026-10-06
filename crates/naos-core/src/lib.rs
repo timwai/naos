@@ -1,5 +1,6 @@
 pub mod acl;
 pub mod auth;
+pub mod doctor;
 pub mod operation;
 pub mod path;
 pub mod reconcile;
