@@ -562,6 +562,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_windows_tasklist_process_name() {
+        let output = r#""container.exe","912","Console","1","12,000 K""#;
+        assert_eq!(
+            parse_windows_tasklist_process(output).as_deref(),
+            Some("container.exe")
+        );
+    }
+
+    #[test]
     fn parses_windows_listener_json() {
         let listener = parse_windows_listener(r#"{"LocalAddress":"::","OwningProcess":4}"#)
             .unwrap()
