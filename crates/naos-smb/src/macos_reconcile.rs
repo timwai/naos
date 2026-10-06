@@ -132,10 +132,7 @@ impl ReconcileDriver for MacOsShareReconcileDriver {
 
     async fn apply(&self, plan: &Value) -> Result<(), ReconcileFailure> {
         let plan: MacOsSharePlan = serde_json::from_value(plan.clone()).map_err(|_| {
-            ReconcileFailure::new(
-                "MACOS_SMB_PLAN_INVALID",
-                "stored macOS SMB plan is invalid",
-            )
+            ReconcileFailure::new("MACOS_SMB_PLAN_INVALID", "stored macOS SMB plan is invalid")
         })?;
         self.adapter.apply(&plan).await.map_err(macos_failure)
     }

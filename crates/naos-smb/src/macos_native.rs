@@ -216,10 +216,7 @@ impl MacOsSmbAdapter {
         Ok(())
     }
 
-    pub async fn render(
-        &self,
-        desired: MacOsShareSpec,
-    ) -> Result<MacOsSharePlan, MacOsSmbError> {
+    pub async fn render(&self, desired: MacOsShareSpec) -> Result<MacOsSharePlan, MacOsSmbError> {
         self.preflight().await?;
         validate_share(&desired)?;
 
@@ -247,9 +244,7 @@ impl MacOsSmbAdapter {
                 (Some(_), Some(current)) if share_matches(current, &desired) => {
                     MacOsShareAction::Noop
                 }
-                (Some(_), Some(current)) if current.path == desired.path => {
-                    MacOsShareAction::Edit
-                }
+                (Some(_), Some(current)) if current.path == desired.path => MacOsShareAction::Edit,
                 (Some(_), Some(_)) => MacOsShareAction::Recreate,
                 (None, Some(_)) => return Err(MacOsSmbError::OwnershipConflict),
             }
@@ -271,10 +266,7 @@ impl MacOsSmbAdapter {
         })
     }
 
-    pub async fn snapshot(
-        &self,
-        share_id: &str,
-    ) -> Result<MacOsShareSnapshot, MacOsSmbError> {
+    pub async fn snapshot(&self, share_id: &str) -> Result<MacOsShareSnapshot, MacOsSmbError> {
         ensure_macos()?;
         let registry = read_registry(&self.config.registry_path)?;
         let record_name = record_name_for_id(share_id);
@@ -412,10 +404,7 @@ impl MacOsSmbAdapter {
         })
     }
 
-    pub async fn rollback(
-        &self,
-        snapshot: &MacOsShareSnapshot,
-    ) -> Result<(), MacOsSmbError> {
+    pub async fn rollback(&self, snapshot: &MacOsShareSnapshot) -> Result<(), MacOsSmbError> {
         ensure_macos()?;
         let current_registry = read_registry(&self.config.registry_path)?;
         let current_mapping = current_registry.shares.get(&snapshot.share_id);
@@ -431,9 +420,7 @@ impl MacOsSmbAdapter {
 
         match snapshot.share.as_ref() {
             Some(previous) => {
-                if snapshot.registry.shares.get(&snapshot.share_id)
-                    != Some(&snapshot.record_name)
-                {
+                if snapshot.registry.shares.get(&snapshot.share_id) != Some(&snapshot.record_name) {
                     return Err(MacOsSmbError::OwnershipConflict);
                 }
 
@@ -736,8 +723,14 @@ mod tests {
 
     #[test]
     fn internal_record_name_is_stable_and_not_user_visible_name() {
-        assert_eq!(record_name_for_id("shr_media"), record_name_for_id("shr_media"));
-        assert_ne!(record_name_for_id("shr_media"), record_name_for_id("shr_other"));
+        assert_eq!(
+            record_name_for_id("shr_media"),
+            record_name_for_id("shr_media")
+        );
+        assert_ne!(
+            record_name_for_id("shr_media"),
+            record_name_for_id("shr_other")
+        );
         assert!(record_name_for_id("shr_media").starts_with("naos-"));
     }
 
