@@ -75,6 +75,14 @@ async fn webdav_enforces_the_same_ro_rw_none_acl_semantics() {
 
     let response = app
         .clone()
+        .oneshot(request("HEAD", "/dav/media/report.txt", Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-length").unwrap(), "5");
+
+    let response = app
+        .clone()
         .oneshot(request(
             "PUT",
             "/dav/media/uploaded.txt",
@@ -173,6 +181,32 @@ async fn webdav_enforces_the_same_ro_rw_none_acl_semantics() {
 
     let response = app
         .clone()
+        .oneshot(request("HEAD", "/dav/media/report.txt", Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(request("MKCOL", "/dav/media/blocked-dir", Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(request_with_headers(
+            "MOVE",
+            "/dav/media/report.txt",
+            Body::empty(),
+            &[("Destination", "/dav/media/renamed.txt")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
         .oneshot(request(
             "PUT",
             "/dav/media/blocked.txt",
@@ -194,6 +228,13 @@ async fn webdav_enforces_the_same_ro_rw_none_acl_semantics() {
     let response = app
         .clone()
         .oneshot(request("GET", "/dav/media/report.txt", Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(request("HEAD", "/dav/media/report.txt", Body::empty()))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
