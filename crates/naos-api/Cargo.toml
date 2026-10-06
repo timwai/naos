@@ -1,0 +1,15 @@
+[package]
+name = "naos-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum.workspace = true
+naos-contract = { path = "../naos-contract" }
+naos-core = { path = "../naos-core" }
+tower-http.workspace = true
+tracing.workspace = true
+utoipa.workspace = true

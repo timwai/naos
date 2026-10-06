@@ -1,0 +1,78 @@
+use std::{net::IpAddr, sync::Arc};
+
+use anyhow::Context;
+use clap::{Parser, Subcommand};
+use naos_api::AppState;
+use naos_store::Store;
+use tokio::net::TcpListener;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
+
+#[derive(Debug, Parser)]
+#[command(name = "naosd", version, about = "naos NAS control plane")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    #[arg(long, env = "NAOS_LISTEN", default_value = "127.0.0.1")]
+    listen: IpAddr,
+
+    #[arg(long, env = "NAOS_PORT", default_value_t = 8443)]
+    port: u16,
+
+    #[arg(
+        long,
+        env = "NAOS_DATABASE_URL",
+        default_value = "sqlite://naos.db?mode=rwc"
+    )]
+    database_url: String,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Print the generated OpenAPI document to stdout.
+    ExportOpenapi,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    if matches!(cli.command, Some(Command::ExportOpenapi)) {
+        println!("{}", serde_json::to_string_pretty(&naos_api::openapi())?);
+        return Ok(());
+    }
+
+    init_tracing();
+
+    let store = Arc::new(
+        Store::connect(&cli.database_url)
+            .await
+            .context("initialize sqlite store")?,
+    );
+
+    let app = naos_api::router(AppState { readiness: store });
+    let address = (cli.listen, cli.port);
+    let listener = TcpListener::bind(address)
+        .await
+        .with_context(|| format!("bind management listener on {}:{}", cli.listen, cli.port))?;
+
+    info!(listen = %cli.listen, port = cli.port, "naosd started");
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .context("serve management API")?;
+
+    Ok(())
+}
+
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+}
+
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+    info!("shutdown signal received");
+}

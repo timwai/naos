@@ -1,7 +1,6 @@
-.DS_Store
-*.swp
-*.swo
-*~
-.idea/
-.vscode/
-target/
+/target
+*.db
+*.db-shm
+*.db-wal
+.env
+/web/dist
