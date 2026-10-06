@@ -269,10 +269,7 @@ pub trait NfsBindingRepository: Send + Sync {
 
 #[async_trait]
 pub trait NfsAccessRepository: Send + Sync {
-    async fn list_nfs_acl_rules(
-        &self,
-        share_id: &str,
-    ) -> Result<Vec<AclRule>, NfsRepositoryError>;
+    async fn list_nfs_acl_rules(&self, share_id: &str) -> Result<Vec<AclRule>, NfsRepositoryError>;
 
     async fn nfs_group_ids_for_user(
         &self,
