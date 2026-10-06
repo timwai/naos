@@ -333,9 +333,7 @@ mod tests {
         let target = RelativePath::parse("/archive/report.txt").unwrap();
         let handle = table.issue(&export(2), &source);
 
-        table
-            .rename_subtree("shr_media", &source, &target)
-            .unwrap();
+        table.rename_subtree("shr_media", &source, &target).unwrap();
         assert_eq!(
             table.resolve(&handle, &[export(2)]).unwrap().relative_path,
             target
