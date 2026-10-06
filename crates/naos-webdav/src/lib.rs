@@ -114,7 +114,7 @@ async fn dispatch(
 
     let user = match authenticate(&state, &headers, peer).await {
         Ok(user) => user,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     let share = match state
@@ -162,22 +162,27 @@ async fn authenticate(
     state: &WebDavState,
     headers: &HeaderMap,
     peer: SocketAddr,
-) -> Result<UserSummary, Response> {
+) -> Result<UserSummary, Box<Response>> {
     let raw = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Basic "))
-        .ok_or_else(unauthorized)?;
+        .ok_or_else(|| Box::new(unauthorized()))?;
 
-    let decoded = STANDARD.decode(raw).map_err(|_| unauthorized())?;
-    let credentials = std::str::from_utf8(&decoded).map_err(|_| unauthorized())?;
-    let (username, password) = credentials.split_once(':').ok_or_else(unauthorized)?;
+    let decoded = STANDARD
+        .decode(raw)
+        .map_err(|_| Box::new(unauthorized()))?;
+    let credentials =
+        std::str::from_utf8(&decoded).map_err(|_| Box::new(unauthorized()))?;
+    let (username, password) = credentials
+        .split_once(':')
+        .ok_or_else(|| Box::new(unauthorized()))?;
 
     state
         .auth
         .authenticate_basic(username, password, Some(peer.ip().to_string()))
         .await
-        .map_err(auth_error)
+        .map_err(|error| Box::new(auth_error(error)))
 }
 
 fn auth_error(error: AuthError) -> Response {
@@ -573,10 +578,7 @@ fn destination_relative(headers: &HeaderMap, share_name: &str) -> Result<Relativ
         .path()
         .strip_prefix("/dav/")
         .ok_or(StatusCode::BAD_REQUEST)?;
-    let (encoded_share, encoded_path) = tail
-        .split_once('/')
-        .map(|(share, path)| (share, path))
-        .unwrap_or((tail, ""));
+    let (encoded_share, encoded_path) = tail.split_once('/').unwrap_or((tail, ""));
     let destination_share = percent_decode_str(encoded_share)
         .decode_utf8()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
