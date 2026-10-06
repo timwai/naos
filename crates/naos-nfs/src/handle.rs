@@ -4,10 +4,7 @@ use std::{
 };
 
 use hmac::{Hmac, Mac};
-use naos_core::{
-    nfs::NfsExport,
-    path::RelativePath,
-};
+use naos_core::{nfs::NfsExport, path::RelativePath};
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -125,12 +122,7 @@ impl FileHandleCodec {
         Ok(parsed)
     }
 
-    fn tag(
-        &self,
-        payload: &[u8],
-        export: &NfsExport,
-        relative_path: &RelativePath,
-    ) -> [u8; 32] {
+    fn tag(&self, payload: &[u8], export: &NfsExport, relative_path: &RelativePath) -> [u8; 32] {
         let mut mac = HmacSha256::new_from_slice(&self.secret).expect("fixed HMAC key");
         mac.update(payload);
         mac.update(&filesystem_identity(export));
