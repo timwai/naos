@@ -7,6 +7,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use naos_api::AppState;
 use naos_core::auth::{AuthConfig, AuthService};
+use naos_platform::SmbDetector;
 use naos_store::Store;
 use tokio::net::TcpListener;
 use tracing::info;
@@ -36,15 +37,28 @@ struct Cli {
 enum Command {
     /// Print the generated OpenAPI document to stdout.
     ExportOpenapi,
+    /// Inspect the current SMB system provider and TCP/445 ownership.
+    DoctorSmb,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    if matches!(cli.command, Some(Command::ExportOpenapi)) {
-        println!("{}", serde_json::to_string_pretty(&naos_api::openapi())?);
-        return Ok(());
+    match cli.command {
+        Some(Command::ExportOpenapi) => {
+            println!("{}", serde_json::to_string_pretty(&naos_api::openapi())?);
+            return Ok(());
+        }
+        Some(Command::DoctorSmb) => {
+            let detection = SmbDetector::default()
+                .detect()
+                .await
+                .context("detect SMB provider")?;
+            println!("{}", serde_json::to_string_pretty(&detection)?);
+            return Ok(());
+        }
+        None => {}
     }
 
     init_tracing();

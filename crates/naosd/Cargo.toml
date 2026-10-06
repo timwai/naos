@@ -12,6 +12,7 @@ axum.workspace = true
 clap.workspace = true
 naos-api = { path = "../naos-api" }
 naos-core = { path = "../naos-core" }
+naos-platform = { path = "../naos-platform" }
 naos-store = { path = "../naos-store" }
 serde_json.workspace = true
 tokio.workspace = true
