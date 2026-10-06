@@ -206,9 +206,7 @@ impl AuthRepository for Store {
         .map_err(auth_store_error)?;
 
         row.map(|row| -> Result<AuthenticatedSession, AuthRepositoryError> {
-            let role_text = row
-                .try_get::<String, _>("role")
-                .map_err(auth_store_error)?;
+            let role_text = row.try_get::<String, _>("role").map_err(auth_store_error)?;
             let role = parse_role(role_text)?;
             Ok(AuthenticatedSession {
                 id: row.try_get("session_id").map_err(auth_store_error)?,
