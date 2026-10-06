@@ -161,8 +161,8 @@ impl FsAclManager {
         #[cfg(target_os = "macos")]
         {
             for entry in entries {
-                let list = CommandSpec::new("/bin/ls")
-                    .args(["-lde".to_owned(), path_text(&canonical)]);
+                let list =
+                    CommandSpec::new("/bin/ls").args(["-lde".to_owned(), path_text(&canonical)]);
                 let output = self.runner.run(list.clone()).await?;
                 require_success(&list, &output)?;
 
@@ -233,22 +233,14 @@ fn linux_specs(target: &Path, entry: &EffectiveAclEntry, is_dir: bool) -> Vec<Co
     specs
 }
 
-fn macos_specs(
-    target: &Path,
-    entry: &EffectiveAclEntry,
-    current_acl: &str,
-) -> Vec<CommandSpec> {
+fn macos_specs(target: &Path, entry: &EffectiveAclEntry, current_acl: &str) -> Vec<CommandSpec> {
     let account = entry.account.as_str();
     let path = path_text(target);
     let mut specs = macos_account_indexes(current_acl, account)
         .into_iter()
         .rev()
         .map(|index| {
-            CommandSpec::new("/bin/chmod").args([
-                "-a#".to_owned(),
-                index.to_string(),
-                path.clone(),
-            ])
+            CommandSpec::new("/bin/chmod").args(["-a#".to_owned(), index.to_string(), path.clone()])
         })
         .collect::<Vec<_>>();
 
@@ -268,7 +260,8 @@ fn macos_specs(
             ]));
         }
         FsAclPermission::ReadOnly => {
-            let denied = "write,delete,append,add_file,add_subdirectory,delete_child,writeattr,writeextattr";
+            let denied =
+                "write,delete,append,add_file,add_subdirectory,delete_child,writeattr,writeextattr";
             let allowed = "read,execute,list,search,readattr,readextattr,readsecurity";
             specs.push(CommandSpec::new("/bin/chmod").args([
                 "+a".to_owned(),
@@ -393,10 +386,7 @@ mod tests {
         );
 
         assert_eq!(specs.len(), 2);
-        assert_eq!(
-            specs[0].args,
-            vec!["-m", "u:naos_alice:r-x", "/srv/share"]
-        );
+        assert_eq!(specs[0].args, vec!["-m", "u:naos_alice:r-x", "/srv/share"]);
         assert_eq!(
             specs[1].args,
             vec!["-m", "d:u:naos_alice:r-x", "/srv/share"]
@@ -449,10 +439,7 @@ mod tests {
 
     #[test]
     fn windows_none_uses_explicit_deny_to_override_inherited_grants() {
-        let specs = windows_specs(
-            Path::new("C:/share"),
-            &entry(FsAclPermission::None, false),
-        );
+        let specs = windows_specs(Path::new("C:/share"), &entry(FsAclPermission::None, false));
 
         assert_eq!(specs.len(), 3);
         assert_eq!(specs[2].args[1], "/deny");
