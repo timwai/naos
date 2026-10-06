@@ -1,6 +1,6 @@
 use std::{
     net::SocketAddr,
-    path::{Path as FsPath, PathBuf},
+    path::Path as FsPath,
     sync::Arc,
 };
 
@@ -23,7 +23,7 @@ use naos_core::{
     acl::{AclEngine, FileOperation, Principal},
     auth::{AuthError, AuthService, UserSummary},
     path::{PathError, RelativePath, SafePathResolver},
-    webdav::{WebDavRepository, WebDavRepositoryError, WebDavShare},
+    webdav::{WebDavRepository, WebDavShare},
 };
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde::Deserialize;
@@ -339,14 +339,17 @@ async fn get_or_head(
         Ok(file) => file,
         Err(_) => return empty(StatusCode::NOT_FOUND),
     };
-    let stream = async_stream::try_stream! {
+    let stream = async_stream::stream! {
         let mut buffer = vec![0_u8; 64 * 1024];
         loop {
-            let read = file.read(&mut buffer).await?;
-            if read == 0 {
-                break;
+            match file.read(&mut buffer).await {
+                Ok(0) => break,
+                Ok(read) => yield Ok::<Bytes, std::io::Error>(Bytes::copy_from_slice(&buffer[..read])),
+                Err(error) => {
+                    yield Err::<Bytes, std::io::Error>(error);
+                    break;
+                }
             }
-            yield Bytes::copy_from_slice(&buffer[..read]);
         }
     };
     let mut response = Response::new(Body::from_stream(stream));
