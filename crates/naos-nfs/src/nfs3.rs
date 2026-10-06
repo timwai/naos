@@ -3,8 +3,10 @@ use std::{
     net::IpAddr,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(not(unix))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use naos_core::{
     acl::{AclEngine, FileOperation, Permission, Principal},
@@ -15,6 +17,7 @@ use naos_core::{
     path::{PathError, RelativePath, SafePathResolver},
 };
 use rand_core::{OsRng, RngCore};
+#[cfg(not(unix))]
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{
