@@ -1,6 +1,12 @@
-# naos SMB P0 实现设计
+# naos 自研 SMB P0 候选设计（Deferred）
 
-> 本文是《naos 设计文档》v0.4 的 SMB 详细实现配套文档。目标是把“自研 SMB”收敛成可直接编码、联调和验收的 P0 方案。  
+> **状态：Deferred / 非当前实现计划。** v0.5 决策为：现阶段不自研 SMB Server，`naosd` 不监听 TCP/445，Linux/macOS/Windows 优先复用 system SMB provider。本文仅保留未来研究资料，不属于当前 workspace、roadmap、CI 或 Definition of Done。  
+>
+> 若未来恢复自研 SMB，必须先新增 ADR，重新评估 445 端口共存、系统 SMB 迁移、安装升级兼容和安全维护成本。  
+>
+> 以下内容保留 v0.4 时的 P0 候选技术方案，**当前不得据此直接进入实现**。  
+>
+> 原目标：把“自研 SMB”收敛成可直接编码、联调和验收的 P0 方案。  
 > P0 目标：**Direct TCP + SMB 2.1 + SPNEGO/NTLMv2 + signing + 常用文件操作 + 基础 lock/share-mode 语义**。  
 > P0 不追求完整 Windows File Server 功能，也不宣称 SMB3 能力。
 
