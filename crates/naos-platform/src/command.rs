@@ -8,6 +8,7 @@ use tokio::process::Command;
 pub struct CommandSpec {
     pub program: String,
     pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
 }
 
 impl CommandSpec {
@@ -15,6 +16,7 @@ impl CommandSpec {
         Self {
             program: program.into(),
             args: Vec::new(),
+            env: Vec::new(),
         }
     }
 
@@ -24,6 +26,11 @@ impl CommandSpec {
         S: Into<String>,
     {
         self.args = args.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.push((key.into(), value.into()));
         self
     }
 }
@@ -64,6 +71,7 @@ impl CommandRunner for SystemCommandRunner {
     async fn run(&self, spec: CommandSpec) -> Result<CommandOutput, CommandError> {
         let output = Command::new(&spec.program)
             .args(&spec.args)
+            .envs(spec.env.iter().map(|(key, value)| (key, value)))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
