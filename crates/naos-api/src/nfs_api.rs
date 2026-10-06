@@ -149,6 +149,12 @@ fn binding_input(input: NfsBindingUpsertRequest) -> NfsBindingInput {
 }
 
 fn binding_dto(binding: NfsBinding) -> NfsBindingDto {
+    let level = match binding.level() {
+        NfsBindingLevel::L1 => "l1",
+        NfsBindingLevel::L2 => "l2",
+    }
+    .to_owned();
+
     NfsBindingDto {
         id: binding.id,
         share_id: binding.share_id,
@@ -156,11 +162,7 @@ fn binding_dto(binding: NfsBinding) -> NfsBindingDto {
         uid: binding.uid,
         user_id: binding.user_id,
         permission: binding.permission.as_str().to_owned(),
-        level: match binding.level() {
-            NfsBindingLevel::L1 => "l1",
-            NfsBindingLevel::L2 => "l2",
-        }
-        .to_owned(),
+        level,
     }
 }
 
