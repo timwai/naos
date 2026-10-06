@@ -416,13 +416,9 @@ mod tests {
         let (mut client, mut server) = tokio::io::duplex(4096);
         let service = service();
         let server_task = tokio::spawn(async move {
-            serve_mount_stream(
-                &mut server,
-                "192.168.1.25".parse().unwrap(),
-                &service,
-            )
-            .await
-            .unwrap();
+            serve_mount_stream(&mut server, "192.168.1.25".parse().unwrap(), &service)
+                .await
+                .unwrap();
         });
 
         client.write_all(&record).await.unwrap();
