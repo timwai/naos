@@ -6,10 +6,7 @@ use std::{
 };
 
 #[cfg(target_os = "linux")]
-use std::{
-    fs::OpenOptions,
-    io::Write,
-};
+use std::{fs::OpenOptions, io::Write};
 
 use naos_platform::{
     CommandOutput, CommandRunner, CommandSpec, DetectionDisposition, PlatformKind, SmbDetector,
