@@ -1,8 +1,4 @@
-use std::{
-    net::SocketAddr,
-    path::Path as FsPath,
-    sync::Arc,
-};
+use std::{net::SocketAddr, path::Path as FsPath, sync::Arc};
 
 use axum::{
     Router,
