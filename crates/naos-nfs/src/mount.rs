@@ -13,7 +13,7 @@ use crate::{
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
         accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch,
     },
-    xdr::{XdrError, XdrReader, XdrWriter},
+    xdr::{XdrReader, XdrWriter},
 };
 
 pub const MOUNT_PROGRAM: u32 = 100005;
