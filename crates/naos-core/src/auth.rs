@@ -394,6 +394,59 @@ impl AuthService {
         })
     }
 
+    pub async fn authenticate_basic(
+        &self,
+        username: &str,
+        password: &str,
+        client_ip: Option<String>,
+    ) -> Result<UserSummary, AuthError> {
+        let username_key = username.to_ascii_lowercase();
+        let ip_key = client_ip.as_deref().unwrap_or("unknown");
+        let keys = [
+            format!("webdav:username:{username_key}"),
+            format!("webdav:ip:{ip_key}"),
+        ];
+
+        if let Some(retry_after_seconds) = self.throttle.check(&keys) {
+            return Err(AuthError::RateLimited {
+                retry_after_seconds,
+            });
+        }
+
+        let record = self.repository.find_user_by_username(username).await?;
+        let password_hash = record
+            .as_ref()
+            .map(|record| record.password_hash.clone())
+            .unwrap_or_else(|| self.dummy_password_hash.clone());
+        let verified = verify_password(password.to_owned(), password_hash).await?;
+
+        match record {
+            Some(record) if verified && record.user.enabled => {
+                self.throttle.record_success(&keys);
+                Ok(record.user)
+            }
+            _ => {
+                let retry_after = self.throttle.record_failure(&keys);
+                let event = audit_event(
+                    "anonymous",
+                    None,
+                    Some(username.to_owned()),
+                    "protocol.webdav.auth",
+                    client_ip,
+                    "deny",
+                )?;
+                let _ = self.repository.append_audit(&event).await;
+
+                if let Some(retry_after_seconds) = retry_after {
+                    return Err(AuthError::RateLimited {
+                        retry_after_seconds,
+                    });
+                }
+                Err(AuthError::InvalidCredentials)
+            }
+        }
+    }
+
     pub async fn authenticate_session(
         &self,
         token: &str,

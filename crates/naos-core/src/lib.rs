@@ -5,6 +5,7 @@ pub mod operation;
 pub mod path;
 pub mod reconcile;
 pub mod share;
+pub mod webdav;
 
 use async_trait::async_trait;
 use thiserror::Error;

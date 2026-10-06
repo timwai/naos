@@ -7,6 +7,7 @@ members = [
     "crates/naos-platform",
     "crates/naos-smb",
     "crates/naos-store",
+    "crates/naos-webdav",
 ]
 resolver = "2"
 
@@ -26,6 +27,7 @@ axum = "0.8"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 http-body-util = "0.1"
+percent-encoding = "2"
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -35,7 +37,7 @@ subtle = "2"
 tempfile = "3"
 thiserror = "2"
 time = { version = "=0.3.36", features = ["formatting"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "process", "sync", "time", "io-util"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "process", "sync", "time", "io-util", "fs"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"

@@ -14,6 +14,7 @@ use naos_core::{
 };
 use naos_platform::SmbDoctor;
 use naos_store::Store;
+use naos_webdav::WebDavState;
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -81,13 +82,15 @@ async fn main() -> anyhow::Result<()> {
     let reconciler = Arc::new(Reconciler::new(operations.clone()));
     let smb_doctor = Arc::new(SmbDoctor::default());
 
+    let webdav = naos_webdav::router(WebDavState::new(store.clone(), auth.clone()));
     let app = naos_api::router(AppState {
-        readiness: store,
-        auth,
+        readiness: store.clone(),
+        auth: auth.clone(),
         operations,
         reconciler,
         smb_doctor,
-    });
+    })
+    .merge(webdav);
     let address = (cli.listen, cli.port);
     let listener = TcpListener::bind(address)
         .await
