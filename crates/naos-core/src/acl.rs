@@ -119,11 +119,7 @@ impl AclEngine {
             .allows(operation.required_permission())
     }
 
-    pub fn authorize_delete(
-        &self,
-        principal: Principal<'_>,
-        parent: &RelativePath,
-    ) -> bool {
+    pub fn authorize_delete(&self, principal: Principal<'_>, parent: &RelativePath) -> bool {
         self.evaluate(principal, parent)
             .allows(Permission::ReadWrite)
     }
@@ -145,7 +141,7 @@ impl AclEngine {
 fn subject_matches(subject: &Subject, principal: &Principal<'_>) -> bool {
     match subject {
         Subject::User(user_id) => user_id == principal.user_id,
-        Subject::Group(group_id) => principal.group_ids.iter().any(|candidate| *candidate == group_id),
+        Subject::Group(group_id) => principal.group_ids.contains(&group_id.as_str()),
     }
 }
 
@@ -312,11 +308,7 @@ mod tests {
             },
         ]);
 
-        assert!(!engine.authorize_rename(
-            principal("alice", &[]),
-            &path("/from"),
-            &path("/to"),
-        ));
+        assert!(!engine.authorize_rename(principal("alice", &[]), &path("/from"), &path("/to"),));
     }
 
     #[test]
