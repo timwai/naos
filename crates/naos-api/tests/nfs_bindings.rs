@@ -200,6 +200,25 @@ async fn nfs_binding_crud_normalizes_and_rejects_duplicates() {
             })),
             peer,
             Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/shares/shr_nfs/nfs-bindings",
+            Some(json!({
+                "cidr":"192.168.1.42/24",
+                "uid":null,
+                "user_id":admin_id,
+                "permission":"ro"
+            })),
+            peer,
+            Some(&cookie),
             Some(&csrf),
         ))
         .await
