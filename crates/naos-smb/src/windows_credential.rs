@@ -218,8 +218,8 @@ impl WindowsSmbCredentialManager {
         let verify_spec = powershell(VERIFY_SCRIPT).env(ACCOUNT_ENV, account.as_str());
         let output = self.runner.run(verify_spec.clone()).await?;
         require_success(&verify_spec, &output)?;
-        let verify: VerifyOutput =
-            serde_json::from_str(output.stdout.trim()).map_err(|_| WindowsSmbCredentialError::Parse)?;
+        let verify: VerifyOutput = serde_json::from_str(output.stdout.trim())
+            .map_err(|_| WindowsSmbCredentialError::Parse)?;
 
         if !verify.enabled || verify.description != "Managed by naos" || verify.sid.is_empty() {
             return Err(WindowsSmbCredentialError::VerifyFailed);
@@ -364,7 +364,10 @@ mod tests {
             assert_eq!(commands.len(), 4);
             assert!(commands.iter().all(|command| {
                 command.args.iter().all(|arg| !arg.contains(password))
-                    && command.env.iter().all(|(_, value)| !value.contains(password))
+                    && command
+                        .env
+                        .iter()
+                        .all(|(_, value)| !value.contains(password))
             }));
             assert_eq!(
                 runner.secrets.lock().unwrap().as_slice(),
