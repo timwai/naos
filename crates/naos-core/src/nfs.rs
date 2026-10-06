@@ -66,9 +66,7 @@ impl FromStr for NfsCidr {
     type Err = NfsBindingParseError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let (address, prefix) = value
-            .split_once('/')
-            .ok_or(NfsBindingParseError::Invalid)?;
+        let (address, prefix) = value.split_once('/').ok_or(NfsBindingParseError::Invalid)?;
         let address = address
             .parse::<IpAddr>()
             .map_err(|_| NfsBindingParseError::Invalid)?;
@@ -289,13 +287,9 @@ mod tests {
             ),
         ];
 
-        let resolved = resolve_nfs_identity(
-            &bindings,
-            "192.168.1.20".parse().unwrap(),
-            Some(1000),
-        )
-        .unwrap()
-        .unwrap();
+        let resolved = resolve_nfs_identity(&bindings, "192.168.1.20".parse().unwrap(), Some(1000))
+            .unwrap()
+            .unwrap();
 
         assert_eq!(resolved.binding_id, "l2");
         assert_eq!(resolved.user_id, "usr_alice");
@@ -322,10 +316,9 @@ mod tests {
             ),
         ];
 
-        let resolved =
-            resolve_nfs_identity(&bindings, "10.20.30.4".parse().unwrap(), Some(501))
-                .unwrap()
-                .unwrap();
+        let resolved = resolve_nfs_identity(&bindings, "10.20.30.4".parse().unwrap(), Some(501))
+            .unwrap()
+            .unwrap();
 
         assert_eq!(resolved.binding_id, "specific");
         assert_eq!(resolved.user_id, "usr_specific");
@@ -350,10 +343,9 @@ mod tests {
             ),
         ];
 
-        let resolved =
-            resolve_nfs_identity(&bindings, "172.16.1.8".parse().unwrap(), Some(1001))
-                .unwrap()
-                .unwrap();
+        let resolved = resolve_nfs_identity(&bindings, "172.16.1.8".parse().unwrap(), Some(1001))
+            .unwrap()
+            .unwrap();
 
         assert_eq!(resolved.binding_id, "l1");
         assert_eq!(resolved.level, NfsBindingLevel::L1);

@@ -27,12 +27,8 @@ impl NfsBindingRepository for Store {
 
         rows.into_iter()
             .map(|row| {
-                let cidr = row
-                    .try_get::<String, _>("cidr")
-                    .map_err(store_error)?;
-                let permission = row
-                    .try_get::<String, _>("perm")
-                    .map_err(store_error)?;
+                let cidr = row.try_get::<String, _>("cidr").map_err(store_error)?;
+                let permission = row.try_get::<String, _>("perm").map_err(store_error)?;
                 let uid = row
                     .try_get::<Option<i64>, _>("uid")
                     .map_err(store_error)?
@@ -43,8 +39,7 @@ impl NfsBindingRepository for Store {
                 Ok(NfsBinding {
                     id: row.try_get("id").map_err(store_error)?,
                     share_id: row.try_get("share_id").map_err(store_error)?,
-                    cidr: NfsCidr::from_str(&cidr)
-                        .map_err(|_| NfsRepositoryError::Unavailable)?,
+                    cidr: NfsCidr::from_str(&cidr).map_err(|_| NfsRepositoryError::Unavailable)?,
                     uid,
                     user_id: row.try_get("user_id").map_err(store_error)?,
                     permission: NfsBindingPermission::from_str(&permission)
