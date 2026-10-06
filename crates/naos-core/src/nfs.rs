@@ -2,10 +2,12 @@ use std::{
     fmt,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     str::FromStr,
+    sync::Arc,
 };
 
 use async_trait::async_trait;
 use thiserror::Error;
+use ulid::Ulid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NfsBindingPermission {
@@ -228,10 +230,192 @@ pub enum NfsRepositoryError {
 
 #[async_trait]
 pub trait NfsBindingRepository: Send + Sync {
+    async fn nfs_share_exists(&self, share_id: &str) -> Result<bool, NfsRepositoryError>;
+
+    async fn nfs_user_exists(&self, user_id: &str) -> Result<bool, NfsRepositoryError>;
+
     async fn list_nfs_bindings(
         &self,
         share_id: &str,
     ) -> Result<Vec<NfsBinding>, NfsRepositoryError>;
+
+    async fn insert_nfs_binding(&self, binding: &NfsBinding) -> Result<(), NfsRepositoryError>;
+
+    async fn update_nfs_binding(&self, binding: &NfsBinding) -> Result<bool, NfsRepositoryError>;
+
+    async fn delete_nfs_binding(
+        &self,
+        share_id: &str,
+        binding_id: &str,
+    ) -> Result<bool, NfsRepositoryError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfsBindingInput {
+    pub cidr: String,
+    pub uid: Option<u32>,
+    pub user_id: String,
+    pub permission: String,
+}
+
+#[derive(Debug, Error)]
+pub enum NfsBindingServiceError {
+    #[error("NFS binding validation failed for {field}: {message}")]
+    Validation {
+        field: &'static str,
+        message: &'static str,
+    },
+    #[error("NFS resource was not found")]
+    NotFound,
+    #[error("an equivalent NFS binding already exists")]
+    Conflict,
+    #[error(transparent)]
+    Repository(#[from] NfsRepositoryError),
+}
+
+#[derive(Clone)]
+pub struct NfsBindingService {
+    repository: Arc<dyn NfsBindingRepository>,
+}
+
+impl NfsBindingService {
+    pub fn new(repository: Arc<dyn NfsBindingRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn list(&self, share_id: &str) -> Result<Vec<NfsBinding>, NfsBindingServiceError> {
+        self.ensure_share_exists(share_id).await?;
+        Ok(self.repository.list_nfs_bindings(share_id).await?)
+    }
+
+    pub async fn create(
+        &self,
+        share_id: &str,
+        input: NfsBindingInput,
+    ) -> Result<NfsBinding, NfsBindingServiceError> {
+        self.ensure_share_exists(share_id).await?;
+        self.ensure_user_exists(&input.user_id).await?;
+
+        let binding = validated_binding(
+            format!("nfb_{}", Ulid::new()),
+            share_id.to_owned(),
+            input,
+        )?;
+        self.ensure_no_equivalent_binding(&binding, None).await?;
+        self.repository.insert_nfs_binding(&binding).await?;
+        Ok(binding)
+    }
+
+    pub async fn update(
+        &self,
+        share_id: &str,
+        binding_id: &str,
+        input: NfsBindingInput,
+    ) -> Result<NfsBinding, NfsBindingServiceError> {
+        self.ensure_share_exists(share_id).await?;
+        self.ensure_user_exists(&input.user_id).await?;
+
+        let binding = validated_binding(binding_id.to_owned(), share_id.to_owned(), input)?;
+        self.ensure_no_equivalent_binding(&binding, Some(binding_id))
+            .await?;
+        if !self.repository.update_nfs_binding(&binding).await? {
+            return Err(NfsBindingServiceError::NotFound);
+        }
+        Ok(binding)
+    }
+
+    pub async fn delete(
+        &self,
+        share_id: &str,
+        binding_id: &str,
+    ) -> Result<(), NfsBindingServiceError> {
+        self.ensure_share_exists(share_id).await?;
+        if !self
+            .repository
+            .delete_nfs_binding(share_id, binding_id)
+            .await?
+        {
+            return Err(NfsBindingServiceError::NotFound);
+        }
+        Ok(())
+    }
+
+    async fn ensure_share_exists(&self, share_id: &str) -> Result<(), NfsBindingServiceError> {
+        if self.repository.nfs_share_exists(share_id).await? {
+            Ok(())
+        } else {
+            Err(NfsBindingServiceError::NotFound)
+        }
+    }
+
+    async fn ensure_user_exists(&self, user_id: &str) -> Result<(), NfsBindingServiceError> {
+        if user_id.trim().is_empty() {
+            return Err(NfsBindingServiceError::Validation {
+                field: "user_id",
+                message: "must not be empty",
+            });
+        }
+        if self.repository.nfs_user_exists(user_id).await? {
+            Ok(())
+        } else {
+            Err(NfsBindingServiceError::Validation {
+                field: "user_id",
+                message: "does not identify an enabled user",
+            })
+        }
+    }
+
+    async fn ensure_no_equivalent_binding(
+        &self,
+        candidate: &NfsBinding,
+        excluding_id: Option<&str>,
+    ) -> Result<(), NfsBindingServiceError> {
+        let conflict = self
+            .repository
+            .list_nfs_bindings(&candidate.share_id)
+            .await?
+            .into_iter()
+            .any(|binding| {
+                excluding_id != Some(binding.id.as_str())
+                    && binding.cidr == candidate.cidr
+                    && binding.uid == candidate.uid
+            });
+        if conflict {
+            Err(NfsBindingServiceError::Conflict)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn validated_binding(
+    id: String,
+    share_id: String,
+    input: NfsBindingInput,
+) -> Result<NfsBinding, NfsBindingServiceError> {
+    let cidr = input
+        .cidr
+        .parse::<NfsCidr>()
+        .map_err(|_| NfsBindingServiceError::Validation {
+            field: "cidr",
+            message: "must be a valid IPv4 or IPv6 CIDR",
+        })?;
+    let permission = input
+        .permission
+        .parse::<NfsBindingPermission>()
+        .map_err(|_| NfsBindingServiceError::Validation {
+            field: "permission",
+            message: "must be ro or rw",
+        })?;
+
+    Ok(NfsBinding {
+        id,
+        share_id,
+        cidr,
+        uid: input.uid,
+        user_id: input.user_id,
+        permission,
+    })
 }
 
 #[cfg(test)]
