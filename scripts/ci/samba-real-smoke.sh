@@ -6,7 +6,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 2
 fi
 
-for command in smbd smbpasswd smbclient testparm; do
+for command in smbd smbpasswd smbclient testparm setsid; do
   command -v "$command" >/dev/null
 done
 
@@ -18,7 +18,7 @@ PORT=1445
 SMBD_PID=""
 
 cleanup() {
-  if [[ -n "$SMBD_PID" ]]; then
+  if [[ -n "$SMBD_PID" ]] && kill -0 "$SMBD_PID" 2>/dev/null; then
     kill "$SMBD_PID" 2>/dev/null || true
     wait "$SMBD_PID" 2>/dev/null || true
   fi
@@ -80,18 +80,40 @@ testparm -s "$ROOT/smb.conf" >/dev/null
 printf '%s\n%s\n' "$PASSWORD" "$PASSWORD" |
   smbpasswd -s -a -c "$ROOT/smb.conf" "$USER_NAME" >/dev/null
 
-smbd -F --no-process-group -s "$ROOT/smb.conf" -p "$PORT" &
+setsid smbd -F -s "$ROOT/smb.conf" -p "$PORT" </dev/null >"$ROOT/smbd.stdout" 2>&1 &
 SMBD_PID=$!
 
+smbclient_secure() {
+  local client_command="$1"
+  exec 3<<<"$PASSWORD"
+  PASSWD_FD=3 smbclient "//127.0.0.1/ci-share" -p "$PORT" -U "$USER_NAME" -c "$client_command"
+  local status=$?
+  exec 3<&-
+  return "$status"
+}
+
+READY=0
 for _ in $(seq 1 50); do
-  if smbclient "//127.0.0.1/ci-share" -p "$PORT" -U "$USER_NAME" -c 'ls'       --password="$PASSWORD" >/dev/null 2>&1; then
+  if ! kill -0 "$SMBD_PID" 2>/dev/null; then
+    echo "smbd exited before becoming ready" >&2
+    cat "$ROOT/smbd.stdout" >&2 || true
+    exit 5
+  fi
+  if smbclient_secure 'ls' >/dev/null 2>&1; then
+    READY=1
     break
   fi
   sleep 0.1
 done
 
+if [[ "$READY" -ne 1 ]]; then
+  echo "smbd did not become ready on port $PORT" >&2
+  cat "$ROOT/smbd.stdout" >&2 || true
+  exit 6
+fi
+
 printf 'hello from naos samba smoke\n' >"$ROOT/local.txt"
-smbclient "//127.0.0.1/ci-share" -p "$PORT" -U "$USER_NAME"   --password="$PASSWORD"   -c "put $ROOT/local.txt uploaded.txt; get uploaded.txt $ROOT/downloaded.txt; rename uploaded.txt renamed.txt; del renamed.txt"   >/dev/null
+smbclient_secure "put $ROOT/local.txt uploaded.txt; get uploaded.txt $ROOT/downloaded.txt; rename uploaded.txt renamed.txt; del renamed.txt" >/dev/null
 
 cmp "$ROOT/local.txt" "$ROOT/downloaded.txt"
 if [[ -e "$ROOT/share/renamed.txt" || -e "$ROOT/share/uploaded.txt" ]]; then
