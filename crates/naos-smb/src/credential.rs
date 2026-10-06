@@ -142,8 +142,10 @@ fn require_success(spec: &CommandSpec, output: &CommandOutput) -> Result<(), Sam
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
     use std::sync::Mutex;
 
+    #[cfg(target_os = "linux")]
     use async_trait::async_trait;
 
     use super::*;
