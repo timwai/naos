@@ -148,12 +148,14 @@ mod tests {
 
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[derive(Default)]
     struct FakeRunner {
         commands: Mutex<Vec<CommandSpec>>,
         secret_inputs: Mutex<Vec<Vec<u8>>>,
     }
 
+    #[cfg(target_os = "linux")]
     #[async_trait]
     impl CommandRunner for FakeRunner {
         async fn run(
