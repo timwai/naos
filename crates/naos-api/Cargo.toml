@@ -22,6 +22,7 @@ async-trait.workspace = true
 http-body-util.workspace = true
 naos-store = { path = "../naos-store" }
 serde_json.workspace = true
+sqlx.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 tower.workspace = true
