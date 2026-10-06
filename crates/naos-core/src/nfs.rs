@@ -222,6 +222,14 @@ pub fn resolve_nfs_identity(
     }))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfsExport {
+    pub id: String,
+    pub name: String,
+    pub canonical_path: String,
+    pub generation: u64,
+}
+
 #[derive(Debug, Error)]
 pub enum NfsRepositoryError {
     #[error("nfs repository is unavailable")]
@@ -230,6 +238,13 @@ pub enum NfsRepositoryError {
 
 #[async_trait]
 pub trait NfsBindingRepository: Send + Sync {
+    async fn find_enabled_nfs_export_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<NfsExport>, NfsRepositoryError>;
+
+    async fn list_enabled_nfs_exports(&self) -> Result<Vec<NfsExport>, NfsRepositoryError>;
+
     async fn nfs_share_exists(&self, share_id: &str) -> Result<bool, NfsRepositoryError>;
 
     async fn nfs_user_exists(&self, user_id: &str) -> Result<bool, NfsRepositoryError>;

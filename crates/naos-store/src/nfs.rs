@@ -2,7 +2,8 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use naos_core::nfs::{
-    NfsBinding, NfsBindingPermission, NfsBindingRepository, NfsCidr, NfsRepositoryError,
+    NfsBinding, NfsBindingPermission, NfsBindingRepository, NfsCidr, NfsExport,
+    NfsRepositoryError,
 };
 use sqlx::Row;
 
@@ -10,6 +11,37 @@ use crate::Store;
 
 #[async_trait]
 impl NfsBindingRepository for Store {
+    async fn find_enabled_nfs_export_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<NfsExport>, NfsRepositoryError> {
+        let row = sqlx::query(
+            "SELECT id, name, canonical_path, generation
+             FROM shares
+             WHERE name = ? AND enabled = 1 AND nfs_enabled = 1",
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(store_error)?;
+
+        row.map(export_from_row).transpose()
+    }
+
+    async fn list_enabled_nfs_exports(&self) -> Result<Vec<NfsExport>, NfsRepositoryError> {
+        let rows = sqlx::query(
+            "SELECT id, name, canonical_path, generation
+             FROM shares
+             WHERE enabled = 1 AND nfs_enabled = 1
+             ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_error)?;
+
+        rows.into_iter().map(export_from_row).collect()
+    }
+
     async fn nfs_share_exists(&self, share_id: &str) -> Result<bool, NfsRepositoryError> {
         let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM shares WHERE id = ?")
             .bind(share_id)
@@ -118,6 +150,20 @@ impl NfsBindingRepository for Store {
             .rows_affected();
         Ok(deleted > 0)
     }
+}
+
+fn export_from_row(row: sqlx::sqlite::SqliteRow) -> Result<NfsExport, NfsRepositoryError> {
+    let generation = row
+        .try_get::<i64, _>("generation")
+        .map_err(store_error)
+        .and_then(|value| u64::try_from(value).map_err(|_| NfsRepositoryError::Unavailable))?;
+
+    Ok(NfsExport {
+        id: row.try_get("id").map_err(store_error)?,
+        name: row.try_get("name").map_err(store_error)?,
+        canonical_path: row.try_get("canonical_path").map_err(store_error)?,
+        generation,
+    })
 }
 
 fn store_error(_: sqlx::Error) -> NfsRepositoryError {
