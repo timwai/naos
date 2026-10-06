@@ -63,10 +63,10 @@ impl FileHandleCodec {
     }
 
     pub fn issue_root(&self, export: &NfsExport) -> Vec<u8> {
-        self.issue_path(export, &RelativePath::root())
+        self.issue(export)
     }
 
-    pub fn issue_path(&self, export: &NfsExport, relative_path: &RelativePath) -> Vec<u8> {
+    pub fn issue(&self, export: &NfsExport) -> Vec<u8> {
         let mut nonce = [0u8; NONCE_BYTES];
         OsRng.fill_bytes(&mut nonce);
 
@@ -76,7 +76,7 @@ impl FileHandleCodec {
         payload.extend_from_slice(&export.generation.to_be_bytes());
         payload.extend_from_slice(&nonce);
 
-        let tag = self.tag(&payload, export, relative_path);
+        let tag = self.tag(&payload, export);
         payload.extend_from_slice(&tag[..TAG_BYTES]);
         payload
     }
@@ -86,14 +86,13 @@ impl FileHandleCodec {
         handle: &[u8],
         export: &NfsExport,
     ) -> Result<VerifiedRootHandle, FileHandleError> {
-        self.verify_path(handle, export, &RelativePath::root())
+        self.verify(handle, export)
     }
 
-    pub fn verify_path(
+    pub fn verify(
         &self,
         handle: &[u8],
         export: &NfsExport,
-        relative_path: &RelativePath,
     ) -> Result<VerifiedRootHandle, FileHandleError> {
         let parsed = parse_handle(handle)?;
 
@@ -110,7 +109,7 @@ impl FileHandleCodec {
             return Err(FileHandleError::Stale);
         }
 
-        let expected = self.tag(&handle[..PAYLOAD_BYTES], export, relative_path);
+        let expected = self.tag(&handle[..PAYLOAD_BYTES], export);
         if expected[..TAG_BYTES]
             .ct_eq(&handle[PAYLOAD_BYTES..])
             .unwrap_u8()
@@ -122,11 +121,10 @@ impl FileHandleCodec {
         Ok(parsed)
     }
 
-    fn tag(&self, payload: &[u8], export: &NfsExport, relative_path: &RelativePath) -> [u8; 32] {
+    fn tag(&self, payload: &[u8], export: &NfsExport) -> [u8; 32] {
         let mut mac = HmacSha256::new_from_slice(&self.secret).expect("fixed HMAC key");
         mac.update(payload);
         mac.update(&filesystem_identity(export));
-        mac.update(relative_path.as_slash_path().as_bytes());
         mac.finalize().into_bytes().into()
     }
 }
@@ -145,7 +143,7 @@ impl FileHandleTable {
 
     pub fn issue(&self, export: &NfsExport, relative_path: &RelativePath) -> Vec<u8> {
         loop {
-            let handle = self.codec.issue_path(export, relative_path);
+            let handle = self.codec.issue(export);
             let parsed = parse_handle(&handle).expect("newly issued handle is valid");
             let mut entries = self.entries.write().expect("file handle table lock");
             if entries.contains_key(&parsed.nonce) {
@@ -181,14 +179,65 @@ impl FileHandleTable {
             .cloned()
             .ok_or(FileHandleError::Stale)?;
 
-        self.codec
-            .verify_path(handle, &export, &target.relative_path)?;
+        self.codec.verify(handle, &export)?;
 
         Ok(ResolvedFileHandle {
             export,
             relative_path: target.relative_path,
         })
     }
+
+    pub fn rename_subtree(
+        &self,
+        share_id: &str,
+        source: &RelativePath,
+        target: &RelativePath,
+    ) -> Result<(), FileHandleError> {
+        let mut entries = self.entries.write().map_err(|_| FileHandleError::Invalid)?;
+        for entry in entries.values_mut() {
+            if entry.share_id != share_id {
+                continue;
+            }
+            if entry.relative_path == *source {
+                entry.relative_path = target.clone();
+            } else if source.is_ancestor_of(&entry.relative_path) {
+                entry.relative_path = rewrite_descendant(source, target, &entry.relative_path)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn invalidate_subtree(
+        &self,
+        share_id: &str,
+        path: &RelativePath,
+    ) -> Result<(), FileHandleError> {
+        let mut entries = self.entries.write().map_err(|_| FileHandleError::Invalid)?;
+        entries.retain(|_, entry| {
+            entry.share_id != share_id
+                || (entry.relative_path != *path && !path.is_ancestor_of(&entry.relative_path))
+        });
+        Ok(())
+    }
+}
+
+fn rewrite_descendant(
+    source: &RelativePath,
+    target: &RelativePath,
+    current: &RelativePath,
+) -> Result<RelativePath, FileHandleError> {
+    let source_path = source.as_slash_path();
+    let current_path = current.as_slash_path();
+    let suffix = current_path
+        .strip_prefix(&source_path)
+        .ok_or(FileHandleError::Invalid)?;
+    let target_path = target.as_slash_path();
+    let rewritten = if target.is_root() {
+        suffix.to_owned()
+    } else {
+        format!("{target_path}{suffix}")
+    };
+    RelativePath::parse(&rewritten).map_err(|_| FileHandleError::Invalid)
 }
 
 pub fn share_hash_of_export(export: &NfsExport) -> [u8; SHARE_HASH_BYTES] {
@@ -275,6 +324,28 @@ mod tests {
         let resolved = table.resolve(&handle, &[export(2)]).unwrap();
         assert_eq!(resolved.relative_path, path);
         assert_eq!(resolved.export.id, "shr_media");
+    }
+
+    #[test]
+    fn registered_handles_survive_rename_and_can_be_invalidated() {
+        let table = FileHandleTable::new([11; 32]);
+        let source = RelativePath::parse("/docs/report.txt").unwrap();
+        let target = RelativePath::parse("/archive/report.txt").unwrap();
+        let handle = table.issue(&export(2), &source);
+
+        table
+            .rename_subtree("shr_media", &source, &target)
+            .unwrap();
+        assert_eq!(
+            table.resolve(&handle, &[export(2)]).unwrap().relative_path,
+            target
+        );
+
+        table.invalidate_subtree("shr_media", &target).unwrap();
+        assert_eq!(
+            table.resolve(&handle, &[export(2)]),
+            Err(FileHandleError::Stale)
+        );
     }
 
     #[test]
