@@ -128,10 +128,7 @@ fn pdbedit_contains_account(output: &str, account: &str) -> bool {
     })
 }
 
-fn require_success(
-    spec: &CommandSpec,
-    output: &CommandOutput,
-) -> Result<(), SambaCredentialError> {
+fn require_success(spec: &CommandSpec, output: &CommandOutput) -> Result<(), SambaCredentialError> {
     if output.success() {
         Ok(())
     } else {
@@ -168,8 +165,9 @@ mod tests {
                 "getent" if spec.args.first().map(String::as_str) == Some("passwd") => {
                     CommandOutput {
                         status: 0,
-                        stdout: "naos_alice:x:900:900:Managed by naos:/nonexistent:/usr/sbin/nologin\n"
-                            .to_owned(),
+                        stdout:
+                            "naos_alice:x:900:900:Managed by naos:/nonexistent:/usr/sbin/nologin\n"
+                                .to_owned(),
                         stderr: String::new(),
                     }
                 }
@@ -206,10 +204,8 @@ mod tests {
     #[tokio::test]
     async fn sync_uses_stdin_and_never_puts_password_in_command_metadata() {
         let runner = Arc::new(FakeRunner::default());
-        let manager = LinuxSambaCredentialManager::new(
-            PathBuf::from("/etc/samba/smb.conf"),
-            runner.clone(),
-        );
+        let manager =
+            LinuxSambaCredentialManager::new(PathBuf::from("/etc/samba/smb.conf"), runner.clone());
         let password = "correct-horse-battery-staple";
 
         let result = manager.sync_password("alice", password).await.unwrap();
@@ -221,7 +217,12 @@ mod tests {
             .find(|command| command.program == "smbpasswd")
             .unwrap();
         assert!(smbpasswd.args.iter().all(|arg| !arg.contains(password)));
-        assert!(smbpasswd.env.iter().all(|(_, value)| !value.contains(password)));
+        assert!(
+            smbpasswd
+                .env
+                .iter()
+                .all(|(_, value)| !value.contains(password))
+        );
 
         let secret_inputs = runner.secret_inputs.lock().unwrap();
         assert_eq!(

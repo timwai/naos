@@ -141,12 +141,10 @@ impl CommandRunner for SystemCommandRunner {
                     program: program.clone(),
                     source,
                 })?;
-            pipe.shutdown()
-                .await
-                .map_err(|source| CommandError::Stdin {
-                    program: program.clone(),
-                    source,
-                })
+            pipe.shutdown().await.map_err(|source| CommandError::Stdin {
+                program: program.clone(),
+                source,
+            })
         }
         .await;
 
