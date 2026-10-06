@@ -178,12 +178,7 @@ pub fn denied_rpc_mismatch(xid: u32) -> Vec<u8> {
     writer.into_bytes()
 }
 
-fn accepted_reply(
-    xid: u32,
-    status: u32,
-    mismatch: Option<(u32, u32)>,
-    body: &[u8],
-) -> Vec<u8> {
+fn accepted_reply(xid: u32, status: u32, mismatch: Option<(u32, u32)>, body: &[u8]) -> Vec<u8> {
     let mut writer = XdrWriter::new();
     writer.u32(xid);
     writer.u32(REPLY);
