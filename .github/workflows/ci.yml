@@ -21,3 +21,15 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo run -p naosd -- export-openapi > openapi.json
+
+
+  samba-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Samba test tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y samba smbclient
+      - name: Run real Samba read/write smoke test
+        run: sudo bash scripts/ci/samba-real-smoke.sh

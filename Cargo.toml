@@ -35,7 +35,7 @@ subtle = "2"
 tempfile = "3"
 thiserror = "2"
 time = { version = "=0.3.36", features = ["formatting"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "process", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "process", "sync", "time", "io-util"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
