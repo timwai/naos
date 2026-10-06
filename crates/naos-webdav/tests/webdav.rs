@@ -88,6 +88,76 @@ async fn webdav_enforces_the_same_ro_rw_none_acl_semantics() {
         b"uploaded"
     );
 
+    let response = app
+        .clone()
+        .oneshot(request("MKCOL", "/dav/media/archive", Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(root.join("archive").is_dir());
+
+    let response = app
+        .clone()
+        .oneshot(request_with_headers(
+            "MOVE",
+            "/dav/media/uploaded.txt",
+            Body::empty(),
+            &[("Destination", "/dav/media/archive/moved.txt")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(!root.join("uploaded.txt").exists());
+    assert_eq!(
+        std::fs::read(root.join("archive").join("moved.txt")).unwrap(),
+        b"uploaded"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "DELETE",
+            "/dav/media/archive/moved.txt",
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(!root.join("archive").join("moved.txt").exists());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), b"secret").unwrap();
+        symlink(&outside, root.join("escape")).unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(request(
+                "GET",
+                "/dav/media/escape/secret.txt",
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let response = app
+            .clone()
+            .oneshot(request(
+                "PUT",
+                "/dav/media/escape/new.txt",
+                Body::from("escape"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!outside.join("new.txt").exists());
+    }
+
     set_permission(&store, "ro").await;
 
     let response = app
@@ -174,16 +244,27 @@ async fn set_permission(store: &Store, permission: &str) {
 }
 
 fn request(method: &str, uri: &str, body: Body) -> Request<Body> {
-    let mut request = Request::builder()
+    request_with_headers(method, uri, body, &[])
+}
+
+fn request_with_headers(
+    method: &str,
+    uri: &str,
+    body: Body,
+    headers: &[(&str, &str)],
+) -> Request<Body> {
+    let mut builder = Request::builder()
         .method(method)
         .uri(uri)
         .header(
             AUTHORIZATION,
             format!("Basic {}", STANDARD.encode(format!("alice:{PASSWORD}"))),
         )
-        .header("Depth", "1")
-        .body(body)
-        .unwrap();
+        .header("Depth", "1");
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let mut request = builder.body(body).unwrap();
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 42000))));
