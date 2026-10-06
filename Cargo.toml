@@ -5,6 +5,7 @@ members = [
     "crates/naos-contract",
     "crates/naos-core",
     "crates/naos-platform",
+    "crates/naos-smb",
     "crates/naos-store",
 ]
 resolver = "2"
