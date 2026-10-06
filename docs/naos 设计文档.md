@@ -1081,7 +1081,7 @@ GET /api/v1/audit/export.csv?...same filters...
 | Method | Path | 说明 |
 | --- | --- | --- |
 | GET | `/system/info` | OS、版本、hostname、uptime |
-| GET | `/system/capabilities` | Samba、ACL、Kerberos 等能力 |
+| GET | `/system/capabilities` | builtin SMB、system SMB fallback、ACL、Kerberos 等能力 |
 | POST | `/system/doctor` | 深度诊断，Operation |
 | POST | `/system/verify` | desired/applied 一致性巡检，Operation |
 | GET | `/settings` | 可编辑设置 |
@@ -1410,6 +1410,8 @@ generation > applied_generation   => pending/applying/degraded
 8. SSE 发布最终状态
 ```
 
+> 例外：密码/credential 更新包含不可逆的外部密码变更，不套用“任何失败都恢复旧状态”的普通 rollback 假设；按 §9.2.6 使用 forward-recovery + degraded 状态。
+
 ### 7.3 锁
 
 避免两个管理员同时变更同一资源：
@@ -1461,7 +1463,8 @@ naos 用户仍同步创建真实系统账号，但 **builtin SMB 的认证不再
 - 删除用户前检查文件 ownership 影响；
 - 密码不写日志、不进入 operation detail；
 - 用户创建、本人改密、管理员重置密码必须同时刷新 Web verifier 与 SMB credential material；
-- system fallback 启用时，同一密码变更 Operation 还需同步系统 SMB credential；任一步骤失败则整体失败/回滚；
+- system SMB fallback 已安装/已配置时，即使当前运行 builtin，也应同步系统 SMB credential，尽量保持 fallback ready；
+- 密码更新属于**部分不可逆外部操作**：一旦 Windows/Samba credential 已成功更新，不承诺自动恢复旧密码；后续步骤失败时优先 forward recovery，无法恢复则标记 degraded 并要求管理员重新执行密码重置；
 - 外部命令只传参数数组，禁止 shell 字符串拼接。
 
 ### 8.2 RBAC
@@ -1731,12 +1734,20 @@ validate password
 → derive Argon2 hash
 → derive SMB credential material
 → encrypt SMB material
-→ transaction update both verifiers
-→ if system SMB fallback active: sync system SMB password
-→ verify
+→ persist/update naos verifiers
+→ if system fallback provider is configured: sync system SMB credential
+→ verify every configured credential provider
+→ success | degraded(forward recovery required)
 ```
 
-不能出现“UI 密码更新成功，但 SMB 仍使用旧密码”的静默部分成功。
+不能出现“UI 密码更新成功，但某个已配置 SMB provider 仍使用旧密码”的静默部分成功。
+
+密码变更与普通 share/ACL Apply 不同：系统账号密码通常无法在没有旧明文密码的情况下安全回滚。因此该 Operation 使用 **forward-recovery** 语义：
+
+- 若外部 credential 尚未改变，失败可回退 DB verifier；
+- 若任一外部 credential 已成功改变，后续失败不得伪装成完整 rollback；
+- operation 标记 `degraded`，UI 明确要求重新提交同一新密码或执行一次新的密码重置；
+- plaintext password 只在当前 Operation 内存生命周期存在，完成后 zeroize，不为自动恢复而落盘保存。
 
 默认不支持 guest/anonymous SMB。
 
@@ -1830,6 +1841,15 @@ Windows：
 implementation = "system" # system | builtin
 listen = "0.0.0.0:445"
 ```
+
+切换到 `system` 前必须 preflight：
+
+- 系统 SMB provider 已安装且可启动；
+- enabled users 的 system SMB credential 已 provision；
+- 文件系统 ACL 已通过 Verify；
+- TCP/445 可被目标 provider 获取。
+
+若某些用户在 builtin-only 环境创建/改密，而系统 provider 当时未安装，naos **不能从 Argon2 hash 或 NT hash 安全还原 Windows/Samba 所需的用户明文密码**。此时 `system` 切换必须被阻止，并要求管理员对受影响用户执行 credential reprovision/password reset；不得偷偷保存用户明文密码来换取 fallback。
 
 在 builtin 达到 production gate 前，release 默认值保持 `system`；达到 gate 后新安装默认改为 `builtin`，升级安装不自动切换，必须由管理员显式确认。
 
