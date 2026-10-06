@@ -342,6 +342,7 @@ const fn expected_provider(platform: PlatformKind) -> SmbProvider {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_linux_listener(output: &str) -> Option<PortListener> {
     for line in output.lines() {
         if !line.contains("LISTEN") || !line.split_whitespace().any(is_port_445_token) {
@@ -367,6 +368,7 @@ fn parse_linux_listener(output: &str) -> Option<PortListener> {
     None
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_macos_listener(output: &str) -> Option<PortListener> {
     output.lines().skip(1).find_map(|line| {
         if !line.contains(":445") || !line.contains("LISTEN") {
@@ -386,6 +388,7 @@ fn parse_macos_listener(output: &str) -> Option<PortListener> {
     })
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn parse_windows_listener(output: &str) -> Result<Option<PortListener>, SmbDetectionError> {
     let trimmed = output.trim();
     if trimmed.is_empty() || trimmed == "null" {
@@ -421,6 +424,7 @@ fn parse_windows_listener(output: &str) -> Result<Option<PortListener>, SmbDetec
     }))
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn parse_windows_tasklist_process(output: &str) -> Option<String> {
     let trimmed = output.trim();
     if trimmed.is_empty() || trimmed.starts_with("INFO:") {
@@ -432,6 +436,7 @@ fn parse_windows_tasklist_process(output: &str) -> Option<String> {
     (!process.is_empty()).then(|| process.to_owned())
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn classify_linux_listener(listener: &PortListener) -> SmbProvider {
     match listener.process.as_deref() {
         Some(process) if process.to_ascii_lowercase().contains("smbd") => SmbProvider::Samba,
@@ -439,6 +444,7 @@ fn classify_linux_listener(listener: &PortListener) -> SmbProvider {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn classify_macos_listener(listener: &PortListener) -> SmbProvider {
     let Some(process) = listener.process.as_deref() else {
         return SmbProvider::Unknown;
@@ -457,6 +463,7 @@ fn classify_macos_listener(listener: &PortListener) -> SmbProvider {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn classify_windows_listener(listener: &PortListener) -> SmbProvider {
     if listener.pid == Some(4)
         || listener
@@ -470,10 +477,12 @@ fn classify_windows_listener(listener: &PortListener) -> SmbProvider {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn is_port_445_token(token: &str) -> bool {
     token.ends_with(":445")
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn extract_number_after(value: &str, marker: &str) -> Option<u32> {
     let tail = value.split_once(marker)?.1;
     let digits = tail
@@ -483,6 +492,7 @@ fn extract_number_after(value: &str, marker: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_ss_process(line: &str) -> Option<String> {
     let tail = line.split_once("users:")?.1;
     let raw = tail.split_once(",pid=")?.0;
@@ -496,6 +506,7 @@ fn parse_ss_process(line: &str) -> Option<String> {
     (!process.is_empty()).then(|| process.to_owned())
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_netstat_process(line: &str) -> Option<String> {
     let last = line.split_whitespace().last()?;
     let (_, process) = last.split_once('/')?;
