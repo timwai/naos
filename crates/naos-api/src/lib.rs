@@ -317,7 +317,9 @@ async fn revoke_session(
 
     let mut response = StatusCode::NO_CONTENT.into_response();
     if target_session_id == session.id {
-        response.headers_mut().append(SET_COOKIE, clear_session_cookie());
+        response
+            .headers_mut()
+            .append(SET_COOKIE, clear_session_cookie());
     }
     Ok(response)
 }
