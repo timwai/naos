@@ -296,11 +296,8 @@ impl NfsBindingService {
         self.ensure_share_exists(share_id).await?;
         self.ensure_user_exists(&input.user_id).await?;
 
-        let binding = validated_binding(
-            format!("nfb_{}", Ulid::new()),
-            share_id.to_owned(),
-            input,
-        )?;
+        let binding =
+            validated_binding(format!("nfb_{}", Ulid::new()), share_id.to_owned(), input)?;
         self.ensure_no_equivalent_binding(&binding, None).await?;
         self.repository.insert_nfs_binding(&binding).await?;
         Ok(binding)
