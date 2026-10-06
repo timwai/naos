@@ -588,7 +588,9 @@ impl NfsV3Service {
         let resolver = resolver(&source_context.export)?;
         let source_path = resolver.resolve_existing(&source).map_err(path_error)?;
         let target_path = resolver.resolve_for_create(&target).map_err(path_error)?;
-        fs::rename(&source_path, &target_path).await.map_err(io_error)?;
+        fs::rename(&source_path, &target_path)
+            .await
+            .map_err(io_error)?;
         self.handles
             .rename_subtree(&source_context.export.id, &source, &target)?;
 
@@ -622,8 +624,7 @@ impl NfsV3Service {
         if !directory_attributes.is_directory() {
             return Err(NfsV3Error::NotDirectory);
         }
-        let current_verifier =
-            directory_cookie_verifier(&context.export, &directory_attributes);
+        let current_verifier = directory_cookie_verifier(&context.export, &directory_attributes);
         if cookie != 0 && cookie_verifier != current_verifier {
             return Err(NfsV3Error::BadCookie);
         }
@@ -1583,15 +1584,15 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(listing.entries.iter().any(|entry| entry.name == "final.txt"));
+        assert!(
+            listing
+                .entries
+                .iter()
+                .any(|entry| entry.name == "final.txt")
+        );
 
         service
-            .remove(
-                client_ip,
-                &credential,
-                &archive.file_handle,
-                "final.txt",
-            )
+            .remove(client_ip, &credential, &archive.file_handle, "final.txt")
             .await
             .unwrap();
         assert!(matches!(
