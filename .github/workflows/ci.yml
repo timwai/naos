@@ -20,6 +20,9 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Probe macOS native SMB provider
+        if: runner.os == 'macOS'
+        run: cargo run -p naosd -- doctor-smb > doctor-smb.json
       - run: cargo run -p naosd -- export-openapi > openapi.json
 
 
