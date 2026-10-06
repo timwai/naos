@@ -1,6 +1,5 @@
 use std::{
-    cmp,
-    io,
+    cmp, io,
     net::IpAddr,
     path::{Path, PathBuf},
     sync::Arc,
@@ -244,7 +243,8 @@ impl NfsV3Service {
         }
 
         let child = child_path(&context.relative_path, name)?;
-        self.authorize(&context, &child, FileOperation::Stat).await?;
+        self.authorize(&context, &child, FileOperation::Stat)
+            .await?;
         let resolver = resolver(&context.export)?;
         let child_path = resolver.resolve_existing(&child).map_err(path_error)?;
         let object_attributes = attributes(&child_path).await?;
@@ -1010,9 +1010,7 @@ mod tests {
     use async_trait::async_trait;
     use naos_core::{
         acl::{AclRule, Permission, Subject},
-        nfs::{
-            NfsBinding, NfsBindingPermission, NfsCidr, NfsRepositoryError,
-        },
+        nfs::{NfsBinding, NfsBindingPermission, NfsCidr, NfsRepositoryError},
     };
 
     use super::*;
@@ -1051,7 +1049,10 @@ mod tests {
             Ok(self.bindings.get(share_id).cloned().unwrap_or_default())
         }
 
-        async fn insert_nfs_binding(&self, _binding: &NfsBinding) -> Result<(), NfsRepositoryError> {
+        async fn insert_nfs_binding(
+            &self,
+            _binding: &NfsBinding,
+        ) -> Result<(), NfsRepositoryError> {
             Err(NfsRepositoryError::Unavailable)
         }
 
@@ -1153,8 +1154,7 @@ mod tests {
     async fn lookup_read_and_write_use_shared_acl_and_binding_caps() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("report.txt"), b"hello").unwrap();
-        let (service, handles, export) =
-            service(temp.path(), NfsBindingPermission::ReadWrite);
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadWrite);
         let root_handle = handles.issue_root(&export);
         let client_ip = "192.168.1.10".parse().unwrap();
         let credential = auth_sys(1000);
@@ -1194,10 +1194,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(service
-            .read(client_ip, &credential, &lookup.file_handle, 0, 5)
-            .await
-            .is_ok());
+        assert!(
+            service
+                .read(client_ip, &credential, &lookup.file_handle, 0, 5)
+                .await
+                .is_ok()
+        );
         assert!(matches!(
             service
                 .write(client_ip, &credential, &lookup.file_handle, 0, b"x")
@@ -1216,12 +1218,7 @@ mod tests {
         let mut args = XdrWriter::new();
         args.opaque(&handle).unwrap();
         let call = rpc_call(55, NFSPROC3_GETATTR, auth_sys(1000), &args.into_bytes());
-        let reply = dispatch_nfs3_rpc(
-            &service,
-            "192.168.1.10".parse().unwrap(),
-            &call,
-        )
-        .await;
+        let reply = dispatch_nfs3_rpc(&service, "192.168.1.10".parse().unwrap(), &call).await;
 
         let mut reader = XdrReader::new(&reply);
         assert_eq!(reader.u32().unwrap(), 55);
