@@ -128,6 +128,29 @@ pub struct WriteResult {
     pub verifier: [u8; 8],
 }
 
+#[derive(Debug, Clone)]
+pub struct DirectoryEntryPlus {
+    pub fileid: u64,
+    pub name: String,
+    pub cookie: u64,
+    pub attributes: NfsAttributes,
+    pub file_handle: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadDirPlusResult {
+    pub directory_attributes: NfsAttributes,
+    pub cookie_verifier: [u8; 8],
+    pub entries: Vec<DirectoryEntryPlus>,
+    pub eof: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenameResult {
+    pub source_directory_attributes: NfsAttributes,
+    pub target_directory_attributes: NfsAttributes,
+}
+
 #[derive(Debug, Error)]
 pub enum NfsV3Error {
     #[error("invalid NFS file handle")]
@@ -136,10 +159,22 @@ pub enum NfsV3Error {
     Stale,
     #[error("NFS object does not exist")]
     NotFound,
+    #[error("NFS object already exists")]
+    AlreadyExists,
     #[error("NFS access denied")]
     AccessDenied,
     #[error("NFS operation targets a directory")]
     IsDirectory,
+    #[error("NFS operation requires a directory")]
+    NotDirectory,
+    #[error("NFS directory is not empty")]
+    NotEmpty,
+    #[error("NFS rename crosses exports")]
+    CrossDevice,
+    #[error("NFS directory cookie is no longer valid")]
+    BadCookie,
+    #[error("NFS directory reply budget is too small")]
+    TooSmall,
     #[error("invalid NFS argument")]
     Invalid,
     #[error("NFS I/O failure")]
@@ -372,6 +407,303 @@ impl NfsV3Service {
         })
     }
 
+    pub async fn create(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        directory_handle: &[u8],
+        name: &str,
+        exclusive: bool,
+    ) -> Result<LookupResult, NfsV3Error> {
+        let context = self
+            .resolve_handle(client_ip, credential, directory_handle)
+            .await?;
+        let directory = resolve_existing(&context)?;
+        let directory_attributes = attributes(&directory).await?;
+        if !directory_attributes.is_directory() {
+            return Err(NfsV3Error::NotDirectory);
+        }
+
+        let child = child_path(&context.relative_path, name)?;
+        self.authorize(&context, &child, FileOperation::Create)
+            .await?;
+        let target = resolver(&context.export)?
+            .resolve_for_create(&child)
+            .map_err(path_error)?;
+
+        let object_attributes = match fs::metadata(&target).await {
+            Ok(metadata) => {
+                if exclusive {
+                    return Err(NfsV3Error::AlreadyExists);
+                }
+                if metadata.is_dir() {
+                    return Err(NfsV3Error::IsDirectory);
+                }
+                attributes(&target).await?
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)
+                    .await
+                    .map_err(io_error)?;
+                file.sync_all().await.map_err(io_error)?;
+                attributes(&target).await?
+            }
+            Err(error) => return Err(io_error(error)),
+        };
+
+        Ok(LookupResult {
+            file_handle: self.handles.issue(&context.export, &child),
+            object_attributes,
+            directory_attributes: attributes(&directory).await?,
+        })
+    }
+
+    pub async fn mkdir(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        directory_handle: &[u8],
+        name: &str,
+    ) -> Result<LookupResult, NfsV3Error> {
+        let context = self
+            .resolve_handle(client_ip, credential, directory_handle)
+            .await?;
+        let directory = resolve_existing(&context)?;
+        let directory_attributes = attributes(&directory).await?;
+        if !directory_attributes.is_directory() {
+            return Err(NfsV3Error::NotDirectory);
+        }
+
+        let child = child_path(&context.relative_path, name)?;
+        self.authorize(&context, &child, FileOperation::Mkdir)
+            .await?;
+        let target = resolver(&context.export)?
+            .resolve_for_create(&child)
+            .map_err(path_error)?;
+        fs::create_dir(&target).await.map_err(io_error)?;
+
+        Ok(LookupResult {
+            file_handle: self.handles.issue(&context.export, &child),
+            object_attributes: attributes(&target).await?,
+            directory_attributes: attributes(&directory).await?,
+        })
+    }
+
+    pub async fn remove(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        directory_handle: &[u8],
+        name: &str,
+    ) -> Result<NfsAttributes, NfsV3Error> {
+        let context = self
+            .resolve_handle(client_ip, credential, directory_handle)
+            .await?;
+        let directory = resolve_existing(&context)?;
+        if !attributes(&directory).await?.is_directory() {
+            return Err(NfsV3Error::NotDirectory);
+        }
+        self.authorize_parent_write(&context).await?;
+
+        let child = child_path(&context.relative_path, name)?;
+        let target = resolver(&context.export)?
+            .resolve_existing(&child)
+            .map_err(path_error)?;
+        if attributes(&target).await?.is_directory() {
+            return Err(NfsV3Error::IsDirectory);
+        }
+        fs::remove_file(&target).await.map_err(io_error)?;
+        self.handles
+            .invalidate_subtree(&context.export.id, &child)?;
+        attributes(&directory).await
+    }
+
+    pub async fn rmdir(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        directory_handle: &[u8],
+        name: &str,
+    ) -> Result<NfsAttributes, NfsV3Error> {
+        let context = self
+            .resolve_handle(client_ip, credential, directory_handle)
+            .await?;
+        let directory = resolve_existing(&context)?;
+        if !attributes(&directory).await?.is_directory() {
+            return Err(NfsV3Error::NotDirectory);
+        }
+        self.authorize_parent_write(&context).await?;
+
+        let child = child_path(&context.relative_path, name)?;
+        let target = resolver(&context.export)?
+            .resolve_existing(&child)
+            .map_err(path_error)?;
+        if !attributes(&target).await?.is_directory() {
+            return Err(NfsV3Error::NotDirectory);
+        }
+        let mut entries = fs::read_dir(&target).await.map_err(io_error)?;
+        if entries.next_entry().await.map_err(io_error)?.is_some() {
+            return Err(NfsV3Error::NotEmpty);
+        }
+        fs::remove_dir(&target).await.map_err(io_error)?;
+        self.handles
+            .invalidate_subtree(&context.export.id, &child)?;
+        attributes(&directory).await
+    }
+
+    pub async fn rename(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        source_directory_handle: &[u8],
+        source_name: &str,
+        target_directory_handle: &[u8],
+        target_name: &str,
+    ) -> Result<RenameResult, NfsV3Error> {
+        let source_context = self
+            .resolve_handle(client_ip, credential, source_directory_handle)
+            .await?;
+        let target_context = self
+            .resolve_handle(client_ip, credential, target_directory_handle)
+            .await?;
+        if source_context.export.id != target_context.export.id {
+            return Err(NfsV3Error::CrossDevice);
+        }
+
+        let source_directory = resolve_existing(&source_context)?;
+        let target_directory = resolve_existing(&target_context)?;
+        if !attributes(&source_directory).await?.is_directory()
+            || !attributes(&target_directory).await?.is_directory()
+        {
+            return Err(NfsV3Error::NotDirectory);
+        }
+        self.authorize_parent_write(&source_context).await?;
+        self.authorize_parent_write(&target_context).await?;
+
+        let source = child_path(&source_context.relative_path, source_name)?;
+        let target = child_path(&target_context.relative_path, target_name)?;
+        let resolver = resolver(&source_context.export)?;
+        let source_path = resolver.resolve_existing(&source).map_err(path_error)?;
+        let target_path = resolver.resolve_for_create(&target).map_err(path_error)?;
+        fs::rename(&source_path, &target_path).await.map_err(io_error)?;
+        self.handles
+            .rename_subtree(&source_context.export.id, &source, &target)?;
+
+        Ok(RenameResult {
+            source_directory_attributes: attributes(&source_directory).await?,
+            target_directory_attributes: attributes(&target_directory).await?,
+        })
+    }
+
+    pub async fn readdirplus(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        directory_handle: &[u8],
+        cookie: u64,
+        cookie_verifier: [u8; 8],
+        dircount: u32,
+        maxcount: u32,
+    ) -> Result<ReadDirPlusResult, NfsV3Error> {
+        if maxcount < 256 || dircount < 32 {
+            return Err(NfsV3Error::TooSmall);
+        }
+
+        let context = self
+            .resolve_handle(client_ip, credential, directory_handle)
+            .await?;
+        self.authorize(&context, &context.relative_path, FileOperation::List)
+            .await?;
+        let directory = resolve_existing(&context)?;
+        let directory_attributes = attributes(&directory).await?;
+        if !directory_attributes.is_directory() {
+            return Err(NfsV3Error::NotDirectory);
+        }
+        let current_verifier =
+            directory_cookie_verifier(&context.export, &directory_attributes);
+        if cookie != 0 && cookie_verifier != current_verifier {
+            return Err(NfsV3Error::BadCookie);
+        }
+
+        let mut reader = fs::read_dir(&directory).await.map_err(io_error)?;
+        let mut names = Vec::new();
+        while let Some(entry) = reader.next_entry().await.map_err(io_error)? {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            names.push(name);
+        }
+        names.sort();
+
+        let start = usize::try_from(cookie).map_err(|_| NfsV3Error::BadCookie)?;
+        if start > names.len() {
+            return Err(NfsV3Error::BadCookie);
+        }
+
+        let mut entries = Vec::new();
+        let mut dir_bytes = 0usize;
+        let mut total_bytes = 128usize;
+        let mut eof = true;
+        for (index, name) in names.iter().enumerate().skip(start) {
+            let child = child_path(&context.relative_path, name)?;
+            if self.permission(&context, &child).await? == Permission::None {
+                continue;
+            }
+            let child_path = resolver(&context.export)?
+                .resolve_existing(&child)
+                .map_err(path_error)?;
+            let child_attributes = attributes(&child_path).await?;
+            let file_handle = self.handles.issue(&context.export, &child);
+            let name_bytes = xdr_padded_len(name.len());
+            let entry_dir_bytes = 24usize.saturating_add(name_bytes);
+            let entry_total_bytes = entry_dir_bytes
+                .saturating_add(112)
+                .saturating_add(xdr_padded_len(file_handle.len()));
+            if dir_bytes.saturating_add(entry_dir_bytes) > dircount as usize
+                || total_bytes.saturating_add(entry_total_bytes) > maxcount as usize
+            {
+                eof = false;
+                break;
+            }
+
+            dir_bytes += entry_dir_bytes;
+            total_bytes += entry_total_bytes;
+            entries.push(DirectoryEntryPlus {
+                fileid: child_attributes.fileid.max(1),
+                name: name.clone(),
+                cookie: (index + 1) as u64,
+                attributes: child_attributes,
+                file_handle,
+            });
+        }
+
+        if entries.is_empty() && !eof {
+            return Err(NfsV3Error::TooSmall);
+        }
+
+        Ok(ReadDirPlusResult {
+            directory_attributes,
+            cookie_verifier: current_verifier,
+            entries,
+            eof,
+        })
+    }
+
+    async fn authorize_parent_write(&self, context: &HandleContext) -> Result<(), NfsV3Error> {
+        if self
+            .permission(context, &context.relative_path)
+            .await?
+            .allows(Permission::ReadWrite)
+        {
+            Ok(())
+        } else {
+            Err(NfsV3Error::AccessDenied)
+        }
+    }
+
     async fn resolve_handle(
         &self,
         client_ip: IpAddr,
@@ -451,6 +783,18 @@ fn resolve_existing(context: &HandleContext) -> Result<PathBuf, NfsV3Error> {
         .map_err(path_error)
 }
 
+fn directory_cookie_verifier(export: &NfsExport, attributes: &NfsAttributes) -> [u8; 8] {
+    let value = attributes.fileid
+        ^ export.generation.rotate_left(17)
+        ^ (u64::from(attributes.mtime.seconds) << 32)
+        ^ u64::from(attributes.mtime.nseconds);
+    value.to_be_bytes()
+}
+
+fn xdr_padded_len(length: usize) -> usize {
+    4 + length + ((4 - (length % 4)) % 4)
+}
+
 fn child_path(parent: &RelativePath, name: &str) -> Result<RelativePath, NfsV3Error> {
     if name.is_empty() || name.len() > MAX_NAME_BYTES || name.contains('/') {
         return Err(NfsV3Error::Invalid);
@@ -475,6 +819,7 @@ fn path_error(error: PathError) -> NfsV3Error {
 fn io_error(error: io::Error) -> NfsV3Error {
     match error.kind() {
         io::ErrorKind::NotFound => NfsV3Error::NotFound,
+        io::ErrorKind::AlreadyExists => NfsV3Error::AlreadyExists,
         io::ErrorKind::PermissionDenied => NfsV3Error::AccessDenied,
         _ => NfsV3Error::Io,
     }
@@ -1182,6 +1527,123 @@ mod tests {
             std::fs::read(temp.path().join("report.txt")).unwrap(),
             b"HELLO"
         );
+    }
+
+    #[tokio::test]
+    async fn directory_mutations_update_handles_and_listing() {
+        let temp = tempfile::tempdir().unwrap();
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadWrite);
+        let root_handle = handles.issue_root(&export);
+        let client_ip = "192.168.1.10".parse().unwrap();
+        let credential = auth_sys(1000);
+
+        let created = service
+            .create(client_ip, &credential, &root_handle, "draft.txt", true)
+            .await
+            .unwrap();
+        service
+            .write(client_ip, &credential, &created.file_handle, 0, b"draft")
+            .await
+            .unwrap();
+
+        let archive = service
+            .mkdir(client_ip, &credential, &root_handle, "archive")
+            .await
+            .unwrap();
+        service
+            .rename(
+                client_ip,
+                &credential,
+                &root_handle,
+                "draft.txt",
+                &archive.file_handle,
+                "final.txt",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service
+                .read(client_ip, &credential, &created.file_handle, 0, 5)
+                .await
+                .unwrap()
+                .data,
+            b"draft"
+        );
+
+        let listing = service
+            .readdirplus(
+                client_ip,
+                &credential,
+                &archive.file_handle,
+                0,
+                [0; 8],
+                4096,
+                16 * 1024,
+            )
+            .await
+            .unwrap();
+        assert!(listing.entries.iter().any(|entry| entry.name == "final.txt"));
+
+        service
+            .remove(
+                client_ip,
+                &credential,
+                &archive.file_handle,
+                "final.txt",
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            service
+                .read(client_ip, &credential, &created.file_handle, 0, 5)
+                .await,
+            Err(NfsV3Error::Stale)
+        ));
+
+        service
+            .rmdir(client_ip, &credential, &root_handle, "archive")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn readdirplus_rejects_changed_cookie_verifier() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("a.txt"), b"a").unwrap();
+        std::fs::write(temp.path().join("b.txt"), b"b").unwrap();
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadWrite);
+        let root_handle = handles.issue_root(&export);
+        let client_ip = "192.168.1.10".parse().unwrap();
+        let credential = auth_sys(1000);
+
+        let first = service
+            .readdirplus(
+                client_ip,
+                &credential,
+                &root_handle,
+                0,
+                [0; 8],
+                4096,
+                16 * 1024,
+            )
+            .await
+            .unwrap();
+        let cookie = first.entries.first().unwrap().cookie;
+        assert!(matches!(
+            service
+                .readdirplus(
+                    client_ip,
+                    &credential,
+                    &root_handle,
+                    cookie,
+                    [9; 8],
+                    4096,
+                    16 * 1024,
+                )
+                .await,
+            Err(NfsV3Error::BadCookie)
+        ));
     }
 
     #[tokio::test]
