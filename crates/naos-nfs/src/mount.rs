@@ -281,6 +281,7 @@ mod tests {
 
     use async_trait::async_trait;
     use naos_core::nfs::{NfsBinding, NfsBindingPermission, NfsCidr, NfsRepositoryError};
+    use tokio::io::AsyncWriteExt;
 
     use super::*;
 
@@ -399,6 +400,38 @@ mod tests {
             service.mount(client_ip, &auth_sys(1001), "/media").await,
             Err(MountError::AccessDenied)
         ));
+    }
+
+    #[tokio::test]
+    async fn mount_stream_round_trips_record_framed_rpc() {
+        let mut body = XdrWriter::new();
+        body.string("/media").unwrap();
+        let call = rpc_call(100, MOUNTPROC_MNT, auth_sys(1000), &body.into_bytes());
+        let record = crate::rpc::encode_record(&call).unwrap();
+
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let service = service();
+        let server_task = tokio::spawn(async move {
+            serve_mount_stream(
+                &mut server,
+                "192.168.1.25".parse().unwrap(),
+                &service,
+            )
+            .await
+            .unwrap();
+        });
+
+        client.write_all(&record).await.unwrap();
+        let reply = crate::transport::read_record(&mut client)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 100);
+        assert_eq!(reader.u32().unwrap(), 1);
+
+        drop(client);
+        server_task.await.unwrap();
     }
 
     #[tokio::test]
