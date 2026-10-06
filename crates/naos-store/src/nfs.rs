@@ -158,10 +158,7 @@ impl NfsBindingRepository for Store {
 
 #[async_trait]
 impl NfsAccessRepository for Store {
-    async fn list_nfs_acl_rules(
-        &self,
-        share_id: &str,
-    ) -> Result<Vec<AclRule>, NfsRepositoryError> {
+    async fn list_nfs_acl_rules(&self, share_id: &str) -> Result<Vec<AclRule>, NfsRepositoryError> {
         let rows = sqlx::query(
             "SELECT rel_path, subject_type, subject_id, perm, inherit
              FROM share_acl
