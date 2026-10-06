@@ -92,6 +92,8 @@ pub enum SambaError {
     ConfigConflict,
     #[error("naos Samba include exists but is not owned by naos")]
     IncludeOwnershipConflict,
+    #[error("an unmanaged Samba share already uses the requested name: {0}")]
+    UnmanagedShareConflict(String),
     #[error("Samba configuration changed during apply")]
     ConfigChanged,
     #[error("share definition is invalid: {0}")]
@@ -121,6 +123,7 @@ impl SambaError {
             Self::AttachRequired => "SAMBA_ATTACH_REQUIRED",
             Self::ConfigConflict => "SAMBA_CONFIG_CONFLICT",
             Self::IncludeOwnershipConflict => "SAMBA_INCLUDE_OWNERSHIP_CONFLICT",
+            Self::UnmanagedShareConflict(_) => "SAMBA_UNMANAGED_SHARE_CONFLICT",
             Self::ConfigChanged => "SAMBA_CONFIG_CHANGED",
             Self::InvalidShare(_) => "SAMBA_SHARE_INVALID",
             Self::CommandFailed { .. } => "SAMBA_COMMAND_FAILED",
@@ -191,6 +194,8 @@ impl LinuxSambaAdapter {
 
     pub async fn render(&self, shares: &[SambaShareSpec]) -> Result<SambaPlan, SambaError> {
         self.preflight().await?;
+        self.testparm(&self.config.main_config).await?;
+        self.ensure_no_unmanaged_share_conflicts(shares).await?;
 
         let expected_main_config = fs::read_to_string(&self.config.main_config)?;
         let expected_include_config = read_optional_string(&self.config.include_config)?;
@@ -422,12 +427,49 @@ impl LinuxSambaAdapter {
         run_first_success(
             self.runner.as_ref(),
             [
-                CommandSpec::new("smbcontrol").args(["smbd", "reload-config"]),
+                CommandSpec::new("smbcontrol").args([
+                    format!("--configfile={}", path_text(&self.config.main_config)),
+                    "smbd".to_owned(),
+                    "reload-config".to_owned(),
+                ]),
                 CommandSpec::new("systemctl").args(["reload", "smbd"]),
                 CommandSpec::new("systemctl").args(["reload", "smb"]),
             ],
         )
         .await
+    }
+
+    async fn ensure_no_unmanaged_share_conflicts(
+        &self,
+        shares: &[SambaShareSpec],
+    ) -> Result<(), SambaError> {
+        let owned = read_optional_string(&self.config.include_config)?
+            .map(|content| owned_share_names(&content))
+            .unwrap_or_default();
+
+        for share in shares {
+            if owned.contains(&share.name.to_ascii_lowercase()) {
+                continue;
+            }
+
+            let output = self
+                .runner
+                .run(CommandSpec::new("testparm").args([
+                    "-s".to_owned(),
+                    "--section-name".to_owned(),
+                    share.name.clone(),
+                    "--parameter-name".to_owned(),
+                    "path".to_owned(),
+                    path_text(&self.config.main_config),
+                ]))
+                .await?;
+
+            if output.success() && parse_parameter_value(&output.stdout).is_some() {
+                return Err(SambaError::UnmanagedShareConflict(share.name.clone()));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -567,6 +609,24 @@ fn render_include(shares: &[SambaShareSpec]) -> Result<String, SambaError> {
     }
 
     Ok(output)
+}
+
+fn owned_share_names(content: &str) -> BTreeSet<String> {
+    if content.lines().next() != Some(INCLUDE_HEADER) {
+        return BTreeSet::new();
+    }
+
+    content
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            line.strip_prefix('[')
+                .and_then(|value| value.strip_suffix(']'))
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_ascii_lowercase)
+        })
+        .collect()
 }
 
 fn validate_share(share: &SambaShareSpec) -> Result<(), SambaError> {
@@ -829,6 +889,13 @@ mod tests {
         assert!(rendered.contains("include = /etc/samba/.stage.conf"));
         assert!(!rendered.contains("include = /etc/samba/naos-shares.conf"));
         assert!(rendered.contains("tail = value"));
+    }
+
+    #[test]
+    fn owned_share_parser_only_trusts_naos_managed_include() {
+        let managed = format!("{INCLUDE_HEADER}\n[Media]\npath = /srv/media\n");
+        assert!(owned_share_names(&managed).contains("media"));
+        assert!(owned_share_names("[media]\npath = /srv/media\n").is_empty());
     }
 
     #[test]

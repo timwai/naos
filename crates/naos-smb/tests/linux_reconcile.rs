@@ -46,11 +46,23 @@ impl CommandRunner for FakeRunner {
                 stdout: "inactive\n".to_owned(),
                 stderr: String::new(),
             },
-            "testparm" if spec.args.iter().any(|arg| arg == "--parameter-name") => CommandOutput {
-                status: 0,
-                stdout: "/srv/media\n".to_owned(),
-                stderr: String::new(),
-            },
+            "testparm" if spec.args.iter().any(|arg| arg == "--parameter-name") => {
+                let config_path = spec.args.last().unwrap();
+                let config = std::fs::read_to_string(config_path).unwrap_or_default();
+                if config.contains("NAOS MANAGED SAMBA INCLUDE") {
+                    CommandOutput {
+                        status: 0,
+                        stdout: "/srv/media\n".to_owned(),
+                        stderr: String::new(),
+                    }
+                } else {
+                    CommandOutput {
+                        status: 1,
+                        stdout: String::new(),
+                        stderr: "section not found".to_owned(),
+                    }
+                }
+            }
             "testparm" => CommandOutput {
                 status: 0,
                 stdout: "Loaded services file OK.\n".to_owned(),
