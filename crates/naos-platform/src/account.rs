@@ -1,5 +1,7 @@
-use std::collections::HashSet;
 use std::sync::Arc;
+
+#[cfg(any(target_os = "macos", test))]
+use std::collections::HashSet;
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -9,6 +11,7 @@ use crate::command::{
 };
 
 const ACCOUNT_MARKER: &str = "Managed by naos";
+#[cfg(target_os = "windows")]
 const WINDOWS_ACCOUNT_ENV: &str = "NAOS_ACCOUNT";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
