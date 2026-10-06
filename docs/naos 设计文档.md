@@ -1618,6 +1618,8 @@ https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/
 
 #### 9.2.4 Dialect 与功能分阶段
 
+> P0 的 packet framing、状态机、NEGOTIATE/SESSION_SETUP/TREE_CONNECT/CREATE、FileBackend、share-mode、LOCK、credit、NTSTATUS、fuzz 与编码顺序详见 [naos SMB P0 实现设计](naos%20SMB%20P0%20%E5%AE%9E%E7%8E%B0%E8%AE%BE%E8%AE%A1.md)。本节只保留产品级能力边界。
+
 **明确禁止 SMB1。**
 
 P0 — standalone 可读写：
@@ -1628,7 +1630,7 @@ P0 — standalone 可读写：
 | Dialect | SMB 2.1 baseline |
 | Signing | **必须支持** HMAC-SHA256 signing；客户端要求签名时可正常连接 |
 | Auth | SPNEGO + NTLMv2，本地 naos 用户 |
-| Commands | NEGOTIATE、SESSION_SETUP、LOGOFF、TREE_CONNECT、TREE_DISCONNECT、CREATE、CLOSE、FLUSH、READ、WRITE、QUERY_DIRECTORY、QUERY_INFO、SET_INFO、ECHO |
+| Commands | NEGOTIATE、SESSION_SETUP、LOGOFF、TREE_CONNECT、TREE_DISCONNECT、CREATE、CLOSE、FLUSH、READ、WRITE、QUERY_DIRECTORY、QUERY_INFO、SET_INFO、LOCK、CANCEL、ECHO |
 | Compound | 支持常见 related compound request，不能假设一 TCP frame 只有一个命令 |
 | Credits | 正确处理基础 credit accounting，设置明确上限 |
 | 文件语义 | create/open/disposition、rename/delete、目录枚举、EOF/basic info |
@@ -1643,7 +1645,7 @@ P1 — builtin experimental：
 | Signing | AES-CMAC / AES-GMAC 按 dialect/capability 协商 |
 | Encryption | 至少 AES-128-GCM；可配置 share/server require encryption |
 | Oplock/Lease | 先做保守语义，以正确性优先于客户端缓存性能 |
-| Lock | 支持 byte-range lock 基本语义 |
+| Lock | P0 已有基础 byte-range lock；P1 补等待/异步与更完整客户端兼容语义 |
 | Change Notify | 满足 Explorer/Finder 常用目录刷新场景 |
 | IOCTL | 只实现客户端互操作必需子集，其余显式 `STATUS_NOT_SUPPORTED` |
 
@@ -1889,7 +1891,7 @@ cargo run -p naos-smbd -- \
 
 builtin SMB 成为默认实现前必须满足：
 
-- Windows 11 当前版本：认证、签名、Explorer copy/rename/delete、Office 常见文件锁场景；
+- Windows 11 当前版本：认证、签名、Explorer copy/rename/delete、share-mode 与 Office 常见文件锁场景；
 - macOS 当前版本：Finder mount/copy/rename/delete；
 - Linux kernel cifs：mount/read/write/rename；
 - 1 B、空文件、4 KiB、1 MiB、1 GiB+ 文件；
