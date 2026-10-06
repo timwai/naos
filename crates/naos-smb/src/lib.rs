@@ -1,8 +1,8 @@
-pub mod windows_native;
-pub mod windows_reconcile;
 pub mod credential;
 pub mod linux_samba;
 pub mod reconcile;
+pub mod windows_native;
+pub mod windows_reconcile;
 
 pub use linux_samba::{
     AttachPolicy, LinuxSambaAdapter, LinuxSambaConfig, SambaError, SambaPlan, SambaShareSpec,

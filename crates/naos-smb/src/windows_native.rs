@@ -220,7 +220,9 @@ impl WindowsSmbAdapter {
                         desired.name.clone(),
                     ));
                 }
-                Some(current) if same_path(&current.path, &desired.path) => WindowsShareAction::Noop,
+                Some(current) if same_path(&current.path, &desired.path) => {
+                    WindowsShareAction::Noop
+                }
                 Some(_) => WindowsShareAction::Recreate,
             }
         } else {
@@ -346,10 +348,7 @@ impl WindowsSmbAdapter {
         })
     }
 
-    pub async fn rollback(
-        &self,
-        snapshot: &WindowsShareSnapshot,
-    ) -> Result<(), WindowsSmbError> {
+    pub async fn rollback(&self, snapshot: &WindowsShareSnapshot) -> Result<(), WindowsSmbError> {
         ensure_windows()?;
         let current = self.probe_share(&snapshot.share_name).await?;
 
@@ -558,12 +557,7 @@ fn normalize_windows_path(path: &str) -> String {
 }
 
 fn powershell(script: &str) -> CommandSpec {
-    CommandSpec::new("powershell.exe").args([
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        script,
-    ])
+    CommandSpec::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", script])
 }
 
 fn require_success(spec: &CommandSpec, output: &CommandOutput) -> Result<(), WindowsSmbError> {
