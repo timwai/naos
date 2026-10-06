@@ -1214,8 +1214,7 @@ mod tests {
     #[tokio::test]
     async fn wire_getattr_returns_nfs3_ok_for_registered_root_handle() {
         let temp = tempfile::tempdir().unwrap();
-        let (service, handles, export) =
-            service(temp.path(), NfsBindingPermission::ReadWrite);
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadWrite);
         let handle = handles.issue_root(&export);
 
         let mut args = XdrWriter::new();
