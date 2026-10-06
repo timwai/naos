@@ -1,4 +1,4 @@
-use std::{net::IpAddr, sync::Arc};
+use std::{io, net::IpAddr, sync::Arc};
 
 use naos_core::nfs::{
     NfsBindingLevel, NfsBindingRepository, NfsExport, NfsIdentityError, NfsRepositoryError,
@@ -13,6 +13,7 @@ use crate::{
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
         accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch,
     },
+    transport::{read_record, write_record},
     xdr::{XdrReader, XdrWriter},
 };
 
@@ -146,6 +147,24 @@ fn parse_export_name(path: &str) -> Result<&str, MountError> {
         return Err(MountError::InvalidPath);
     }
     Ok(name)
+}
+
+pub async fn serve_mount_stream<S>(
+    stream: &mut S,
+    client_ip: IpAddr,
+    service: &MountService,
+) -> io::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    while let Some(request) = read_record(stream).await? {
+        let response = dispatch_mount_rpc(service, client_ip, &request).await;
+        if response.is_empty() {
+            return Ok(());
+        }
+        write_record(stream, &response).await?;
+    }
+    Ok(())
 }
 
 pub async fn dispatch_mount_rpc(
