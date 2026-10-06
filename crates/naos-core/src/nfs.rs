@@ -7,6 +7,8 @@ use std::{
 
 use async_trait::async_trait;
 use thiserror::Error;
+
+use crate::acl::AclRule;
 use ulid::Ulid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,6 +265,19 @@ pub trait NfsBindingRepository: Send + Sync {
         share_id: &str,
         binding_id: &str,
     ) -> Result<bool, NfsRepositoryError>;
+}
+
+#[async_trait]
+pub trait NfsAccessRepository: Send + Sync {
+    async fn list_nfs_acl_rules(
+        &self,
+        share_id: &str,
+    ) -> Result<Vec<AclRule>, NfsRepositoryError>;
+
+    async fn nfs_group_ids_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<String>, NfsRepositoryError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,8 +1,13 @@
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use naos_core::nfs::{
-    NfsBinding, NfsBindingPermission, NfsBindingRepository, NfsCidr, NfsExport, NfsRepositoryError,
+use naos_core::{
+    acl::{AclRule, Permission, Subject},
+    nfs::{
+        NfsAccessRepository, NfsBinding, NfsBindingPermission, NfsBindingRepository, NfsCidr,
+        NfsExport, NfsRepositoryError,
+    },
+    path::RelativePath,
 };
 use sqlx::Row;
 
@@ -148,6 +153,74 @@ impl NfsBindingRepository for Store {
             .map_err(store_error)?
             .rows_affected();
         Ok(deleted > 0)
+    }
+}
+
+#[async_trait]
+impl NfsAccessRepository for Store {
+    async fn list_nfs_acl_rules(
+        &self,
+        share_id: &str,
+    ) -> Result<Vec<AclRule>, NfsRepositoryError> {
+        let rows = sqlx::query(
+            "SELECT rel_path, subject_type, subject_id, perm, inherit
+             FROM share_acl
+             WHERE share_id = ?
+             ORDER BY rel_path, subject_type, subject_id",
+        )
+        .bind(share_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let rel_path: String = row.try_get("rel_path").map_err(store_error)?;
+                let subject_type: String = row.try_get("subject_type").map_err(store_error)?;
+                let subject_id: String = row.try_get("subject_id").map_err(store_error)?;
+                let permission: String = row.try_get("perm").map_err(store_error)?;
+
+                let subject = match subject_type.as_str() {
+                    "user" => Subject::User(subject_id),
+                    "group" => Subject::Group(subject_id),
+                    _ => return Err(NfsRepositoryError::Unavailable),
+                };
+                let permission = match permission.as_str() {
+                    "none" => Permission::None,
+                    "ro" => Permission::ReadOnly,
+                    "rw" => Permission::ReadWrite,
+                    _ => return Err(NfsRepositoryError::Unavailable),
+                };
+
+                Ok(AclRule {
+                    path: RelativePath::parse(&rel_path)
+                        .map_err(|_| NfsRepositoryError::Unavailable)?,
+                    subject,
+                    permission,
+                    inherit: row.try_get("inherit").map_err(store_error)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn nfs_group_ids_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<String>, NfsRepositoryError> {
+        let rows = sqlx::query(
+            "SELECT group_id
+             FROM group_members
+             WHERE user_id = ?
+             ORDER BY group_id",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_error)?;
+
+        rows.into_iter()
+            .map(|row| row.try_get("group_id").map_err(store_error))
+            .collect()
     }
 }
 

@@ -7,7 +7,7 @@ use naos_core::nfs::{
 use thiserror::Error;
 
 use crate::{
-    handle::FileHandleCodec,
+    handle::FileHandleTable,
     rpc::{
         AUTH_NONE, AUTH_SYS, RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
@@ -73,15 +73,19 @@ impl From<NfsIdentityError> for MountError {
 #[derive(Clone)]
 pub struct MountService {
     repository: Arc<dyn NfsBindingRepository>,
-    handles: FileHandleCodec,
+    handles: FileHandleTable,
 }
 
 impl MountService {
     pub fn new(repository: Arc<dyn NfsBindingRepository>, handle_secret: [u8; 32]) -> Self {
         Self {
             repository,
-            handles: FileHandleCodec::new(handle_secret),
+            handles: FileHandleTable::new(handle_secret),
         }
+    }
+
+    pub fn handle_table(&self) -> FileHandleTable {
+        self.handles.clone()
     }
 
     pub async fn mount(

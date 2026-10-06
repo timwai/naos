@@ -1,5 +1,13 @@
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
+
 use hmac::{Hmac, Mac};
-use naos_core::nfs::NfsExport;
+use naos_core::{
+    nfs::NfsExport,
+    path::RelativePath,
+};
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -17,6 +25,24 @@ type HmacSha256 = Hmac<Sha256>;
 #[derive(Clone)]
 pub struct FileHandleCodec {
     secret: [u8; 32],
+}
+
+#[derive(Clone)]
+pub struct FileHandleTable {
+    codec: FileHandleCodec,
+    entries: Arc<RwLock<HashMap<[u8; NONCE_BYTES], HandleTarget>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HandleTarget {
+    share_id: String,
+    relative_path: RelativePath,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedFileHandle {
+    pub export: NfsExport,
+    pub relative_path: RelativePath,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +66,10 @@ impl FileHandleCodec {
     }
 
     pub fn issue_root(&self, export: &NfsExport) -> Vec<u8> {
+        self.issue_path(export, &RelativePath::root())
+    }
+
+    pub fn issue_path(&self, export: &NfsExport, relative_path: &RelativePath) -> Vec<u8> {
         let mut nonce = [0u8; NONCE_BYTES];
         OsRng.fill_bytes(&mut nonce);
 
@@ -49,7 +79,7 @@ impl FileHandleCodec {
         payload.extend_from_slice(&export.generation.to_be_bytes());
         payload.extend_from_slice(&nonce);
 
-        let tag = self.tag(&payload, export);
+        let tag = self.tag(&payload, export, relative_path);
         payload.extend_from_slice(&tag[..TAG_BYTES]);
         payload
     }
@@ -59,33 +89,31 @@ impl FileHandleCodec {
         handle: &[u8],
         export: &NfsExport,
     ) -> Result<VerifiedRootHandle, FileHandleError> {
-        if handle.len() != HANDLE_BYTES || handle[0] != HANDLE_VERSION {
-            return Err(FileHandleError::Invalid);
-        }
+        self.verify_path(handle, export, &RelativePath::root())
+    }
 
-        let share_hash: [u8; SHARE_HASH_BYTES] = handle[1..1 + SHARE_HASH_BYTES]
-            .try_into()
-            .map_err(|_| FileHandleError::Invalid)?;
-        if share_hash.ct_eq(&share_hash_of_export(export)).unwrap_u8() != 1 {
+    pub fn verify_path(
+        &self,
+        handle: &[u8],
+        export: &NfsExport,
+        relative_path: &RelativePath,
+    ) -> Result<VerifiedRootHandle, FileHandleError> {
+        let parsed = parse_handle(handle)?;
+
+        if parsed
+            .share_hash
+            .ct_eq(&share_hash_of_export(export))
+            .unwrap_u8()
+            != 1
+        {
             return Err(FileHandleError::Stale);
         }
 
-        let generation_offset = 1 + SHARE_HASH_BYTES;
-        let generation = u64::from_be_bytes(
-            handle[generation_offset..generation_offset + 8]
-                .try_into()
-                .map_err(|_| FileHandleError::Invalid)?,
-        );
-        if generation != export.generation {
+        if parsed.generation != export.generation {
             return Err(FileHandleError::Stale);
         }
 
-        let nonce_offset = generation_offset + 8;
-        let nonce: [u8; NONCE_BYTES] = handle[nonce_offset..nonce_offset + NONCE_BYTES]
-            .try_into()
-            .map_err(|_| FileHandleError::Invalid)?;
-
-        let expected = self.tag(&handle[..PAYLOAD_BYTES], export);
+        let expected = self.tag(&handle[..PAYLOAD_BYTES], export, relative_path);
         if expected[..TAG_BYTES]
             .ct_eq(&handle[PAYLOAD_BYTES..])
             .unwrap_u8()
@@ -94,23 +122,111 @@ impl FileHandleCodec {
             return Err(FileHandleError::Invalid);
         }
 
-        Ok(VerifiedRootHandle {
-            share_hash,
-            generation,
-            nonce,
-        })
+        Ok(parsed)
     }
 
-    fn tag(&self, payload: &[u8], export: &NfsExport) -> [u8; 32] {
+    fn tag(
+        &self,
+        payload: &[u8],
+        export: &NfsExport,
+        relative_path: &RelativePath,
+    ) -> [u8; 32] {
         let mut mac = HmacSha256::new_from_slice(&self.secret).expect("fixed HMAC key");
         mac.update(payload);
         mac.update(&filesystem_identity(export));
+        mac.update(relative_path.as_slash_path().as_bytes());
         mac.finalize().into_bytes().into()
+    }
+}
+
+impl FileHandleTable {
+    pub fn new(secret: [u8; 32]) -> Self {
+        Self {
+            codec: FileHandleCodec::new(secret),
+            entries: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub fn issue_root(&self, export: &NfsExport) -> Vec<u8> {
+        self.issue(export, &RelativePath::root())
+    }
+
+    pub fn issue(&self, export: &NfsExport, relative_path: &RelativePath) -> Vec<u8> {
+        loop {
+            let handle = self.codec.issue_path(export, relative_path);
+            let parsed = parse_handle(&handle).expect("newly issued handle is valid");
+            let mut entries = self.entries.write().expect("file handle table lock");
+            if entries.contains_key(&parsed.nonce) {
+                continue;
+            }
+            entries.insert(
+                parsed.nonce,
+                HandleTarget {
+                    share_id: export.id.clone(),
+                    relative_path: relative_path.clone(),
+                },
+            );
+            return handle;
+        }
+    }
+
+    pub fn resolve(
+        &self,
+        handle: &[u8],
+        exports: &[NfsExport],
+    ) -> Result<ResolvedFileHandle, FileHandleError> {
+        let parsed = parse_handle(handle)?;
+        let target = self
+            .entries
+            .read()
+            .map_err(|_| FileHandleError::Invalid)?
+            .get(&parsed.nonce)
+            .cloned()
+            .ok_or(FileHandleError::Stale)?;
+        let export = exports
+            .iter()
+            .find(|export| export.id == target.share_id)
+            .cloned()
+            .ok_or(FileHandleError::Stale)?;
+
+        self.codec
+            .verify_path(handle, &export, &target.relative_path)?;
+
+        Ok(ResolvedFileHandle {
+            export,
+            relative_path: target.relative_path,
+        })
     }
 }
 
 pub fn share_hash_of_export(export: &NfsExport) -> [u8; SHARE_HASH_BYTES] {
     share_hash(&export.id)
+}
+
+fn parse_handle(handle: &[u8]) -> Result<VerifiedRootHandle, FileHandleError> {
+    if handle.len() != HANDLE_BYTES || handle[0] != HANDLE_VERSION {
+        return Err(FileHandleError::Invalid);
+    }
+
+    let share_hash = handle[1..1 + SHARE_HASH_BYTES]
+        .try_into()
+        .map_err(|_| FileHandleError::Invalid)?;
+    let generation_offset = 1 + SHARE_HASH_BYTES;
+    let generation = u64::from_be_bytes(
+        handle[generation_offset..generation_offset + 8]
+            .try_into()
+            .map_err(|_| FileHandleError::Invalid)?,
+    );
+    let nonce_offset = generation_offset + 8;
+    let nonce = handle[nonce_offset..nonce_offset + NONCE_BYTES]
+        .try_into()
+        .map_err(|_| FileHandleError::Invalid)?;
+
+    Ok(VerifiedRootHandle {
+        share_hash,
+        generation,
+        nonce,
+    })
 }
 
 fn share_hash(share_id: &str) -> [u8; SHARE_HASH_BYTES] {
@@ -160,13 +276,39 @@ mod tests {
     }
 
     #[test]
+    fn table_resolves_registered_child_paths() {
+        let table = FileHandleTable::new([8; 32]);
+        let path = RelativePath::parse("/docs/report.txt").unwrap();
+        let handle = table.issue(&export(2), &path);
+        let resolved = table.resolve(&handle, &[export(2)]).unwrap();
+        assert_eq!(resolved.relative_path, path);
+        assert_eq!(resolved.export.id, "shr_media");
+    }
+
+    #[test]
+    fn table_rejects_stale_generation_and_unregistered_handles() {
+        let table = FileHandleTable::new([9; 32]);
+        let handle = table.issue_root(&export(1));
+        assert_eq!(
+            table.resolve(&handle, &[export(2)]),
+            Err(FileHandleError::Stale)
+        );
+
+        let foreign = FileHandleCodec::new([9; 32]).issue_root(&export(1));
+        assert_eq!(
+            table.resolve(&foreign, &[export(1)]),
+            Err(FileHandleError::Stale)
+        );
+    }
+
+    #[test]
     fn tampering_is_rejected() {
-        let codec = FileHandleCodec::new([9; 32]);
-        let mut handle = codec.issue_root(&export(1));
+        let table = FileHandleTable::new([10; 32]);
+        let mut handle = table.issue_root(&export(1));
         let last = handle.len() - 1;
         handle[last] ^= 1;
         assert_eq!(
-            codec.verify_root(&handle, &export(1)),
+            table.resolve(&handle, &[export(1)]),
             Err(FileHandleError::Invalid)
         );
     }
