@@ -184,11 +184,7 @@ impl SmbDetector {
         let installed = Path::new("/usr/sbin/smbd").exists();
         let raw_listener = self
             .runner
-            .run(CommandSpec::new("lsof").args([
-                "-nP",
-                "-iTCP:445",
-                "-sTCP:LISTEN",
-            ]))
+            .run(CommandSpec::new("lsof").args(["-nP", "-iTCP:445", "-sTCP:LISTEN"]))
             .await
             .ok()
             .and_then(|output| parse_macos_listener(&output.stdout));
@@ -477,7 +473,10 @@ fn is_port_445_token(token: &&str) -> bool {
 
 fn extract_number_after(value: &str, marker: &str) -> Option<u32> {
     let tail = value.split_once(marker)?.1;
-    let digits = tail.chars().take_while(char::is_ascii_digit).collect::<String>();
+    let digits = tail
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
     digits.parse().ok()
 }
 
@@ -550,10 +549,9 @@ mod tests {
 
     #[test]
     fn parses_windows_listener_json() {
-        let listener =
-            parse_windows_listener(r#"{"LocalAddress":"::","OwningProcess":4}"#)
-                .unwrap()
-                .unwrap();
+        let listener = parse_windows_listener(r#"{"LocalAddress":"::","OwningProcess":4}"#)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(listener.pid, Some(4));
         assert_eq!(listener.local_address, ":::445");
