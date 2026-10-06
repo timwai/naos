@@ -1094,7 +1094,7 @@ GET /api/v1/audit/export.csv?...same filters...
 | Method | Path | 说明 |
 | --- | --- | --- |
 | GET | `/system/info` | OS、版本、hostname、uptime |
-| GET | `/system/capabilities` | builtin SMB、system SMB fallback、ACL、Kerberos 等能力 |
+| GET | `/system/capabilities` | SMB provider/445 ownership、ACL、Kerberos 等能力 |
 | POST | `/system/doctor` | 深度诊断，Operation |
 | POST | `/system/verify` | desired/applied 一致性巡检，Operation |
 | GET | `/settings` | 可编辑设置 |
@@ -1387,7 +1387,7 @@ validate
 → filesystem capability
 → account changes
 → filesystem ACL
-→ SMB desired state（builtin share registry / listener policy；fallback 为系统 SMB config）
+→ SMB system provider desired state / naos-owned config
 → WebDAV route
 → NFS export/binding
 → protocol reload/hot swap
@@ -2247,12 +2247,12 @@ SMB/WebDAV/NFS 结果必须一致。
 - stale ETag overwrite；
 - duplicate POST；
 - rollback failure；
-- SMB unsigned request when signing required；
-- SMB invalid signature；
-- SMB invalid encrypted transform；
-- SMB auth replay / malformed NTLM；
-- SMB connection/session/open exhaustion；
-- SMB share/path case collision。
+- TCP/445 unknown-listener conflict；
+- unmanaged SMB provider 不被自动停止/覆盖；
+- Samba config injection/escaping；
+- provider command argument injection；
+- provider/service 状态漂移；
+- unmanaged share 同名冲突。
 
 ---
 
