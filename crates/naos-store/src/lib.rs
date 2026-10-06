@@ -205,21 +205,23 @@ impl AuthRepository for Store {
         .await
         .map_err(auth_store_error)?;
 
-        row.map(|row| {
-            let role = parse_role(row.try_get::<String, _>("role")?)?;
+        row.map(|row| -> Result<AuthenticatedSession, AuthRepositoryError> {
+            let role_text = row
+                .try_get::<String, _>("role")
+                .map_err(auth_store_error)?;
+            let role = parse_role(role_text)?;
             Ok(AuthenticatedSession {
-                id: row.try_get("session_id")?,
+                id: row.try_get("session_id").map_err(auth_store_error)?,
                 user: UserSummary {
-                    id: row.try_get("user_id")?,
-                    username: row.try_get("username")?,
+                    id: row.try_get("user_id").map_err(auth_store_error)?,
+                    username: row.try_get("username").map_err(auth_store_error)?,
                     role,
-                    enabled: row.try_get("enabled")?,
+                    enabled: row.try_get("enabled").map_err(auth_store_error)?,
                 },
-                csrf_hash: row.try_get("csrf_hash")?,
+                csrf_hash: row.try_get("csrf_hash").map_err(auth_store_error)?,
             })
         })
         .transpose()
-        .map_err(auth_store_error)
     }
 
     async fn update_session_csrf(
