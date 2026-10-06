@@ -1,6 +1,7 @@
 pub mod credential;
 pub mod linux_samba;
 pub mod reconcile;
+pub mod windows_credential;
 pub mod windows_native;
 pub mod windows_reconcile;
 
@@ -17,3 +18,7 @@ pub use windows_native::{
     WindowsShareState, WindowsSmbAdapter, WindowsSmbError, WindowsVerifyReport,
 };
 pub use windows_reconcile::WindowsShareReconcileDriver;
+
+pub use windows_credential::{
+    WindowsSmbCredentialError, WindowsSmbCredentialManager, WindowsSmbCredentialResult,
+};
