@@ -36,10 +36,7 @@ impl SystemGssHandshakeProvider {
             return Err(SystemGssProviderError::EmptyServicePrincipal);
         }
 
-        let service_name = Name::new(
-            service_principal.as_bytes(),
-            Some(GSS_NT_KRB5_PRINCIPAL),
-        )?;
+        let service_name = Name::new(service_principal.as_bytes(), Some(GSS_NT_KRB5_PRINCIPAL))?;
         let service_name = service_name.canonicalize(Some(GSS_MECH_KRB5))?;
         let mechanisms = OidSet::singleton(GSS_MECH_KRB5)?;
         let credential = Cred::acquire(
@@ -136,11 +133,7 @@ impl RpcSecGssSecurityContext for SystemGssSecurityContext {
         &self.principal
     }
 
-    fn verify_mic(
-        &self,
-        message: &[u8],
-        mic: &[u8],
-    ) -> Result<(), RpcSecGssSecurityError> {
+    fn verify_mic(&self, message: &[u8], mic: &[u8]) -> Result<(), RpcSecGssSecurityError> {
         let mut context = self
             .context
             .lock()
