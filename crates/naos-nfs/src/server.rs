@@ -332,6 +332,7 @@ mod tests {
         .unwrap();
         let nfs_address = server.nfs_address().unwrap();
         let mount_address = server.mount_address().unwrap();
+        let nlm_address = server.nlm_address().unwrap();
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let server_task = tokio::spawn(server.run(shutdown_rx));
@@ -349,6 +350,13 @@ mod tests {
         assert_rpc_success_prefix(&getattr_reply, 42);
         let mut reader = XdrReader::new(&getattr_reply[24..]);
         assert_eq!(reader.u32().unwrap(), 0);
+
+        let mut nlm_stream = TcpStream::connect(nlm_address).await.unwrap();
+        let nlm_call = rpc_call(43, NLM_PROGRAM, NLM_VERSION, 0, &[]);
+        write_record(&mut nlm_stream, &nlm_call).await.unwrap();
+        let nlm_reply = read_record(&mut nlm_stream).await.unwrap().unwrap();
+        assert_rpc_success_prefix(&nlm_reply, 43);
+        assert_eq!(nlm_reply.len(), 24);
 
         shutdown_tx.send(true).unwrap();
         server_task.await.unwrap().unwrap();
