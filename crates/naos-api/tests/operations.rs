@@ -784,6 +784,7 @@ async fn file_api_reuses_acl_and_safe_paths_for_browse_download_move_and_delete(
     assert_eq!(listing.status(), StatusCode::OK);
     let listing = json_body(listing).await;
     assert_eq!(listing["path"], "/");
+    assert_eq!(listing["effective_permission"], "rw");
     assert_eq!(listing["entries"][0]["name"], "notes.txt");
     assert_eq!(listing["entries"][0]["effective_permission"], "rw");
 
@@ -802,6 +803,46 @@ async fn file_api_reuses_acl_and_safe_paths_for_browse_download_move_and_delete(
         .unwrap();
     assert_eq!(mkdir.status(), StatusCode::CREATED);
     assert!(share_root.join("new-dir").is_dir());
+
+    let mut upload_request = Request::builder()
+        .method(Method::POST)
+        .uri(format!(
+            "/api/v1/shares/{share_id}/files/upload?path=%2Fuploaded.txt"
+        ))
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .header(COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from("streamed upload"))
+        .unwrap();
+    upload_request.extensions_mut().insert(ConnectInfo(peer));
+    let uploaded = app.clone().oneshot(upload_request).await.unwrap();
+    assert_eq!(uploaded.status(), StatusCode::CREATED);
+    assert_eq!(
+        tokio::fs::read(share_root.join("uploaded.txt"))
+            .await
+            .unwrap(),
+        b"streamed upload"
+    );
+
+    let mut replace_request = Request::builder()
+        .method(Method::POST)
+        .uri(format!(
+            "/api/v1/shares/{share_id}/files/upload?path=%2Fuploaded.txt"
+        ))
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .header(COOKIE, &cookie)
+        .header("x-csrf-token", &csrf)
+        .body(Body::from("replacement"))
+        .unwrap();
+    replace_request.extensions_mut().insert(ConnectInfo(peer));
+    let replaced = app.clone().oneshot(replace_request).await.unwrap();
+    assert_eq!(replaced.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        tokio::fs::read(share_root.join("uploaded.txt"))
+            .await
+            .unwrap(),
+        b"replacement"
+    );
 
     let moved = app
         .clone()

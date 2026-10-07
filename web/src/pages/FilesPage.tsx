@@ -14,6 +14,7 @@ import {
   listDirectory,
   listFileShares,
   moveFile,
+  uploadFile,
 } from "../lib/api/client";
 import { queryKeys } from "../lib/api/queryKeys";
 
@@ -143,6 +144,20 @@ export function FilesPage() {
     onSuccess: refreshDirectory,
   });
 
+  const upload = useMutation({
+    mutationFn: async (file: File) => {
+      if (!selectedShare) {
+        throw new Error("尚未选择共享");
+      }
+      await uploadFile(
+        selectedShare.id,
+        joinPath(currentPath, file.name),
+        file,
+      );
+    },
+    onSuccess: refreshDirectory,
+  });
+
   const download = useMutation({
     mutationFn: async ({ path, name }: { path: string; name: string }) => {
       if (!selectedShare) {
@@ -174,7 +189,9 @@ export function FilesPage() {
     ];
   }, [currentPath, selectedShare?.name]);
 
-  const canWrite = selectedShare?.effective_permission === "rw";
+  const canWrite =
+    (directory.data?.effective_permission ??
+      selectedShare?.effective_permission) === "rw";
 
   if (shares.isPending) {
     return <div className="center-state">正在加载可访问共享…</div>;
@@ -237,21 +254,43 @@ export function FilesPage() {
               ))}
             </div>
 
-            <div className="files-create-folder">
-              <input
+            <div className="files-write-actions">
+              <label
+                className={
+                  canWrite && !upload.isPending
+                    ? "button secondary file-upload-control"
+                    : "button secondary file-upload-control disabled"
+                }
+              >
+                {upload.isPending ? "上传中…" : "上传文件"}
+                <input
+                  type="file"
+                  disabled={!canWrite || upload.isPending}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    if (file) {
+                      upload.mutate(file);
+                    }
+                  }}
+                />
+              </label>
+              <div className="files-create-folder">
+                <input
                 value={newFolderName}
                 onChange={(event) => setNewFolderName(event.target.value)}
                 placeholder="新目录名称"
                 disabled={!canWrite || mkdir.isPending}
               />
-              <button
-                className="button primary"
-                type="button"
-                disabled={!canWrite || !newFolderName.trim() || mkdir.isPending}
-                onClick={() => mkdir.mutate()}
-              >
-                {mkdir.isPending ? "创建中…" : "新建目录"}
-              </button>
+                <button
+                  className="button primary"
+                  type="button"
+                  disabled={!canWrite || !newFolderName.trim() || mkdir.isPending}
+                  onClick={() => mkdir.mutate()}
+                >
+                  {mkdir.isPending ? "创建中…" : "新建目录"}
+                </button>
+              </div>
             </div>
           </article>
 
@@ -263,6 +302,9 @@ export function FilesPage() {
           )}
           {rename.isError && (
             <div className="error-box">{errorMessage(rename.error)}</div>
+          )}
+          {upload.isError && (
+            <div className="error-box">{errorMessage(upload.error)}</div>
           )}
           {download.isError && (
             <div className="error-box">{errorMessage(download.error)}</div>
@@ -393,7 +435,7 @@ export function FilesPage() {
 
           {!canWrite && (
             <div className="inline-state files-readonly-note">
-              当前共享根权限为只读；后端仍会对每个子路径重新计算 ACL。
+              当前目录权限为只读；后端仍会对每个子路径重新计算 ACL。
             </div>
           )}
         </>

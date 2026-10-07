@@ -259,6 +259,39 @@ export async function deleteFile(shareId: string, path: string) {
   );
 }
 
+export async function uploadFile(
+  shareId: string,
+  path: string,
+  file: File,
+) {
+  const params = new URLSearchParams({ path });
+  const headers = new Headers({
+    "content-type": file.type || "application/octet-stream",
+  });
+  if (csrfToken) {
+    headers.set("x-csrf-token", csrfToken);
+  }
+
+  const response = await fetch(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/files/upload?${params.toString()}`,
+    {
+      method: "POST",
+      headers,
+      credentials: "include",
+      body: file,
+    },
+  );
+  if (!response.ok) {
+    let body: ApiErrorBody | null = null;
+    try {
+      body = (await response.json()) as ApiErrorBody;
+    } catch {
+      body = null;
+    }
+    throw new ApiError(response.status, body);
+  }
+}
+
 export async function downloadFile(shareId: string, path: string) {
   const params = new URLSearchParams({ path });
   const response = await fetch(

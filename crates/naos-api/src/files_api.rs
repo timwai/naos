@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     body::{Body, Bytes},
-    extract::{Extension, Path, Query, State},
+    extract::{Extension, Path, Query, Request, State},
     http::{
         HeaderValue, StatusCode,
         header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
@@ -16,12 +16,13 @@ use naos_contract::{
         FileSharesResponse, MoveFileRequest,
     },
 };
+use http_body_util::BodyExt;
 use naos_core::{
     auth::AuthenticatedSession,
     files::{FileDirectoryListing, FileServiceError},
 };
 use serde::Deserialize;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use utoipa::OpenApi;
 
 use super::{ApiError, AppState};
@@ -40,6 +41,7 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route("/shares/{share_id}/directories", post(create_directory))
         .route("/shares/{share_id}/files/move", post(move_entry))
+        .route("/shares/{share_id}/files/upload", post(upload_file))
         .route("/shares/{share_id}/files/download", get(download_file))
 }
 
@@ -167,6 +169,71 @@ async fn move_entry(
 }
 
 #[utoipa::path(
+    post,
+    path = "/api/v1/shares/{share_id}/files/upload",
+    params(
+        ("share_id" = String, Path, description = "Share ID"),
+        ("path" = String, Query, description = "Share-relative destination file path")
+    ),
+    responses(
+        (status = 201, description = "File created"),
+        (status = 204, description = "Existing file replaced"),
+        (status = 400, body = ErrorResponse),
+        (status = 401, body = ErrorResponse),
+        (status = 403, body = ErrorResponse),
+        (status = 404, body = ErrorResponse),
+        (status = 422, body = ErrorResponse)
+    ),
+    tag = "files"
+)]
+async fn upload_file(
+    State(state): State<AppState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Path(share_id): Path<String>,
+    Query(query): Query<FilePathQuery>,
+    request: Request,
+) -> Result<StatusCode, ApiError> {
+    let path = query
+        .path
+        .as_deref()
+        .ok_or_else(|| ApiError::validation("path", "必须提供上传目标相对路径"))?;
+    let mut upload = state
+        .files
+        .begin_upload(&session.user.id, &share_id, path)
+        .await?;
+    let replaced = upload.replace_existing();
+    let mut body = request.into_body();
+
+    while let Some(frame) = body.frame().await {
+        let frame = match frame {
+            Ok(frame) => frame,
+            Err(_) => {
+                upload.abort().await;
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "UPLOAD_BODY_INVALID",
+                    "上传请求体读取失败",
+                ));
+            }
+        };
+
+        if let Ok(data) = frame.into_data()
+            && upload.file_mut().write_all(&data).await.is_err()
+        {
+            upload.abort().await;
+            return Err(ApiError::internal());
+        }
+    }
+
+    upload.commit().await?;
+    Ok(if replaced {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::CREATED
+    })
+}
+
+#[utoipa::path(
     delete,
     path = "/api/v1/shares/{share_id}/files",
     params(
@@ -275,6 +342,7 @@ async fn download_file(
 fn listing_dto(listing: FileDirectoryListing) -> FileDirectoryResponse {
     FileDirectoryResponse {
         path: listing.path,
+        effective_permission: listing.effective_permission.as_str().to_owned(),
         entries: listing
             .entries
             .into_iter()
@@ -323,6 +391,7 @@ impl From<FileServiceError> for ApiError {
         list_directory,
         create_directory,
         move_entry,
+        upload_file,
         delete_entry,
         download_file
     ),

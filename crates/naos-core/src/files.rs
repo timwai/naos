@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::fs;
+use ulid::Ulid;
 
 use crate::{
     acl::{AclEngine, AclRule, FileOperation, Permission, Principal},
@@ -59,6 +60,7 @@ pub struct FileEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileDirectoryListing {
     pub path: String,
+    pub effective_permission: Permission,
     pub entries: Vec<FileEntry>,
 }
 
@@ -67,6 +69,48 @@ pub struct FileDownload {
     pub path: PathBuf,
     pub len: u64,
     pub file_name: String,
+}
+
+pub struct FileUpload {
+    file: fs::File,
+    temp_path: PathBuf,
+    target_path: PathBuf,
+    replace_existing: bool,
+}
+
+impl FileUpload {
+    pub fn file_mut(&mut self) -> &mut fs::File {
+        &mut self.file
+    }
+
+    pub const fn replace_existing(&self) -> bool {
+        self.replace_existing
+    }
+
+    pub async fn commit(mut self) -> Result<(), FileServiceError> {
+        self.file.sync_all().await.map_err(|_| FileServiceError::Io)?;
+        drop(self.file);
+
+        #[cfg(target_os = "windows")]
+        if self.replace_existing {
+            if let Err(error) = fs::remove_file(&self.target_path).await {
+                let _ = fs::remove_file(&self.temp_path).await;
+                return Err(map_io_not_found(error));
+            }
+        }
+
+        if fs::rename(&self.temp_path, &self.target_path).await.is_err() {
+            let _ = fs::remove_file(&self.temp_path).await;
+            return Err(FileServiceError::Io);
+        }
+
+        Ok(())
+    }
+
+    pub async fn abort(self) {
+        drop(self.file);
+        let _ = fs::remove_file(self.temp_path).await;
+    }
 }
 
 #[derive(Debug, Error)]
@@ -235,6 +279,7 @@ impl FileService {
 
         Ok(FileDirectoryListing {
             path: relative.as_slash_path(),
+            effective_permission: acl.evaluate(principal, &relative),
             entries,
         })
     }
@@ -269,6 +314,56 @@ impl FileService {
             path: target,
             len: metadata.len(),
             file_name: relative.file_name().unwrap_or("download").to_owned(),
+        })
+    }
+
+    pub async fn begin_upload(
+        &self,
+        user_id: &str,
+        share_id: &str,
+        rel_path: &str,
+    ) -> Result<FileUpload, FileServiceError> {
+        let relative = parse_non_root_path(rel_path)?;
+        let (share, acl, groups) = self.context(user_id, share_id).await?;
+        let group_refs = groups.iter().map(String::as_str).collect::<Vec<_>>();
+        let principal = Principal {
+            user_id,
+            group_ids: &group_refs,
+        };
+
+        if !acl.authorize(principal, &relative, FileOperation::Upload) {
+            return Err(FileServiceError::Forbidden);
+        }
+
+        let target_path = resolver(&share)?
+            .resolve_for_create(&relative)
+            .map_err(map_path_error)?;
+        let existing = fs::symlink_metadata(&target_path).await.ok();
+        if existing.as_ref().is_some_and(|metadata| metadata.is_dir()) {
+            return Err(validation("path", "上传目标不能是目录"));
+        }
+        if existing.as_ref().is_some_and(|metadata| {
+            !metadata.is_file() && !metadata.file_type().is_symlink()
+        }) {
+            return Err(validation("path", "上传目标必须是普通文件路径"));
+        }
+
+        let parent = target_path
+            .parent()
+            .ok_or_else(|| validation("path", "上传目标父目录无效"))?;
+        let temp_path = parent.join(format!(".naos-upload-{}", Ulid::new()));
+        let file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp_path)
+            .await
+            .map_err(|_| FileServiceError::Io)?;
+
+        Ok(FileUpload {
+            file,
+            temp_path,
+            target_path,
+            replace_existing: existing.is_some(),
         })
     }
 

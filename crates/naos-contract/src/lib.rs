@@ -354,6 +354,7 @@ pub mod files {
     #[derive(Debug, Clone, Serialize, ToSchema)]
     pub struct FileDirectoryResponse {
         pub path: String,
+        pub effective_permission: String,
         pub entries: Vec<FileEntryDto>,
     }
 

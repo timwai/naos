@@ -1614,3 +1614,36 @@ select:disabled {
     grid-column: auto;
   }
 }
+
+
+.files-write-actions {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+}
+
+.file-upload-control {
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.file-upload-control input {
+  display: none;
+}
+
+.file-upload-control.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+@media (max-width: 900px) {
+  .files-write-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .files-write-actions .files-create-folder {
+    flex: 1 1 280px;
+  }
+}
