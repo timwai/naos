@@ -642,7 +642,7 @@ mod tests {
         first_task.await.unwrap().unwrap();
 
         let second = NfsServer::bind(
-            repository,
+            repository.clone(),
             NfsServerConfig {
                 listen: "127.0.0.1".parse().unwrap(),
                 nfs_port: 0,
@@ -692,6 +692,35 @@ mod tests {
 
         second_shutdown_tx.send(true).unwrap();
         second_task.await.unwrap().unwrap();
+
+        let third = NfsServer::bind(
+            repository,
+            NfsServerConfig {
+                listen: "127.0.0.1".parse().unwrap(),
+                nfs_port: 0,
+                mount_port: 0,
+                nlm_port: 0,
+                nsm_port: 0,
+                rpcbind_address: None,
+            },
+        )
+        .await
+        .unwrap();
+        let third_nfs = third.nfs_address().unwrap();
+        let third_nsm = third.nsm_address().unwrap();
+        let (third_shutdown_tx, third_shutdown_rx) = watch::channel(false);
+        let third_task = tokio::spawn(third.run(third_shutdown_rx));
+
+        let getattr_reply = rpc_round_trip(third_nfs, getattr_call(68, &child_handle)).await;
+        assert_rpc_success_prefix(&getattr_reply, 68);
+        let mut reader = XdrReader::new(&getattr_reply[24..]);
+        assert_eq!(reader.u32().unwrap(), 0);
+
+        let stat_reply = rpc_round_trip(third_nsm, nsm_stat_call(69, "server.example")).await;
+        assert_eq!(parse_nsm_stat_state(&stat_reply, 69), 7);
+
+        third_shutdown_tx.send(true).unwrap();
+        third_task.await.unwrap().unwrap();
     }
 
     #[tokio::test]
