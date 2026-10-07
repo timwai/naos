@@ -76,6 +76,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p naosd --features windows-sspi --all-targets
+      - run: cargo clippy -p naosd --features windows-sspi --all-targets -- -D warnings
       - run: cargo test -p naos-nfs --features windows-sspi
 
 
