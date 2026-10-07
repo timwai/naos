@@ -565,10 +565,7 @@ impl NlmV4Service {
             };
         }
 
-        let validated = match self
-            .validate_share(client_ip, credential, &share)
-            .await
-        {
+        let validated = match self.validate_share(client_ip, credential, &share).await {
             Ok(validated) => validated,
             Err(status) => {
                 return NlmShareResult {
@@ -1420,11 +1417,7 @@ async fn share_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) 
     accepted_success(call.xid, &encode_share_result(&result))
 }
 
-async fn unshare_reply(
-    service: &NlmV4Service,
-    client_ip: IpAddr,
-    call: &RpcCall,
-) -> Vec<u8> {
+async fn unshare_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
     let mut reader = XdrReader::new(&call.body);
     let cookie = match reader.opaque(MAX_NETOBJ_BYTES) {
         Ok(cookie) => cookie,
@@ -2352,13 +2345,7 @@ mod tests {
         let first = share(handle.clone(), "client-a", 2, 1);
         assert_eq!(
             service
-                .share(
-                    first_ip,
-                    &credential(1000),
-                    vec![1],
-                    first.clone(),
-                    false,
-                )
+                .share(first_ip, &credential(1000), vec![1], first.clone(), false,)
                 .await
                 .status,
             NLM4_GRANTED
@@ -2561,12 +2548,7 @@ mod tests {
         body.opaque(&[10]).unwrap();
         encode_share(&mut body, &requested);
         body.u32(1);
-        let request = rpc_call(
-            92,
-            NLMPROC4_UNSHARE,
-            credential(1000),
-            &body.into_bytes(),
-        );
+        let request = rpc_call(92, NLMPROC4_UNSHARE, credential(1000), &body.into_bytes());
         let reply = dispatch_nlm4_rpc(&service, client_ip, &request).await;
         let mut reader = XdrReader::new(&reply);
         assert_eq!(reader.u32().unwrap(), 92);
@@ -2597,18 +2579,8 @@ mod tests {
         body.u32(4);
         body.u32(1);
         body.u32(0);
-        let request = rpc_call(
-            93,
-            NLMPROC4_SHARE,
-            credential(1000),
-            &body.into_bytes(),
-        );
-        let reply = dispatch_nlm4_rpc(
-            &service,
-            "192.168.1.10".parse().unwrap(),
-            &request,
-        )
-        .await;
+        let request = rpc_call(93, NLMPROC4_SHARE, credential(1000), &body.into_bytes());
+        let reply = dispatch_nlm4_rpc(&service, "192.168.1.10".parse().unwrap(), &request).await;
 
         let mut reader = XdrReader::new(&reply);
         assert_eq!(reader.u32().unwrap(), 93);
