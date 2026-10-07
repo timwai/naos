@@ -10,4 +10,6 @@ pub mod server;
 #[cfg(all(unix, feature = "system-gss"))]
 pub mod system_gss;
 pub mod transport;
+#[cfg(all(windows, feature = "system-gss"))]
+pub mod windows_sspi;
 pub mod xdr;

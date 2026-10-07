@@ -48,3 +48,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 ulid = "1"
 utoipa = { version = "5", features = ["macros"] }
+windows-sys = "0.61.2"

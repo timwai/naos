@@ -27,9 +27,9 @@
 - **SMB 适配**：现阶段不自研 SMB Server；Linux 复用 Samba，Windows 复用系统 SMB Server，macOS 优先复用可管理的系统 SMB provider；启动/Apply 前检测 TCP/445 归属并拒绝未知冲突
 
 
-## 🔐 NFS Kerberos（Unix 可选）
+## 🔐 NFS Kerberos（可选）
 
-Linux / macOS 可使用 `system-gss` feature 将 NFS RPCSEC_GSS 接到系统 Kerberos/GSS：
+Linux / macOS / Windows 可使用 `system-gss` feature 将 NFS RPCSEC_GSS 接到平台 Kerberos provider：
 
 ```bash
 cargo build -p naosd --features system-gss
@@ -38,6 +38,8 @@ NAOS_NFS_KERBEROS_SERVICE_PRINCIPAL='nfs/server.example.com@EXAMPLE.COM' \
 ./target/debug/naosd
 ```
 
-服务 principal 必须能从系统 GSS acceptor 的凭据来源取得对应密钥；MIT/Heimdal 环境可在启动 `naosd` 前通过 `KRB5_KTNAME` 指定 keytab。若配置了 Kerberos principal 但当前构建不支持 system GSS，或 acceptor credential 无法取得，NFS 数据面会拒绝启动而不会降级认证。
+Unix 使用 MIT Kerberos / Heimdal / macOS GSS.framework；服务 principal 必须能从系统 GSS acceptor 的凭据来源取得对应密钥，MIT/Heimdal 可在启动 `naosd` 前通过 `KRB5_KTNAME` 指定 keytab。Unix provider 支持 `krb5` / `krb5i` / `krb5p`，其中 privacy 仅在协商出 `GSS_C_CONF_FLAG` 且 RFC 4121 Wrap token 设置 `Sealed` 标志时启用。Linux CI 会用临时 MIT Kerberos realm/keytab 真正跑过 MOUNT → NFS 的 `krb5i` 与 `krb5p` TCP smoke。
 
-当前 Unix system GSS provider 支持 `krb5` / `krb5i`，并对 Kerberos RFC 4121 Wrap token 支持 `krb5p`：只有协商出 `GSS_C_CONF_FLAG` 且每个 Wrap token 都设置 `Sealed` 标志时才接受 privacy 请求；未加密、旧格式或无法确认 confidentiality 的 token 会 fail-closed。Linux CI 会用临时 MIT Kerberos realm/keytab 真正跑过 MOUNT → NFS 的 `krb5i` 与 `krb5p` RPCSEC_GSS TCP smoke。
+Windows 使用原生 Kerberos SSPI，从运行 `naosd` 的服务/进程安全上下文获取 inbound credential；配置的完整 NFS service principal 必须与完成握手后 SSPI 返回的 server native principal 匹配。当前 Windows provider 已实现 context establishment、client principal 提取和 `MakeSignature/VerifySignature`，因此开放 `krb5` / `krb5i`；`krb5p` 暂时 fail-closed，待 Windows `EncryptMessage/DecryptMessage` 的 confidentiality/QOP 路径完成并经过域环境互操作验证后再启用。Windows CI 会编译、Clippy 并测试该 feature，但真实 AD/Kerberos 域互操作仍是独立 gate。
+
+若配置了 Kerberos principal 但当前构建不支持对应平台的 system GSS，或 acceptor credential 无法取得，NFS 数据面会拒绝启动而不会降级认证。
