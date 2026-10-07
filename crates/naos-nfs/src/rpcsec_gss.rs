@@ -1012,6 +1012,11 @@ mod tests {
     }
 
     #[test]
+    fn gss_no_context_status_matches_rfc2744() {
+        assert_eq!(GSS_S_NO_CONTEXT, 0x0008_0000);
+    }
+
+    #[test]
     fn stateful_acceptor_tracks_continue_context_and_completes_with_same_handle() {
         let acceptor = StatefulRpcSecGssAcceptor::new(Arc::new(FakeHandshakeProvider), 16).unwrap();
 
