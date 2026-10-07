@@ -446,10 +446,10 @@ impl NfsV3Service {
         self.authorize(&context, &context.relative_path, FileOperation::List)
             .await?;
 
-        let directory = resolve_existing(&context)?;
+        let directory = resolve_entry(&context)?;
         let directory_attributes = attributes(&directory).await?;
         if !directory_attributes.is_directory() {
-            return Err(NfsV3Error::Invalid);
+            return Err(NfsV3Error::NotDirectory);
         }
 
         let child = child_path(&context.relative_path, name)?;
@@ -633,7 +633,7 @@ impl NfsV3Service {
         let context = self
             .resolve_handle(client_ip, credential, directory_handle)
             .await?;
-        let directory = resolve_existing(&context)?;
+        let directory = resolve_entry(&context)?;
         let directory_attributes = attributes(&directory).await?;
         if !directory_attributes.is_directory() {
             return Err(NfsV3Error::NotDirectory);
@@ -686,7 +686,7 @@ impl NfsV3Service {
         let context = self
             .resolve_handle(client_ip, credential, directory_handle)
             .await?;
-        let directory = resolve_existing(&context)?;
+        let directory = resolve_entry(&context)?;
         let directory_attributes = attributes(&directory).await?;
         if !directory_attributes.is_directory() {
             return Err(NfsV3Error::NotDirectory);
@@ -753,7 +753,7 @@ impl NfsV3Service {
         let context = self
             .resolve_handle(client_ip, credential, directory_handle)
             .await?;
-        let directory = resolve_existing(&context)?;
+        let directory = resolve_entry(&context)?;
         if !attributes(&directory).await?.is_directory() {
             return Err(NfsV3Error::NotDirectory);
         }
@@ -782,7 +782,7 @@ impl NfsV3Service {
         let context = self
             .resolve_handle(client_ip, credential, directory_handle)
             .await?;
-        let directory = resolve_existing(&context)?;
+        let directory = resolve_entry(&context)?;
         if !attributes(&directory).await?.is_directory() {
             return Err(NfsV3Error::NotDirectory);
         }
@@ -824,8 +824,8 @@ impl NfsV3Service {
             return Err(NfsV3Error::CrossDevice);
         }
 
-        let source_directory = resolve_existing(&source_context)?;
-        let target_directory = resolve_existing(&target_context)?;
+        let source_directory = resolve_entry(&source_context)?;
+        let target_directory = resolve_entry(&target_context)?;
         if !attributes(&source_directory).await?.is_directory()
             || !attributes(&target_directory).await?.is_directory()
         {
@@ -920,7 +920,7 @@ impl NfsV3Service {
             .await?;
         self.authorize(&context, &context.relative_path, FileOperation::List)
             .await?;
-        let directory = resolve_existing(&context)?;
+        let directory = resolve_entry(&context)?;
         let directory_attributes = attributes(&directory).await?;
         if !directory_attributes.is_directory() {
             return Err(NfsV3Error::NotDirectory);
@@ -1030,7 +1030,7 @@ impl NfsV3Service {
             .await?;
         self.authorize(&context, &context.relative_path, FileOperation::List)
             .await?;
-        let directory = resolve_existing(&context)?;
+        let directory = resolve_entry(&context)?;
         let directory_attributes = attributes(&directory).await?;
         if !directory_attributes.is_directory() {
             return Err(NfsV3Error::NotDirectory);
@@ -2775,6 +2775,19 @@ mod tests {
             .unwrap();
         assert!(outside.join("secret.txt").exists());
         assert!(!share.join("escape").exists());
+
+        std::fs::create_dir(share.join("private")).unwrap();
+        std::fs::write(share.join("private").join("hidden.txt"), b"hidden").unwrap();
+        let alias = service
+            .symlink(client_ip, &credential, &root_handle, "alias", "private")
+            .await
+            .unwrap();
+        assert!(matches!(
+            service
+                .lookup(client_ip, &credential, &alias.file_handle, "hidden.txt")
+                .await,
+            Err(NfsV3Error::NotDirectory)
+        ));
     }
 
     #[tokio::test]
