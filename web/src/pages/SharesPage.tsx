@@ -64,7 +64,7 @@ export function SharesPage() {
   });
 
   const create = useMutation({
-    mutationFn: createShare,
+    mutationFn: (input: ShareWriteRequest) => createShare(input),
     onSuccess: (operation) => setOperationId(operation.operation_id),
   });
 
