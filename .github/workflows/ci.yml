@@ -26,6 +26,7 @@ jobs:
         run: |
           @(
             "scripts/ci/windows-nfs-real-smoke.ps1",
+            "scripts/ci/windows-nfs-remote-lock-smoke.ps1",
             "scripts/ci/windows-smb-real-smoke.ps1"
           ) | ForEach-Object {
             [void][scriptblock]::Create((Get-Content -LiteralPath $_ -Raw))
