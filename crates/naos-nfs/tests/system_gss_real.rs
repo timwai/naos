@@ -2,7 +2,7 @@
 
 use std::{
     env, fs,
-    net::TcpListener,
+    net::{SocketAddr, TcpListener},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Arc,
@@ -10,15 +10,24 @@ use std::{
     time::{Duration, Instant},
 };
 
+use async_trait::async_trait;
+
 use libgssapi::{
     context::{ClientCtx, CtxFlags, SecurityContext},
     credential::{Cred, CredUsage},
     name::Name,
     oid::{GSS_MECH_KRB5, GSS_NT_KRB5_PRINCIPAL, OidSet},
 };
+use naos_core::{
+    acl::{AclRule, Permission, Subject},
+    nfs::{NfsAccessRepository, NfsBinding, NfsBindingRepository, NfsExport, NfsRepositoryError},
+    path::RelativePath,
+};
 use naos_nfs::{
+    mount::{MOUNT_PROGRAM, MOUNT_VERSION},
+    nfs3::{NFS_PROGRAM, NFS_VERSION},
     rpc::{
-        AUTH_NONE, GSS_S_COMPLETE, GSS_S_CONTINUE_NEEDED, MAX_AUTH_BYTES, RPCSEC_GSS,
+        AUTH_NONE, GSS_S_COMPLETE, GSS_S_CONTINUE_NEEDED, MAX_AUTH_BYTES, RPC_VERSION, RPCSEC_GSS,
         RPCSEC_GSS_CONTINUE_INIT, RPCSEC_GSS_DATA, RPCSEC_GSS_INIT, RPCSEC_GSS_SVC_INTEGRITY,
         RPCSEC_GSS_SVC_NONE, RPCSEC_GSS_VERSION_1, RpcCall, RpcCredential, RpcSecGssCredential,
         RpcSecGssInitResult, RpcVerifier, decode_rpcsec_gss_init_result,
@@ -30,9 +39,110 @@ use naos_nfs::{
         RpcSecGssDataError, RpcSecGssRegistryError, RpcSecGssSecurityError,
         StatefulRpcSecGssAcceptor, accept_context_call, authenticate_data_call,
     },
+    server::{NfsServer, NfsServerConfig},
     system_gss::SystemGssHandshakeProvider,
-    xdr::XdrReader,
+    transport::{read_record, write_record},
+    xdr::{XdrReader, XdrWriter},
 };
+use tokio::{net::TcpStream, sync::watch};
+
+struct FakeRepository {
+    export: NfsExport,
+    rules: Vec<AclRule>,
+    principal: String,
+}
+
+#[async_trait]
+impl NfsBindingRepository for FakeRepository {
+    async fn find_enabled_nfs_export_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<NfsExport>, NfsRepositoryError> {
+        Ok((self.export.name == name).then(|| self.export.clone()))
+    }
+
+    async fn list_enabled_nfs_exports(&self) -> Result<Vec<NfsExport>, NfsRepositoryError> {
+        Ok(vec![self.export.clone()])
+    }
+
+    async fn nfs_share_exists(&self, share_id: &str) -> Result<bool, NfsRepositoryError> {
+        Ok(self.export.id == share_id)
+    }
+
+    async fn nfs_user_exists(&self, user_id: &str) -> Result<bool, NfsRepositoryError> {
+        Ok(user_id == "usr_alice")
+    }
+
+    async fn resolve_nfs_krb_principal(
+        &self,
+        principal: &str,
+    ) -> Result<Option<String>, NfsRepositoryError> {
+        Ok((principal == self.principal).then(|| "usr_alice".to_owned()))
+    }
+
+    async fn list_nfs_bindings(
+        &self,
+        _share_id: &str,
+    ) -> Result<Vec<NfsBinding>, NfsRepositoryError> {
+        Ok(Vec::new())
+    }
+
+    async fn insert_nfs_binding(&self, _binding: &NfsBinding) -> Result<(), NfsRepositoryError> {
+        Err(NfsRepositoryError::Unavailable)
+    }
+
+    async fn update_nfs_binding(&self, _binding: &NfsBinding) -> Result<bool, NfsRepositoryError> {
+        Err(NfsRepositoryError::Unavailable)
+    }
+
+    async fn delete_nfs_binding(
+        &self,
+        _share_id: &str,
+        _binding_id: &str,
+    ) -> Result<bool, NfsRepositoryError> {
+        Err(NfsRepositoryError::Unavailable)
+    }
+}
+
+#[async_trait]
+impl NfsAccessRepository for FakeRepository {
+    async fn list_nfs_acl_rules(&self, share_id: &str) -> Result<Vec<AclRule>, NfsRepositoryError> {
+        Ok(if self.export.id == share_id {
+            self.rules.clone()
+        } else {
+            Vec::new()
+        })
+    }
+
+    async fn nfs_group_ids_for_user(
+        &self,
+        _user_id: &str,
+    ) -> Result<Vec<String>, NfsRepositoryError> {
+        Ok(Vec::new())
+    }
+}
+
+fn repository(root: &Path, principal: &str) -> Arc<FakeRepository> {
+    let export = NfsExport {
+        id: "shr_media".to_owned(),
+        name: "media".to_owned(),
+        canonical_path: fs::canonicalize(root)
+            .expect("canonicalize NFS export root")
+            .to_string_lossy()
+            .into_owned(),
+        generation: 1,
+    };
+    Arc::new(FakeRepository {
+        rules: vec![AclRule {
+            path: RelativePath::root(),
+            subject: Subject::User("usr_alice".to_owned()),
+            permission: Permission::ReadWrite,
+            inherit: true,
+        }],
+        export,
+        principal: principal.to_owned(),
+    })
+}
 
 struct TestKdc {
     _tempdir: tempfile::TempDir,
@@ -467,6 +577,324 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
     wire_client
         .verify_mic(&reply_plaintext, &decoded_reply.checksum)
         .expect("verify real integrity reply checksum");
+
+    let export_root = tempfile::tempdir().expect("create real NFS export root");
+    let server_provider = Arc::new(
+        SystemGssHandshakeProvider::new(&service_principal)
+            .expect("acquire TCP server GSS credential"),
+    );
+    let server_acceptor = Arc::new(
+        StatefulRpcSecGssAcceptor::new(server_provider, 64)
+            .expect("configure TCP RPCSEC_GSS acceptor"),
+    );
+    let server = NfsServer::bind_with_rpcsec_gss(
+        repository(export_root.path(), &client_principal),
+        NfsServerConfig {
+            listen: "127.0.0.1".parse().expect("loopback address"),
+            nfs_port: 0,
+            mount_port: 0,
+            nlm_port: 0,
+            nsm_port: 0,
+            rpcbind_address: None,
+        },
+        server_acceptor,
+    )
+    .await
+    .expect("bind real Kerberos NFS server");
+    let mount_address = server.mount_address().expect("MOUNT address");
+    let nfs_address = server.nfs_address().expect("NFS address");
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let server_task = tokio::spawn(server.run(shutdown_rx));
+
+    let tcp_target = Name::new(service_principal.as_bytes(), Some(GSS_NT_KRB5_PRINCIPAL))
+        .expect("import TCP service principal")
+        .canonicalize(Some(GSS_MECH_KRB5))
+        .expect("canonicalize TCP service principal");
+    let tcp_client_name = Name::new(client_principal.as_bytes(), Some(GSS_NT_KRB5_PRINCIPAL))
+        .expect("import TCP client principal")
+        .canonicalize(Some(GSS_MECH_KRB5))
+        .expect("canonicalize TCP client principal");
+    let tcp_mechanisms = OidSet::singleton(GSS_MECH_KRB5).expect("TCP Kerberos mechanism");
+    let tcp_client_credential = Cred::acquire_with_password(
+        Some(&tcp_client_name),
+        "testpass",
+        None,
+        CredUsage::Initiate,
+        Some(&tcp_mechanisms),
+    )
+    .expect("acquire TCP client credential");
+    let mut tcp_client = ClientCtx::new(
+        Some(tcp_client_credential),
+        tcp_target,
+        CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_INTEG_FLAG,
+        Some(GSS_MECH_KRB5),
+    );
+
+    let mut tcp_handle = Vec::new();
+    let mut tcp_server_token: Option<Vec<u8>> = None;
+    let mut tcp_gss_proc = RPCSEC_GSS_INIT;
+    let mut tcp_complete = false;
+
+    for step in 1..=8 {
+        let client_output = tcp_client
+            .step(tcp_server_token.as_deref(), None)
+            .unwrap_or_else(|error| panic!("TCP client GSS step {step}: {error}"));
+        tcp_server_token = None;
+
+        let Some(client_token) = client_output else {
+            if tcp_client.is_complete() && tcp_complete {
+                break;
+            }
+            panic!("TCP client completed before server context creation");
+        };
+
+        let xid = 300 + step;
+        let request = rpcsec_gss_context_wire_call(
+            xid,
+            MOUNT_PROGRAM,
+            MOUNT_VERSION,
+            tcp_gss_proc,
+            &tcp_handle,
+            &client_token,
+        );
+        let reply = rpc_round_trip(mount_address, request).await;
+        let (verifier, result) = decode_context_reply(xid, &reply);
+        assert_eq!(result.seq_window, 64);
+        if tcp_handle.is_empty() {
+            assert!(!result.handle.is_empty());
+        } else {
+            assert_eq!(result.handle, tcp_handle, "TCP RPCSEC_GSS handle changed");
+        }
+        tcp_handle = result.handle.clone();
+
+        match result.gss_major {
+            GSS_S_CONTINUE_NEEDED => {
+                assert_eq!(verifier.flavor, AUTH_NONE);
+                assert!(verifier.body.is_empty());
+                tcp_server_token = Some(result.token);
+                tcp_gss_proc = RPCSEC_GSS_CONTINUE_INIT;
+            }
+            GSS_S_COMPLETE => {
+                if !result.token.is_empty() {
+                    let final_output = tcp_client
+                        .step(Some(&result.token), None)
+                        .unwrap_or_else(|error| panic!("TCP final client GSS step: {error}"));
+                    assert!(final_output.is_none());
+                }
+                assert!(tcp_client.is_complete());
+                tcp_client
+                    .verify_mic(&rpcsec_gss_u32_mic_input(result.seq_window), &verifier.body)
+                    .expect("verify TCP init reply verifier");
+                tcp_complete = true;
+                break;
+            }
+            major => panic!(
+                "TCP RPCSEC_GSS context creation failed: major=0x{major:08x} minor={}",
+                result.gss_minor
+            ),
+        }
+    }
+    assert!(tcp_complete, "TCP RPCSEC_GSS context did not complete");
+
+    let mut mount_arguments = XdrWriter::new();
+    mount_arguments.string("/media").expect("encode MOUNT path");
+    let mount_request = rpcsec_gss_wire_data_call(
+        &mut tcp_client,
+        400,
+        MOUNT_PROGRAM,
+        MOUNT_VERSION,
+        1,
+        1,
+        RPCSEC_GSS_SVC_NONE,
+        &tcp_handle,
+        &mount_arguments.into_bytes(),
+    );
+    let mount_reply = rpc_round_trip(mount_address, mount_request).await;
+    let mount_body =
+        decode_wire_data_reply(&mut tcp_client, 400, 1, RPCSEC_GSS_SVC_NONE, &mount_reply);
+    let mut mount_reader = XdrReader::new(&mount_body);
+    assert_eq!(mount_reader.u32().expect("MOUNT status"), 0);
+    let root_handle = mount_reader.opaque(64).expect("MOUNT root file handle");
+    assert!(!root_handle.is_empty());
+    assert_eq!(
+        mount_reader.u32_array(4).expect("MOUNT auth flavors"),
+        vec![RPCSEC_GSS]
+    );
+    mount_reader.finish().expect("MOUNT reply trailing data");
+
+    let mut getattr_arguments = XdrWriter::new();
+    getattr_arguments
+        .opaque(&root_handle)
+        .expect("encode GETATTR file handle");
+    let getattr_request = rpcsec_gss_wire_data_call(
+        &mut tcp_client,
+        401,
+        NFS_PROGRAM,
+        NFS_VERSION,
+        1,
+        2,
+        RPCSEC_GSS_SVC_INTEGRITY,
+        &tcp_handle,
+        &getattr_arguments.into_bytes(),
+    );
+    let getattr_reply = rpc_round_trip(nfs_address, getattr_request).await;
+    let getattr_body = decode_wire_data_reply(
+        &mut tcp_client,
+        401,
+        2,
+        RPCSEC_GSS_SVC_INTEGRITY,
+        &getattr_reply,
+    );
+    let mut getattr_reader = XdrReader::new(&getattr_body);
+    assert_eq!(getattr_reader.u32().expect("GETATTR status"), 0);
+
+    shutdown_tx.send(true).expect("request NFS server shutdown");
+    server_task
+        .await
+        .expect("join NFS server task")
+        .expect("run NFS server");
+}
+
+async fn rpc_round_trip(address: SocketAddr, request: Vec<u8>) -> Vec<u8> {
+    let mut stream = TcpStream::connect(address)
+        .await
+        .expect("connect RPC server");
+    write_record(&mut stream, &request)
+        .await
+        .expect("write RPC record");
+    read_record(&mut stream)
+        .await
+        .expect("read RPC record")
+        .expect("RPC server closed without reply")
+}
+
+fn rpcsec_gss_context_wire_call(
+    xid: u32,
+    program: u32,
+    version: u32,
+    gss_proc: u32,
+    handle: &[u8],
+    token: &[u8],
+) -> Vec<u8> {
+    let mut writer = XdrWriter::new();
+    writer.u32(xid);
+    writer.u32(0);
+    writer.u32(RPC_VERSION);
+    writer.u32(program);
+    writer.u32(version);
+    writer.u32(0);
+
+    let mut credential = XdrWriter::new();
+    credential.u32(RPCSEC_GSS_VERSION_1);
+    credential.u32(gss_proc);
+    credential.u32(u32::MAX);
+    credential.u32(u32::MAX);
+    credential
+        .opaque(handle)
+        .expect("encode context creation handle");
+    writer.u32(RPCSEC_GSS);
+    writer
+        .opaque(&credential.into_bytes())
+        .expect("encode RPCSEC_GSS context credential");
+
+    writer.u32(AUTH_NONE);
+    writer.opaque(&[]).expect("encode AUTH_NONE verifier");
+
+    let mut request = writer.into_bytes();
+    request.extend_from_slice(&encode_rpcsec_gss_init_token(token).expect("encode GSS init token"));
+    request
+}
+
+fn rpcsec_gss_wire_data_call(
+    client: &mut ClientCtx,
+    xid: u32,
+    program: u32,
+    version: u32,
+    procedure: u32,
+    seq_num: u32,
+    service: u32,
+    handle: &[u8],
+    arguments: &[u8],
+) -> Vec<u8> {
+    let body = match service {
+        RPCSEC_GSS_SVC_NONE => arguments.to_vec(),
+        RPCSEC_GSS_SVC_INTEGRITY => {
+            let plaintext = encode_rpcsec_gss_plaintext(seq_num, arguments);
+            let checksum = client.get_mic(&plaintext).expect("client request body MIC");
+            encode_rpcsec_gss_integrity_body(seq_num, arguments, &checksum)
+                .expect("encode integrity request body")
+        }
+        _ => panic!("unsupported real TCP service {service}"),
+    };
+
+    let mut writer = XdrWriter::new();
+    writer.u32(xid);
+    writer.u32(0);
+    writer.u32(RPC_VERSION);
+    writer.u32(program);
+    writer.u32(version);
+    writer.u32(procedure);
+
+    let mut credential = XdrWriter::new();
+    credential.u32(RPCSEC_GSS_VERSION_1);
+    credential.u32(RPCSEC_GSS_DATA);
+    credential.u32(seq_num);
+    credential.u32(service);
+    credential
+        .opaque(handle)
+        .expect("encode DATA context handle");
+    writer.u32(RPCSEC_GSS);
+    writer
+        .opaque(&credential.into_bytes())
+        .expect("encode DATA credential");
+
+    let header = writer.into_bytes();
+    let header_mic = client.get_mic(&header).expect("client RPC header MIC");
+    let mut verifier = XdrWriter::new();
+    verifier.u32(RPCSEC_GSS);
+    verifier
+        .opaque(&header_mic)
+        .expect("encode RPCSEC_GSS verifier");
+
+    let mut request = header;
+    request.extend_from_slice(&verifier.into_bytes());
+    request.extend_from_slice(&body);
+    request
+}
+
+fn decode_wire_data_reply(
+    client: &mut ClientCtx,
+    xid: u32,
+    seq_num: u32,
+    service: u32,
+    reply: &[u8],
+) -> Vec<u8> {
+    let mut reader = XdrReader::new(reply);
+    assert_eq!(reader.u32().expect("reply xid"), xid);
+    assert_eq!(reader.u32().expect("reply direction"), 1);
+    assert_eq!(reader.u32().expect("accepted reply"), 0);
+    assert_eq!(reader.u32().expect("reply verifier flavor"), RPCSEC_GSS);
+    let verifier = reader
+        .opaque(MAX_AUTH_BYTES)
+        .expect("RPCSEC_GSS reply verifier");
+    client
+        .verify_mic(&rpcsec_gss_u32_mic_input(seq_num), &verifier)
+        .expect("verify RPCSEC_GSS DATA reply verifier");
+    assert_eq!(reader.u32().expect("RPC accepted status"), 0);
+
+    match service {
+        RPCSEC_GSS_SVC_NONE => reader.remaining().to_vec(),
+        RPCSEC_GSS_SVC_INTEGRITY => {
+            let protected = decode_rpcsec_gss_integrity_body(reader.remaining(), seq_num)
+                .expect("decode integrity reply body");
+            let plaintext = encode_rpcsec_gss_plaintext(seq_num, &protected.arguments);
+            client
+                .verify_mic(&plaintext, &protected.checksum)
+                .expect("verify integrity reply body MIC");
+            protected.arguments
+        }
+        _ => panic!("unsupported real TCP reply service {service}"),
+    }
 }
 
 fn context_call(xid: u32, gss_proc: u32, handle: &[u8], token: &[u8]) -> RpcCall {
