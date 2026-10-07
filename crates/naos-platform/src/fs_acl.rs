@@ -42,7 +42,7 @@ impl FsAclSubject {
         }
     }
 
-    #[cfg(any(target_os = "linux", test))]
+    #[cfg(target_os = "linux")]
     fn posix_long_tag(&self) -> &'static str {
         match self {
             Self::User(_) => "user",
