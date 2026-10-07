@@ -50,15 +50,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Install Linux GSS development libraries
+      - name: Install Linux GSS and Kerberos test tools
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libkrb5-dev libclang-dev pkg-config
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            libkrb5-dev libclang-dev pkg-config krb5-kdc krb5-admin-server
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p naosd --features system-gss --all-targets
       - run: cargo clippy -p naosd --features system-gss --all-targets -- -D warnings
       - run: cargo test -p naos-nfs --features system-gss
+      - name: Run real MIT Kerberos GSS smoke
+        if: runner.os == 'Linux'
+        env:
+          NAOS_TEST_KERBEROS_REALM: "1"
+        run: cargo test -p naos-nfs --features system-gss --test system_gss_real -- --nocapture
 
 
   samba-integration:

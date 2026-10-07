@@ -1,0 +1,489 @@
+#![cfg(all(target_os = "linux", feature = "system-gss"))]
+
+use std::{
+    env, fs,
+    net::TcpListener,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
+
+use libgssapi::{
+    context::{ClientCtx, CtxFlags, SecurityContext},
+    credential::{Cred, CredUsage},
+    name::Name,
+    oid::{GSS_MECH_KRB5, GSS_NT_KRB5_PRINCIPAL, OidSet},
+};
+use naos_nfs::{
+    rpc::{
+        AUTH_NONE, GSS_S_COMPLETE, GSS_S_CONTINUE_NEEDED, MAX_AUTH_BYTES, RPCSEC_GSS,
+        RPCSEC_GSS_CONTINUE_INIT, RPCSEC_GSS_INIT, RPCSEC_GSS_VERSION_1, RpcCall, RpcCredential,
+        RpcSecGssCredential, RpcSecGssInitResult, RpcVerifier, decode_rpcsec_gss_init_result,
+        encode_rpcsec_gss_init_token, rpcsec_gss_u32_mic_input,
+    },
+    rpcsec_gss::{
+        RpcSecGssAcceptRequest, RpcSecGssAcceptResult, RpcSecGssAcceptor, RpcSecGssContextRegistry,
+        RpcSecGssSecurityError, StatefulRpcSecGssAcceptor, accept_context_call,
+    },
+    system_gss::SystemGssHandshakeProvider,
+    xdr::XdrReader,
+};
+
+struct TestKdc {
+    _tempdir: tempfile::TempDir,
+    child: Child,
+    config_path: PathBuf,
+    keytab_path: PathBuf,
+    realm: String,
+}
+
+impl TestKdc {
+    fn new() -> Self {
+        let tempdir = tempfile::tempdir().expect("create Kerberos tempdir");
+        let dir = tempdir.path().to_path_buf();
+        let realm = "EXAMPLE.COM".to_owned();
+        let port = free_port();
+        let config_path = dir.join("krb5.conf");
+        let keytab_path = dir.join("naos.keytab");
+
+        fs::write(&config_path, build_config(&dir, port, &realm)).expect("write Kerberos config");
+        fs::write(dir.join("kadm5.acl"), "*/admin@EXAMPLE.COM\t*\n").expect("write Kerberos ACL");
+
+        run_assert(
+            Command::new("kdb5_util")
+                .args(["create", "-s", "-P", "masterpass", "-r", &realm])
+                .env("KRB5_CONFIG", &config_path)
+                .env("KRB5_KDC_PROFILE", &config_path),
+            "create Kerberos database",
+        );
+        run_assert(
+            Command::new("kadmin.local")
+                .args(["-q", "addprinc -pw testpass testuser@EXAMPLE.COM"])
+                .env("KRB5_CONFIG", &config_path)
+                .env("KRB5_KDC_PROFILE", &config_path),
+            "create Kerberos client principal",
+        );
+        run_assert(
+            Command::new("kadmin.local")
+                .args(["-q", "addprinc -randkey nfs/test.example.com@EXAMPLE.COM"])
+                .env("KRB5_CONFIG", &config_path)
+                .env("KRB5_KDC_PROFILE", &config_path),
+            "create Kerberos service principal",
+        );
+        run_assert(
+            Command::new("kadmin.local")
+                .args([
+                    "-q",
+                    &format!(
+                        "ktadd -k {} nfs/test.example.com@EXAMPLE.COM",
+                        keytab_path.display()
+                    ),
+                ])
+                .env("KRB5_CONFIG", &config_path)
+                .env("KRB5_KDC_PROFILE", &config_path),
+            "export Kerberos service keytab",
+        );
+
+        let child = Command::new("krb5kdc")
+            .args(["-n", "-P"])
+            .arg(dir.join("kdc.pid"))
+            .args(["-r", &realm])
+            .env("KRB5_CONFIG", &config_path)
+            .env("KRB5_KDC_PROFILE", &config_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start temporary MIT Kerberos KDC");
+        wait_for_port(port);
+
+        Self {
+            _tempdir: tempdir,
+            child,
+            config_path,
+            keytab_path,
+            realm,
+        }
+    }
+
+    fn apply_env(&self) {
+        // This integration-test binary contains a single test, so no other
+        // thread mutates the process-wide Kerberos environment concurrently.
+        unsafe {
+            env::set_var("KRB5_CONFIG", &self.config_path);
+            env::set_var(
+                "KRB5_KTNAME",
+                format!("FILE:{}", self.keytab_path.display()),
+            );
+            env::set_var("KRB5RCACHENAME", "none:");
+        }
+    }
+}
+
+impl Drop for TestKdc {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn real_kerberos_context_establishes_and_round_trips_mic() {
+    if env::var_os("NAOS_TEST_KERBEROS_REALM").is_none() {
+        eprintln!("skipping real Kerberos smoke; NAOS_TEST_KERBEROS_REALM is not set");
+        return;
+    }
+
+    let kdc = TestKdc::new();
+    kdc.apply_env();
+
+    let service_principal = format!("nfs/test.example.com@{}", kdc.realm);
+    let client_principal = format!("testuser@{}", kdc.realm);
+    let mechanisms = OidSet::singleton(GSS_MECH_KRB5).expect("Kerberos mechanism");
+
+    let target = Name::new(service_principal.as_bytes(), Some(GSS_NT_KRB5_PRINCIPAL))
+        .expect("import service principal")
+        .canonicalize(Some(GSS_MECH_KRB5))
+        .expect("canonicalize service principal");
+    let client_name = Name::new(client_principal.as_bytes(), Some(GSS_NT_KRB5_PRINCIPAL))
+        .expect("import client principal")
+        .canonicalize(Some(GSS_MECH_KRB5))
+        .expect("canonicalize client principal");
+    let client_credential = Cred::acquire_with_password(
+        Some(&client_name),
+        "testpass",
+        None,
+        CredUsage::Initiate,
+        Some(&mechanisms),
+    )
+    .expect("acquire client credential from temporary KDC");
+    let mut client = ClientCtx::new(
+        Some(client_credential),
+        target,
+        CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_INTEG_FLAG,
+        Some(GSS_MECH_KRB5),
+    );
+
+    let provider = Arc::new(
+        SystemGssHandshakeProvider::new(&service_principal)
+            .expect("acquire server credential from temporary keytab"),
+    );
+    let acceptor =
+        StatefulRpcSecGssAcceptor::new(provider, 32).expect("configure stateful acceptor");
+
+    let mut handle: Option<Vec<u8>> = None;
+    let mut server_token: Option<Vec<u8>> = None;
+    let mut established = None;
+
+    for step in 1..=8 {
+        let client_output = client
+            .step(server_token.as_deref(), None)
+            .unwrap_or_else(|error| panic!("client GSS step {step}: {error}"));
+        server_token = None;
+
+        let Some(client_token) = client_output else {
+            if client.is_complete() && established.is_some() {
+                break;
+            }
+            panic!("client completed before server context was established");
+        };
+
+        let request = match &handle {
+            None => RpcSecGssAcceptRequest::Init {
+                token: client_token.to_vec(),
+            },
+            Some(handle) => RpcSecGssAcceptRequest::Continue {
+                handle: handle.clone(),
+                token: client_token.to_vec(),
+            },
+        };
+
+        match acceptor.accept(request).expect("accept Kerberos GSS token") {
+            RpcSecGssAcceptResult::Continue {
+                handle: next_handle,
+                seq_window,
+                token,
+                ..
+            } => {
+                assert_eq!(seq_window, 32);
+                if let Some(previous) = &handle {
+                    assert_eq!(&next_handle, previous, "GSS context handle changed");
+                }
+                handle = Some(next_handle);
+                assert!(!token.is_empty(), "continuation must return a GSS token");
+                server_token = Some(token);
+            }
+            RpcSecGssAcceptResult::Complete {
+                handle: completed_handle,
+                seq_window,
+                token,
+                security,
+                ..
+            } => {
+                assert_eq!(seq_window, 32);
+                if let Some(previous) = &handle {
+                    assert_eq!(&completed_handle, previous, "GSS context handle changed");
+                }
+                handle = Some(completed_handle);
+                established = Some(security);
+
+                if !token.is_empty() {
+                    let final_output = client
+                        .step(Some(&token), None)
+                        .unwrap_or_else(|error| panic!("final client GSS step: {error}"));
+                    assert!(
+                        final_output.is_none(),
+                        "client emitted an unexpected token after acceptor completion"
+                    );
+                }
+                break;
+            }
+            RpcSecGssAcceptResult::Failure {
+                gss_major,
+                gss_minor,
+            } => panic!("server GSS accept failed: major=0x{gss_major:08x} minor={gss_minor}"),
+        }
+    }
+
+    let security = established.expect("server GSS context was not established");
+    assert!(client.is_complete(), "client GSS context is incomplete");
+    assert!(!handle.expect("RPCSEC_GSS handle").is_empty());
+    assert_eq!(security.principal(), client_principal);
+    assert!(
+        !security.supports_privacy(),
+        "system GSS provider must keep krb5p fail-closed until privacy is enabled"
+    );
+
+    let message = b"naos real Kerberos MIC smoke";
+    let client_mic = client.get_mic(message).expect("client get_mic");
+    security
+        .verify_mic(message, &client_mic)
+        .expect("server verifies client MIC");
+
+    let server_mic = security.get_mic(message).expect("server get_mic");
+    client
+        .verify_mic(message, &server_mic)
+        .expect("client verifies server MIC");
+
+    let mut corrupted = client_mic.to_vec();
+    let last = corrupted.last_mut().expect("non-empty MIC");
+    *last ^= 1;
+    assert_eq!(
+        security.verify_mic(message, &corrupted),
+        Err(RpcSecGssSecurityError::BadMic)
+    );
+
+    let wire_target = Name::new(service_principal.as_bytes(), Some(GSS_NT_KRB5_PRINCIPAL))
+        .expect("import wire service principal")
+        .canonicalize(Some(GSS_MECH_KRB5))
+        .expect("canonicalize wire service principal");
+    let wire_client_name = Name::new(client_principal.as_bytes(), Some(GSS_NT_KRB5_PRINCIPAL))
+        .expect("import wire client principal")
+        .canonicalize(Some(GSS_MECH_KRB5))
+        .expect("canonicalize wire client principal");
+    let wire_client_credential = Cred::acquire_with_password(
+        Some(&wire_client_name),
+        "testpass",
+        None,
+        CredUsage::Initiate,
+        Some(&mechanisms),
+    )
+    .expect("acquire wire client credential");
+    let mut wire_client = ClientCtx::new(
+        Some(wire_client_credential),
+        wire_target,
+        CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_INTEG_FLAG,
+        Some(GSS_MECH_KRB5),
+    );
+    let wire_provider = Arc::new(
+        SystemGssHandshakeProvider::new(&service_principal)
+            .expect("acquire wire server credential"),
+    );
+    let wire_acceptor =
+        StatefulRpcSecGssAcceptor::new(wire_provider, 64).expect("configure wire acceptor");
+    let registry = RpcSecGssContextRegistry::new();
+
+    let mut wire_handle = Vec::new();
+    let mut wire_server_token: Option<Vec<u8>> = None;
+    let mut gss_proc = RPCSEC_GSS_INIT;
+    let mut completed_verifier = None;
+
+    for step in 1..=8 {
+        let client_output = wire_client
+            .step(wire_server_token.as_deref(), None)
+            .unwrap_or_else(|error| panic!("wire client GSS step {step}: {error}"));
+        wire_server_token = None;
+
+        let Some(client_token) = client_output else {
+            if wire_client.is_complete() && completed_verifier.is_some() {
+                break;
+            }
+            panic!("wire client completed before RPCSEC_GSS context creation");
+        };
+
+        let call = context_call(100 + step, gss_proc, &wire_handle, &client_token);
+        let reply = accept_context_call(&registry, &wire_acceptor, &call)
+            .await
+            .unwrap_or_else(|error| panic!("RPCSEC_GSS context step {step}: {error}"));
+        let (verifier, result) = decode_context_reply(100 + step, &reply);
+
+        assert_eq!(result.seq_window, 64);
+        if wire_handle.is_empty() {
+            assert!(!result.handle.is_empty());
+        } else {
+            assert_eq!(result.handle, wire_handle, "RPCSEC_GSS handle changed");
+        }
+        wire_handle = result.handle.clone();
+
+        match result.gss_major {
+            GSS_S_CONTINUE_NEEDED => {
+                assert_eq!(verifier.flavor, AUTH_NONE);
+                assert!(verifier.body.is_empty());
+                assert!(!registry.contains(&wire_handle).await);
+                assert!(!result.token.is_empty());
+                wire_server_token = Some(result.token);
+                gss_proc = RPCSEC_GSS_CONTINUE_INIT;
+            }
+            GSS_S_COMPLETE => {
+                assert_eq!(verifier.flavor, RPCSEC_GSS);
+                if !result.token.is_empty() {
+                    let final_output = wire_client
+                        .step(Some(&result.token), None)
+                        .unwrap_or_else(|error| panic!("wire final client GSS step: {error}"));
+                    assert!(final_output.is_none());
+                }
+                assert!(wire_client.is_complete());
+                wire_client
+                    .verify_mic(&rpcsec_gss_u32_mic_input(result.seq_window), &verifier.body)
+                    .expect("verify RPCSEC_GSS init reply verifier");
+                completed_verifier = Some(verifier);
+                break;
+            }
+            major => panic!(
+                "unexpected RPCSEC_GSS GSS status: major=0x{major:08x} minor={}",
+                result.gss_minor
+            ),
+        }
+    }
+
+    assert!(
+        completed_verifier.is_some(),
+        "RPCSEC_GSS context did not complete"
+    );
+    let registered = registry
+        .get(&wire_handle)
+        .await
+        .expect("completed context registered");
+    assert_eq!(registered.principal(), client_principal);
+    let wire_mic = wire_client
+        .get_mic(b"registered context")
+        .expect("wire client MIC");
+    registered
+        .verify_mic(b"registered context", &wire_mic)
+        .expect("registered context verifies client MIC");
+}
+
+fn context_call(xid: u32, gss_proc: u32, handle: &[u8], token: &[u8]) -> RpcCall {
+    RpcCall {
+        xid,
+        program: 100003,
+        version: 3,
+        procedure: 0,
+        credential: RpcCredential::RpcSecGss(RpcSecGssCredential {
+            version: RPCSEC_GSS_VERSION_1,
+            gss_proc,
+            seq_num: u32::MAX,
+            service: u32::MAX,
+            handle: handle.to_vec(),
+        }),
+        verifier: RpcVerifier {
+            flavor: AUTH_NONE,
+            body: Vec::new(),
+        },
+        header_through_credential: Vec::new(),
+        body: encode_rpcsec_gss_init_token(token).expect("encode RPCSEC_GSS init token"),
+    }
+}
+
+fn decode_context_reply(xid: u32, reply: &[u8]) -> (RpcVerifier, RpcSecGssInitResult) {
+    let mut reader = XdrReader::new(reply);
+    assert_eq!(reader.u32().expect("reply xid"), xid);
+    assert_eq!(reader.u32().expect("reply direction"), 1);
+    assert_eq!(reader.u32().expect("accepted reply"), 0);
+    let verifier = RpcVerifier {
+        flavor: reader.u32().expect("verifier flavor"),
+        body: reader
+            .opaque(MAX_AUTH_BYTES)
+            .expect("RPCSEC_GSS reply verifier"),
+    };
+    assert_eq!(reader.u32().expect("accepted status"), 0);
+    let result =
+        decode_rpcsec_gss_init_result(reader.remaining()).expect("decode RPCSEC_GSS init result");
+    (verifier, result)
+}
+
+fn build_config(dir: &Path, port: u16, realm: &str) -> String {
+    format!(
+        r#"[libdefaults]
+    default_realm = {realm}
+    dns_canonicalize_hostname = false
+    rdns = false
+    forwardable = true
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+
+[realms]
+    {realm} = {{
+        kdc = 127.0.0.1:{port}
+        admin_server = 127.0.0.1
+        database_name = {database}
+        admin_keytab = FILE:{admin_keytab}
+        acl_file = {acl}
+        key_stash_file = {stash}
+        max_life = 1h
+        max_renewable_life = 1h
+    }}
+
+[kdcdefaults]
+    kdc_ports = {port}
+    kdc_tcp_ports = {port}
+
+[domain_realm]
+    test.example.com = {realm}
+    .example.com = {realm}
+"#,
+        database = dir.join("principal").display(),
+        admin_keytab = dir.join("kadm5.keytab").display(),
+        acl = dir.join("kadm5.acl").display(),
+        stash = dir.join(".k5stash").display(),
+    )
+}
+
+fn free_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral KDC port");
+    listener.local_addr().expect("local KDC address").port()
+}
+
+fn wait_for_port(port: u16) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("temporary KDC did not start on port {port}");
+}
+
+fn run_assert(command: &mut Command, what: &str) {
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("{what}: {error}"));
+    assert!(
+        output.status.success(),
+        "{what} failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
