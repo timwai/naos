@@ -181,9 +181,7 @@ impl NfsBindingRepository for Store {
             .map_err(|_| NfsRepositoryError::Unavailable)
     }
 
-    async fn list_nfs_file_handles(
-        &self,
-    ) -> Result<Vec<NfsFileHandleRecord>, NfsRepositoryError> {
+    async fn list_nfs_file_handles(&self) -> Result<Vec<NfsFileHandleRecord>, NfsRepositoryError> {
         let rows = sqlx::query(
             "SELECT nonce, share_id, rel_path
              FROM nfs_file_handles
@@ -200,9 +198,7 @@ impl NfsBindingRepository for Store {
                     .map_err(store_error)?
                     .try_into()
                     .map_err(|_| NfsRepositoryError::Unavailable)?;
-                let relative_path = row
-                    .try_get::<String, _>("rel_path")
-                    .map_err(store_error)?;
+                let relative_path = row.try_get::<String, _>("rel_path").map_err(store_error)?;
                 Ok(NfsFileHandleRecord {
                     nonce,
                     share_id: row.try_get("share_id").map_err(store_error)?,
@@ -463,4 +459,3 @@ mod tests {
         assert!(store.list_nfs_file_handles().await.unwrap().is_empty());
     }
 }
-
