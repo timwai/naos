@@ -8,7 +8,7 @@ use std::{
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::acl::AclRule;
+use crate::{acl::AclRule, path::RelativePath};
 use ulid::Ulid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,6 +232,15 @@ pub struct NfsExport {
     pub generation: u64,
 }
 
+pub const NFS_HANDLE_NONCE_BYTES: usize = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfsFileHandleRecord {
+    pub nonce: [u8; NFS_HANDLE_NONCE_BYTES],
+    pub share_id: String,
+    pub relative_path: RelativePath,
+}
+
 #[derive(Debug, Error)]
 pub enum NfsRepositoryError {
     #[error("nfs repository is unavailable")]
@@ -271,6 +280,21 @@ pub trait NfsBindingRepository: Send + Sync {
         candidate: [u8; 32],
     ) -> Result<[u8; 32], NfsRepositoryError> {
         Ok(candidate)
+    }
+
+    async fn list_nfs_file_handles(
+        &self,
+    ) -> Result<Vec<NfsFileHandleRecord>, NfsRepositoryError> {
+        Ok(Vec::new())
+    }
+
+    async fn apply_nfs_file_handle_changes(
+        &self,
+        upserts: Vec<NfsFileHandleRecord>,
+        deletes: Vec<[u8; NFS_HANDLE_NONCE_BYTES]>,
+    ) -> Result<(), NfsRepositoryError> {
+        let _ = (upserts, deletes);
+        Ok(())
     }
 }
 

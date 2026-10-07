@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use naos_core::{
     acl::{AclRule, Permission, Subject},
     nfs::{
-        NfsAccessRepository, NfsBinding, NfsBindingPermission, NfsBindingRepository, NfsCidr,
-        NfsExport, NfsRepositoryError,
+        NFS_HANDLE_NONCE_BYTES, NfsAccessRepository, NfsBinding, NfsBindingPermission,
+        NfsBindingRepository, NfsCidr, NfsExport, NfsFileHandleRecord, NfsRepositoryError,
     },
     path::RelativePath,
 };
@@ -180,6 +180,73 @@ impl NfsBindingRepository for Store {
             .try_into()
             .map_err(|_| NfsRepositoryError::Unavailable)
     }
+
+    async fn list_nfs_file_handles(
+        &self,
+    ) -> Result<Vec<NfsFileHandleRecord>, NfsRepositoryError> {
+        let rows = sqlx::query(
+            "SELECT nonce, share_id, rel_path
+             FROM nfs_file_handles
+             ORDER BY share_id, rel_path",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let nonce = row
+                    .try_get::<Vec<u8>, _>("nonce")
+                    .map_err(store_error)?
+                    .try_into()
+                    .map_err(|_| NfsRepositoryError::Unavailable)?;
+                let relative_path = row
+                    .try_get::<String, _>("rel_path")
+                    .map_err(store_error)?;
+                Ok(NfsFileHandleRecord {
+                    nonce,
+                    share_id: row.try_get("share_id").map_err(store_error)?,
+                    relative_path: RelativePath::parse(&relative_path)
+                        .map_err(|_| NfsRepositoryError::Unavailable)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn apply_nfs_file_handle_changes(
+        &self,
+        upserts: Vec<NfsFileHandleRecord>,
+        deletes: Vec<[u8; NFS_HANDLE_NONCE_BYTES]>,
+    ) -> Result<(), NfsRepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(store_error)?;
+
+        for nonce in deletes {
+            sqlx::query("DELETE FROM nfs_file_handles WHERE nonce = ?")
+                .bind(nonce.as_slice())
+                .execute(&mut *tx)
+                .await
+                .map_err(store_error)?;
+        }
+
+        for record in upserts {
+            sqlx::query(
+                "INSERT INTO nfs_file_handles (nonce, share_id, rel_path)
+                 VALUES (?, ?, ?)
+                 ON CONFLICT(nonce) DO UPDATE SET
+                     share_id = excluded.share_id,
+                     rel_path = excluded.rel_path",
+            )
+            .bind(record.nonce.as_slice())
+            .bind(&record.share_id)
+            .bind(record.relative_path.as_slash_path())
+            .execute(&mut *tx)
+            .await
+            .map_err(store_error)?;
+        }
+
+        tx.commit().await.map_err(store_error)?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -330,4 +397,70 @@ mod tests {
             Err(NfsRepositoryError::Unavailable)
         ));
     }
+
+    #[tokio::test]
+    async fn nfs_file_handle_changes_round_trip_transactionally() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE nfs_file_handles (
+                nonce BLOB PRIMARY KEY,
+                share_id TEXT NOT NULL,
+                rel_path TEXT NOT NULL,
+                UNIQUE (share_id, rel_path)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let store = Store { pool };
+        let nonce = [3; NFS_HANDLE_NONCE_BYTES];
+
+        store
+            .apply_nfs_file_handle_changes(
+                vec![NfsFileHandleRecord {
+                    nonce,
+                    share_id: "shr_media".to_owned(),
+                    relative_path: RelativePath::parse("/docs/report.txt").unwrap(),
+                }],
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.list_nfs_file_handles().await.unwrap(),
+            vec![NfsFileHandleRecord {
+                nonce,
+                share_id: "shr_media".to_owned(),
+                relative_path: RelativePath::parse("/docs/report.txt").unwrap(),
+            }]
+        );
+
+        store
+            .apply_nfs_file_handle_changes(
+                vec![NfsFileHandleRecord {
+                    nonce,
+                    share_id: "shr_media".to_owned(),
+                    relative_path: RelativePath::parse("/archive/report.txt").unwrap(),
+                }],
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.list_nfs_file_handles().await.unwrap()[0].relative_path,
+            RelativePath::parse("/archive/report.txt").unwrap()
+        );
+
+        store
+            .apply_nfs_file_handle_changes(Vec::new(), vec![nonce])
+            .await
+            .unwrap();
+        assert!(store.list_nfs_file_handles().await.unwrap().is_empty());
+    }
 }
+
