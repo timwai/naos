@@ -152,4 +152,45 @@ mod tests {
         writer.u32(1);
         assert!(parse_bool_reply(&writer.into_bytes(), 9).is_ok());
     }
+
+    #[tokio::test]
+    async fn register_tcp_round_trips_against_fake_portmapper() {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_record(&mut stream).await.unwrap().unwrap();
+            let mut reader = XdrReader::new(&request);
+            let xid = reader.u32().unwrap();
+            assert_eq!(reader.u32().unwrap(), 0);
+            assert_eq!(reader.u32().unwrap(), RPC_VERSION);
+            assert_eq!(reader.u32().unwrap(), PMAP_PROGRAM);
+            assert_eq!(reader.u32().unwrap(), PMAP_VERSION);
+            assert_eq!(reader.u32().unwrap(), PMAPPROC_SET);
+            assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+            assert!(reader.opaque(0).unwrap().is_empty());
+            assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+            assert!(reader.opaque(0).unwrap().is_empty());
+            assert_eq!(reader.u32().unwrap(), 100003);
+            assert_eq!(reader.u32().unwrap(), 3);
+            assert_eq!(reader.u32().unwrap(), IPPROTO_TCP);
+            assert_eq!(reader.u32().unwrap(), 32049);
+            reader.finish().unwrap();
+
+            let mut reply = XdrWriter::new();
+            reply.u32(xid);
+            reply.u32(1);
+            reply.u32(0);
+            reply.u32(AUTH_NONE);
+            reply.u32(0);
+            reply.u32(0);
+            reply.u32(1);
+            write_record(&mut stream, &reply.into_bytes()).await.unwrap();
+        });
+
+        register_tcp(address, 100003, 3, 32049).await.unwrap();
+        server.await.unwrap();
+    }
 }
