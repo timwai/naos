@@ -19,7 +19,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check NFS smoke shell syntax
         if: runner.os == 'Linux'
-        run: bash -n scripts/ci/nfs-real-smoke.sh scripts/ci/nfs-remote-lock-smoke.sh
+        run: bash -n scripts/ci/nfs-real-smoke.sh scripts/ci/nfs-remote-lock-smoke.sh scripts/ci/nfs-system-gss-real-smoke.sh
       - name: Check Windows smoke PowerShell syntax
         if: runner.os == 'Windows'
         shell: pwsh
@@ -54,11 +54,15 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libkrb5-dev libclang-dev pkg-config
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            libkrb5-dev libclang-dev pkg-config krb5-kdc krb5-admin-server krb5-user
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p naosd --features system-gss --all-targets
       - run: cargo clippy -p naosd --features system-gss --all-targets -- -D warnings
       - run: cargo test -p naos-nfs --features system-gss
+      - name: Run real MIT Kerberos GSS handshake
+        if: runner.os == 'Linux'
+        run: bash scripts/ci/nfs-system-gss-real-smoke.sh
 
 
   samba-integration:
