@@ -1686,11 +1686,11 @@ NFSv3 数据面当前实现约束：
 - 不启用 rpcbind 时，客户端必须显式知道 NFS/MOUNT 端口；需要 NFSv3 远程锁的客户端还必须由部署层提供 NLM/NSM 等价服务发现，否则应显式使用 `nolock/nolocks`；
 - 当前实现的 NFSv3 procedure 至少包含 `NULL/GETATTR/SETATTR/LOOKUP/ACCESS/READLINK/READ/WRITE/CREATE/MKDIR/SYMLINK/REMOVE/RMDIR/RENAME/LINK/READDIR/READDIRPLUS/FSSTAT/FSINFO/PATHCONF/COMMIT`；其中 `SYMLINK` 创建当前仅在 Unix 平台启用，Windows 返回 `NFS3ERR_NOTSUPP`，避免在 NFSv3 不提供目标类型信息时错误选择 Windows file/dir symlink API；
 - NLMv4（program `100021` / version `4`）已提供 TCP+UDP listener；同步 procedure 覆盖 `NULL/TEST/LOCK/CANCEL/UNLOCK/NM_LOCK/FREE_ALL`，并已支持 macOS/BSD 常用的 `TEST_MSG/LOCK_MSG/CANCEL_MSG/UNLOCK_MSG → *_RES` 异步结果回调；锁表为进程内状态，支持共享/排他锁、64-bit byte range、部分解锁，并在 Unix 以 filesystem identity 统一 hard-link/rename 后的同一文件锁身份；
-- NSMv1/status monitor（program `100024` / version `1`）已提供 TCP+UDP 端点，覆盖 `NULL/STAT/MON/UNMON/UNMON_ALL/SIMU_CRASH/NOTIFY`；当前会在进程内保存 monitor/private-cookie 状态，`UNMON/UNMON_ALL` 真正撤销 monitor，`SIMU_CRASH` 推进保持奇数的 up-state 并清空 monitor，`NOTIFY` 会记录 peer state-change 并通过 server event loop 通知 NLM 清理该 peer IP 的 held locks 与 blocked waiters，再重新尝试授予其它 waiter；
-- 阻塞 `LOCK(block=true)` 冲突现在返回 `NLM4_BLOCKED` 并进入等待队列；持有锁通过 `UNLOCK/FREE_ALL` 释放后，服务端按冲突顺序挑选可授予请求，预留锁后发送同步 `NLMPROC4_GRANTED` callback，只有客户端回复 `NLM4_GRANTED` 才保留锁，回调失败/拒绝则回滚预留；`CANCEL` 会删除对应等待请求。在线 peer reboot 的 `SM_NOTIFY → NLM lock cleanup` 已实现并有真实 server TCP 联动测试；但 monitor state、NFS file-handle secret 以及 nonce→path registry 仍是进程内状态，所以 **naosd 自身重启后的 crash-reclaim/grace 仍未实现**，旧 file handle 仍会 stale。完整恢复前不能宣称 NLM crash recovery；同机 loopback 会让 NFS server 与 macOS client lockd/statd 共用 port 111/RPC 注册空间，真实锁 E2E 必须使用分离 client/server 主机。
+- NSMv1/status monitor（program `100024` / version `1`）已提供 TCP+UDP 端点，覆盖 `NULL/STAT/MON/UNMON/UNMON_ALL/SIMU_CRASH/NOTIFY`；monitor/private-cookie 属于当前进程运行期状态，`UNMON/UNMON_ALL` 真正撤销 monitor，`NOTIFY` 会记录 peer state-change 并通过 server event loop 通知 NLM 清理该 peer IP 的 held locks 与 blocked waiters，再重新尝试授予其它 waiter；NSM server up-state epoch 已持久化到 SQLite，首次启动为 1，后续 daemon restart 或持久化 `SIMU_CRASH` 按 3/5/7… 推进并保持奇数；
+- 阻塞 `LOCK(block=true)` 冲突现在返回 `NLM4_BLOCKED` 并进入等待队列；持有锁通过 `UNLOCK/FREE_ALL` 释放后，服务端按冲突顺序挑选可授予请求，预留锁后发送同步 `NLMPROC4_GRANTED` callback，只有客户端回复 `NLM4_GRANTED` 才保留锁，回调失败/拒绝则回滚预留；`CANCEL` 会删除对应等待请求。在线 peer reboot 的 `SM_NOTIFY → NLM lock cleanup` 已实现并有真实 server TCP 联动测试；naosd restart 后会进入 30 秒 NLM grace，普通新锁返回 `NLM4_DENIED_GRACE_PERIOD`，`reclaim=true` 才允许按现有身份/ACL/冲突规则重建 held-lock state。NFS handle HMAC secret 与 nonce→share/path registry 已持久化，server restart 后旧 child file handle 可继续解析；当前 server TCP E2E 已覆盖“旧 FH 跨两次 restart 继续 GETATTR、restart grace 内普通 LOCK 被拒、reclaim LOCK 成功、NSM epoch 1→3→5→7”。held locks/waiters 与 NSM monitor/private-cookie 本身仍为进程内状态，重启后 held locks 依赖客户端按 NLM grace 语义 reclaim；真正的内核客户端锁互操作仍必须用分离 client/server 主机验证，因为同机 loopback 会让 server 与 macOS client lockd/statd 共用 port 111/RPC 注册空间。
 - MOUNT v3 支持 `NULL/MNT/DUMP/UMNT/UMNTALL/EXPORT`；
 - MOUNT 与 NFSv3 共用同一 file-handle table，rename 后已签发 handle 保持有效，delete 后对应 handle 变为 stale；
-- 当前 file-handle path registry 为进程内状态；`naosd` 重启后旧 handle 视为 stale，v1 客户端需要重新 mount。若未来要求 daemon restart 后 handle 持久稳定，需单独设计持久 object identity/handle index，而不能把绝对路径直接暴露进 handle；
+- file-handle HMAC secret 与 nonce→share/path registry 已持久化到 SQLite；同一 share/path 会复用 registry 中的 nonce，rename 会事务化更新相关 handle path，delete/rmdir 会删除对应 registry 项。只要 share generation 与 canonical root 未发生使 handle 失效的变化，`naosd` 重启后旧 handle 可继续使用；绝对宿主机路径仍不会直接编码进 wire handle；
 - L1/L2 权限继续复用 `NfsBindingRepository + acl-engine + SafePathResolver`，协议层不得另写一套 ACL 规则；
 - L3/RPCSEC_GSS 仍为后续 feature，不属于当前基础数据面的完成条件。
 
@@ -2344,7 +2344,7 @@ package
 | 8 | **SMB macOS provider adapter** | 先检测系统 File Sharing；无端口抢占；支持路径明确 |
 | 9 | SMB Doctor / conflict UX | UI 展示 provider、445 owner、冲突原因和可执行修复建议 |
 | 10 | WebDAV | ACL 一致性矩阵通过 |
-| 11 | NFS L1/L2 | 基础数据面 + in-process TCP smoke 已完成；NLMv4 同步 range-lock、异步 *_MSG/*_RES callback、NLM4_BLOCKED→GRANTED、CANCEL、RPCBIND v4/v3 回调发现已接入；NSMv1 已有进程内 monitor/state tracking，peer `SM_NOTIFY` 会清理对应 NLM held/waiting locks，且 server 级真实 TCP 联动测试已覆盖；分离主机的 macOS 远程 NLM smoke harness 已加入。后续重点转为 file-handle/monitor 持久化与服务端重启 grace/reclaim；Linux 真实 mount smoke 已有，macOS 基础真实内核客户端已自动化通过，Windows smoke harness 已接入但仍需专用 runner 真机验证 |
+| 11 | NFS L1/L2 | 基础数据面 + in-process/真实 TCP smoke 已完成；NLMv4 同步 range-lock、异步 *_MSG/*_RES、BLOCKED→GRANTED、CANCEL、RPCBIND v4/v3 callback discovery 与 NSMv1 peer reboot cleanup 已接入；file-handle secret + nonce/path registry、NSM epoch 已持久化，daemon restart grace/reclaim 已实现，server E2E 覆盖旧 FH 跨两次 restart、reclaim 与 NSM epoch 1→3→5→7。分离主机远程 NLM smoke harness 已加入，剩余关键 gate 是在真实分离 client/server runner 上跑通内核 record-lock/reclaim，以及 Windows 专用 NFS runner 真机验证；macOS 基础内核 NFS 数据面继续自动化通过 |
 | 12 | NFS L3（feature） | Linux/macOS krb5 测试通过 |
 | 13 | React Web UI | 原型核心页面全部 API 化 |
 | 14 | 审计/Doctor/Verify | 可检索、可导出、漂移可发现 |
@@ -2400,7 +2400,7 @@ package
 | Windows/macOS 审计能力差异 | SMB 统一审计可能不完整 | Doctor 检测 audit capability，明确 degraded |
 | 外部密码变更不可逆 | rollback 无法恢复旧 credential | forward-recovery + degraded + 重新 reset password |
 | 自研 NFS 兼容性工作量 | 工期风险 | 仅 NFSv3；持续 fuzz/interop |
-| NFS file handle / NSM 状态未持久化 | naosd 重启后旧 handle stale，无法完成标准 NLM reclaim | 在实现 crash-reclaim 前持久化 handle secret + nonce/path identity 与 NSM monitor/reboot state；未完成前只声明在线 peer reboot cleanup |
+| NLM crash-recovery 仍依赖客户端 reclaim | daemon restart 会丢失进程内 held/waiting locks 与 NSM monitor/private-cookie | 已持久化 handle identity 与 NSM epoch，并提供 restart grace/reclaim；继续用分离主机 runner 验证真实 lockd/statd reclaim、异常掉线与 grace 边界，不把单机 loopback 当作最终互操作证据 |
 | NFS L1/L2 可被同网段伪造 | 越权 | 明示风险；敏感环境使用 VPN/隔离网/L3 |
 | root/SYSTEM 运行 | 攻击面 | 特权逻辑集中、依赖最小、严格审计 |
 | SQLite 高量审计增长 | 查询/空间 | 索引 + retention + 可选归档 |
