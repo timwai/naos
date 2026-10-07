@@ -695,4 +695,3 @@ async fn group_membership_and_delete_are_operation_backed() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-
