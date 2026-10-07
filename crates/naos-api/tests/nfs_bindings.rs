@@ -35,6 +35,7 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
     );
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
     let acl = Arc::new(naos_core::acl::AclService::new(store.clone()));
+    let audit = Arc::new(naos_core::audit::AuditService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
     let share_mutations = Arc::new(naos_core::share::ShareMutationService::new(
         store.clone(),
@@ -71,6 +72,7 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
         readiness: store.clone(),
         auth,
         acl,
+        audit,
         operations,
         share_mutations,
         share_reconcile_factory,

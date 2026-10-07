@@ -305,3 +305,42 @@ pub mod acl {
         pub explanation: String,
     }
 }
+
+
+pub mod audit {
+    use serde::Serialize;
+    use serde_json::Value;
+    use utoipa::ToSchema;
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct AuditActorDto {
+        #[serde(rename = "type")]
+        pub actor_type: String,
+        pub id: Option<String>,
+        pub name: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct AuditRecordDto {
+        pub id: String,
+        pub timestamp: String,
+        pub actor: AuditActorDto,
+        pub protocol: Option<String>,
+        pub action: String,
+        pub share_id: Option<String>,
+        pub path: Option<String>,
+        pub client_ip: Option<String>,
+        pub result: String,
+        pub detail: Option<Value>,
+        pub request_id: Option<String>,
+        pub operation_id: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct AuditPageResponse {
+        pub items: Vec<AuditRecordDto>,
+        pub page: u32,
+        pub page_size: u32,
+        pub total: u64,
+    }
+}

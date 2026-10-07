@@ -35,6 +35,7 @@ async fn test_app() -> (Router, TempDir) {
     );
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
     let acl = Arc::new(naos_core::acl::AclService::new(store.clone()));
+    let audit = Arc::new(naos_core::audit::AuditService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
     let share_mutations = Arc::new(naos_core::share::ShareMutationService::new(
         store.clone(),
@@ -71,6 +72,7 @@ async fn test_app() -> (Router, TempDir) {
         readiness: store,
         auth,
         acl,
+        audit,
         operations,
         share_mutations,
         share_reconcile_factory,
@@ -275,6 +277,29 @@ async fn bootstrap_login_csrf_and_logout_flow() {
     assert_eq!(doctor["status"], "ready");
     assert_eq!(doctor["provider"], "test_provider");
     assert_eq!(doctor["capabilities"]["manages_tcp_445_listener"], false);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/audit?page=1&page_size=50&result=allow&q=login",
+            None,
+            loopback,
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let audit = json_body(response).await;
+    assert_eq!(audit["page"], 1);
+    assert_eq!(audit["page_size"], 50);
+    assert!(audit["total"].as_u64().unwrap() >= 1);
+    assert!(audit["items"].as_array().unwrap().iter().any(|item| {
+        item["action"] == "management.login"
+            && item["result"] == "allow"
+            && item["actor"]["name"] == "admin"
+    }));
 
     let response = app
         .clone()

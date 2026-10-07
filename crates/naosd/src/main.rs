@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use naos_api::AppState;
 use naos_core::{
     acl::AclService,
+    audit::AuditService,
     auth::{AuthConfig, AuthService},
     doctor::SmbDoctorProbe,
     nfs::NfsBindingService,
@@ -117,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
             .context("initialize authentication service")?,
     );
     let acl = Arc::new(AclService::new(store.clone()));
+    let audit = Arc::new(AuditService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
     let share_mutations = Arc::new(ShareMutationService::new(
         store.clone(),
@@ -135,6 +137,7 @@ async fn main() -> anyhow::Result<()> {
         readiness: store.clone(),
         auth: auth.clone(),
         acl,
+        audit,
         operations,
         share_mutations,
         share_reconcile_factory,

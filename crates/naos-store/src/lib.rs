@@ -1,4 +1,5 @@
 mod acl_admin;
+mod audit;
 mod nfs;
 mod operation;
 mod share_apply;

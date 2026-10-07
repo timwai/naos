@@ -1,4 +1,5 @@
 mod acl_api;
+mod audit_api;
 mod doctor_api;
 mod nfs_api;
 mod operation_api;
@@ -39,6 +40,7 @@ pub struct AppState {
     pub readiness: Arc<dyn ReadinessProbe>,
     pub auth: Arc<AuthService>,
     pub acl: Arc<naos_core::acl::AclService>,
+    pub audit: Arc<naos_core::audit::AuditService>,
     pub operations: Arc<naos_core::operation::OperationService>,
     pub share_mutations: Arc<naos_core::share::ShareMutationService>,
     pub share_reconcile_factory: Arc<dyn naos_core::share::ShareReconcileDriverFactory>,
@@ -63,6 +65,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/sessions/{id}", delete(revoke_session))
         .route("/users", get(list_users))
         .merge(acl_api::routes())
+        .merge(audit_api::routes())
         .merge(operation_api::routes())
         .merge(doctor_api::routes())
         .merge(nfs_api::routes())
@@ -595,6 +598,7 @@ struct ApiDoc;
 pub fn openapi() -> utoipa::openapi::OpenApi {
     let mut document = ApiDoc::openapi();
     document.merge(acl_api::openapi());
+    document.merge(audit_api::openapi());
     document.merge(operation_api::openapi());
     document.merge(doctor_api::openapi());
     document.merge(nfs_api::openapi());
