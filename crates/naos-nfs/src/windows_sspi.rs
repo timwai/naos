@@ -251,8 +251,8 @@ impl WindowsSspiHandshake {
             .context
             .take()
             .ok_or(RpcSecGssAcceptorError::ProviderFailure)?;
-        let (client_principal, server_principal) =
-            query_native_names(&mut context).map_err(|_| RpcSecGssAcceptorError::ProviderFailure)?;
+        let (client_principal, server_principal) = query_native_names(&mut context)
+            .map_err(|_| RpcSecGssAcceptorError::ProviderFailure)?;
         if !server_principal.eq_ignore_ascii_case(&self.expected_service_principal) {
             // SAFETY: context is live and owned by this handshake.
             let _ = unsafe { DeleteSecurityContext(&mut context) };
@@ -432,11 +432,7 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
         &self.principal
     }
 
-    fn verify_mic(
-        &self,
-        message: &[u8],
-        mic: &[u8],
-    ) -> Result<(), RpcSecGssSecurityError> {
+    fn verify_mic(&self, message: &[u8], mic: &[u8]) -> Result<(), RpcSecGssSecurityError> {
         let message_len =
             u32::try_from(message.len()).map_err(|_| RpcSecGssSecurityError::ProviderFailure)?;
         let mic_len =
@@ -468,10 +464,7 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
         let status = unsafe { VerifySignature(&mut inner.context, &mut desc, 0, &mut qop) };
         if status == SEC_E_OK {
             Ok(())
-        } else if matches!(
-            status as u32,
-            SEC_E_MESSAGE_ALTERED | SEC_E_OUT_OF_SEQUENCE
-        ) {
+        } else if matches!(status as u32, SEC_E_MESSAGE_ALTERED | SEC_E_OUT_OF_SEQUENCE) {
             Err(RpcSecGssSecurityError::BadMic)
         } else {
             Err(RpcSecGssSecurityError::ProviderFailure)
@@ -635,13 +628,7 @@ mod tests {
 
     #[test]
     fn sspi_bad_mic_statuses_are_recognized() {
-        assert!(matches!(
-            SEC_E_MESSAGE_ALTERED,
-            0x8009_030f
-        ));
-        assert!(matches!(
-            SEC_E_OUT_OF_SEQUENCE,
-            0x8009_0310
-        ));
+        assert!(matches!(SEC_E_MESSAGE_ALTERED, 0x8009_030f));
+        assert!(matches!(SEC_E_OUT_OF_SEQUENCE, 0x8009_0310));
     }
 }
