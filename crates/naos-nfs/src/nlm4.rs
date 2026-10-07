@@ -3,6 +3,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::Path,
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use naos_core::{
@@ -28,6 +29,7 @@ use crate::{
 
 pub const NLM_PROGRAM: u32 = 100021;
 pub const NLM_VERSION: u32 = 4;
+pub const DEFAULT_NLM_GRACE_PERIOD: Duration = Duration::from_secs(30);
 
 const NLMPROC4_NULL: u32 = 0;
 const NLMPROC4_TEST: u32 = 1;
@@ -155,6 +157,7 @@ pub struct NlmV4Service {
     waiters: Arc<Mutex<Vec<BlockedLock>>>,
     state_guard: Arc<Mutex<()>>,
     callback_rpcbind_port: u16,
+    grace_until: Option<Instant>,
 }
 
 impl NlmV4Service {
@@ -171,7 +174,13 @@ impl NlmV4Service {
             waiters: Arc::new(Mutex::new(Vec::new())),
             state_guard: Arc::new(Mutex::new(())),
             callback_rpcbind_port: 111,
+            grace_until: None,
         }
+    }
+
+    pub fn with_grace_period(mut self, duration: Duration) -> Self {
+        self.grace_until = Some(Instant::now() + duration);
+        self
     }
 
     #[cfg(test)]
@@ -323,7 +332,10 @@ impl NlmV4Service {
             lock,
             reclaim,
         } = request;
-        if reclaim {
+        let in_grace = self
+            .grace_until
+            .is_some_and(|deadline| Instant::now() < deadline);
+        if in_grace != reclaim {
             return NlmResult {
                 cookie,
                 status: NLM4_DENIED_GRACE_PERIOD,
@@ -1847,6 +1859,45 @@ mod tests {
         assert_eq!(locks[0].owner.client_ip, second_ip);
         drop(locks);
         assert!(service.waiters.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn grace_period_accepts_reclaim_and_rejects_new_locks() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let service = service.with_grace_period(Duration::from_secs(60));
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let client_ip = "192.168.1.10".parse().unwrap();
+
+        assert_eq!(
+            service
+                .lock(
+                    client_ip,
+                    &credential(1000),
+                    vec![1],
+                    true,
+                    lock(handle.clone(), "client-a", 10, 0, 0),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_DENIED_GRACE_PERIOD
+        );
+        assert_eq!(
+            service
+                .lock(
+                    client_ip,
+                    &credential(1000),
+                    vec![2],
+                    true,
+                    lock(handle, "client-a", 10, 0, 0),
+                    true,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
     }
 
     #[tokio::test]

@@ -17,7 +17,10 @@ use crate::{
     handle::FileHandleTable,
     mount::{MOUNT_PROGRAM, MOUNT_VERSION, MountService, serve_mount_stream},
     nfs3::{NFS_PROGRAM, NFS_VERSION, NfsV3Service, serve_nfs3_stream},
-    nlm4::{NLM_PROGRAM, NLM_VERSION, NlmV4Service, dispatch_nlm4_rpc, serve_nlm4_stream},
+    nlm4::{
+        DEFAULT_NLM_GRACE_PERIOD, NLM_PROGRAM, NLM_VERSION, NlmV4Service, dispatch_nlm4_rpc,
+        serve_nlm4_stream,
+    },
     nsm1::{
         NSM_PROGRAM, NSM_VERSION, NsmNotification, NsmV1Service, dispatch_nsm1_rpc,
         serve_nsm1_stream,
@@ -116,6 +119,7 @@ impl NfsServer {
             .await?;
         let handle_records = repository.list_nfs_file_handles().await?;
         let handles = FileHandleTable::from_records(secret, handle_records);
+        let restarted = repository.mark_nfs_lock_manager_started().await?;
         let mount_repository: Arc<dyn NfsBindingRepository> = repository.clone();
         let nfs_access_repository: Arc<dyn NfsAccessRepository> = repository.clone();
         let nfs_identity_repository: Arc<dyn NfsBindingRepository> = repository.clone();
@@ -129,6 +133,11 @@ impl NfsServer {
         );
         let nlm_service =
             NlmV4Service::new(nlm_identity_repository, nlm_access_repository, handles);
+        let nlm_service = if restarted {
+            nlm_service.with_grace_period(DEFAULT_NLM_GRACE_PERIOD)
+        } else {
+            nlm_service
+        };
         let (nsm_notification_tx, nsm_notifications) = mpsc::unbounded_channel();
         let nsm_service = NsmV1Service::with_notification_sender(nsm_notification_tx);
         let rpc_registrations = [
@@ -359,6 +368,7 @@ mod tests {
         rules: BTreeMap<String, Vec<AclRule>>,
         handle_secret: Mutex<Option<[u8; 32]>>,
         file_handles: Mutex<Vec<NfsFileHandleRecord>>,
+        lock_manager_started: Mutex<bool>,
     }
 
     #[async_trait]
@@ -451,6 +461,16 @@ mod tests {
             }
             Ok(())
         }
+
+        async fn mark_nfs_lock_manager_started(&self) -> Result<bool, NfsRepositoryError> {
+            let mut started = self
+                .lock_manager_started
+                .lock()
+                .map_err(|_| NfsRepositoryError::Unavailable)?;
+            let restarted = *started;
+            *started = true;
+            Ok(restarted)
+        }
     }
 
     #[async_trait]
@@ -504,6 +524,7 @@ mod tests {
             )]),
             handle_secret: Mutex::new(None),
             file_handles: Mutex::new(Vec::new()),
+            lock_manager_started: Mutex::new(false),
         })
     }
 
