@@ -8,8 +8,8 @@ use axum::{
 use naos_contract::{
     auth::ErrorResponse,
     nfs::{
-        NfsBindingDto, NfsBindingUpsertRequest, NfsBindingsResponse,
-        NfsKrbPrincipalCreateRequest, NfsKrbPrincipalDto, NfsKrbPrincipalsResponse,
+        NfsBindingDto, NfsBindingUpsertRequest, NfsBindingsResponse, NfsKrbPrincipalCreateRequest,
+        NfsKrbPrincipalDto, NfsKrbPrincipalsResponse,
     },
 };
 use naos_core::{
