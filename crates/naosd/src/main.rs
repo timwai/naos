@@ -13,12 +13,9 @@ use naos_core::{
     operation::OperationService,
     reconcile::Reconciler,
 };
-#[cfg(all(unix, feature = "kerberos-gssapi"))]
-use naos_nfs::{
-    gssapi::GssApiHandshakeProvider,
-    rpcsec_gss::StatefulRpcSecGssAcceptor,
-};
 use naos_nfs::server::{NfsServer, NfsServerConfig};
+#[cfg(all(unix, feature = "kerberos-gssapi"))]
+use naos_nfs::{gssapi::GssApiHandshakeProvider, rpcsec_gss::StatefulRpcSecGssAcceptor};
 use naos_platform::SmbDoctor;
 use naos_store::Store;
 use naos_webdav::WebDavState;
@@ -66,11 +63,7 @@ struct Cli {
     #[arg(long, env = "NAOS_NFS_RPCBIND", default_value_t = false)]
     nfs_rpcbind: bool,
 
-    #[arg(
-        long,
-        env = "NAOS_NFS_KERBEROS_ENABLED",
-        default_value_t = false
-    )]
+    #[arg(long, env = "NAOS_NFS_KERBEROS_ENABLED", default_value_t = false)]
     nfs_kerberos_enabled: bool,
 
     #[arg(long, env = "NAOS_NFS_KERBEROS_SERVICE_PRINCIPAL")]
@@ -151,12 +144,8 @@ async fn main() -> anyhow::Result<()> {
             rpcbind_address,
         };
         let server = if cli.nfs_kerberos_enabled {
-            bind_kerberos_nfs_server(
-                store,
-                config,
-                cli.nfs_kerberos_service_principal.as_deref(),
-            )
-            .await?
+            bind_kerberos_nfs_server(store, config, cli.nfs_kerberos_service_principal.as_deref())
+                .await?
         } else {
             NfsServer::bind(store, config)
                 .await
