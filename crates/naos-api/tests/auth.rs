@@ -62,6 +62,7 @@ async fn test_app() -> (Router, TempDir) {
     let app = router(AppState {
         readiness: store,
         auth,
+        acl,
         operations,
         nfs_bindings,
         nfs_principals,
