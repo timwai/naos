@@ -38,6 +38,7 @@ pub struct AppState {
     pub auth: Arc<AuthService>,
     pub operations: Arc<naos_core::operation::OperationService>,
     pub nfs_bindings: Arc<naos_core::nfs::NfsBindingService>,
+    pub nfs_principals: Arc<naos_core::nfs::NfsKrbPrincipalService>,
     pub reconciler: Arc<naos_core::reconcile::Reconciler>,
     pub smb_doctor: Arc<dyn naos_core::doctor::SmbDoctorProbe>,
 }

@@ -5,7 +5,8 @@ use naos_core::{
     acl::{AclRule, Permission, Subject},
     nfs::{
         NFS_HANDLE_NONCE_BYTES, NfsAccessRepository, NfsBinding, NfsBindingPermission,
-        NfsBindingRepository, NfsCidr, NfsExport, NfsFileHandleRecord, NfsRepositoryError,
+        NfsBindingRepository, NfsCidr, NfsExport, NfsFileHandleRecord, NfsKrbPrincipal,
+        NfsRepositoryError,
     },
     path::RelativePath,
 };
@@ -148,6 +149,85 @@ impl NfsBindingRepository for Store {
         let deleted = sqlx::query("DELETE FROM nfs_bindings WHERE id = ? AND share_id = ?")
             .bind(binding_id)
             .bind(share_id)
+            .execute(&self.pool)
+            .await
+            .map_err(store_error)?
+            .rows_affected();
+        Ok(deleted > 0)
+    }
+
+    async fn find_nfs_krb_principal(
+        &self,
+        principal: &str,
+    ) -> Result<Option<NfsKrbPrincipal>, NfsRepositoryError> {
+        let row = sqlx::query(
+            "SELECT id, principal, user_id
+             FROM nfs_krb_principals
+             WHERE principal = ?",
+        )
+        .bind(principal)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(store_error)?;
+
+        row.map(krb_principal_from_row).transpose()
+    }
+
+    async fn list_nfs_krb_principals(&self) -> Result<Vec<NfsKrbPrincipal>, NfsRepositoryError> {
+        let rows = sqlx::query(
+            "SELECT id, principal, user_id
+             FROM nfs_krb_principals
+             ORDER BY principal",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_error)?;
+
+        rows.into_iter().map(krb_principal_from_row).collect()
+    }
+
+    async fn insert_nfs_krb_principal(
+        &self,
+        principal: &NfsKrbPrincipal,
+    ) -> Result<(), NfsRepositoryError> {
+        sqlx::query(
+            "INSERT INTO nfs_krb_principals (id, principal, user_id)
+             VALUES (?, ?, ?)",
+        )
+        .bind(&principal.id)
+        .bind(&principal.principal)
+        .bind(&principal.user_id)
+        .execute(&self.pool)
+        .await
+        .map_err(store_error)?;
+        Ok(())
+    }
+
+    async fn update_nfs_krb_principal(
+        &self,
+        principal: &NfsKrbPrincipal,
+    ) -> Result<bool, NfsRepositoryError> {
+        let updated = sqlx::query(
+            "UPDATE nfs_krb_principals
+             SET principal = ?, user_id = ?
+             WHERE id = ?",
+        )
+        .bind(&principal.principal)
+        .bind(&principal.user_id)
+        .bind(&principal.id)
+        .execute(&self.pool)
+        .await
+        .map_err(store_error)?
+        .rows_affected();
+        Ok(updated > 0)
+    }
+
+    async fn delete_nfs_krb_principal(
+        &self,
+        principal_id: &str,
+    ) -> Result<bool, NfsRepositoryError> {
+        let deleted = sqlx::query("DELETE FROM nfs_krb_principals WHERE id = ?")
+            .bind(principal_id)
             .execute(&self.pool)
             .await
             .map_err(store_error)?
@@ -389,6 +469,16 @@ impl NfsAccessRepository for Store {
     }
 }
 
+fn krb_principal_from_row(
+    row: sqlx::sqlite::SqliteRow,
+) -> Result<NfsKrbPrincipal, NfsRepositoryError> {
+    Ok(NfsKrbPrincipal {
+        id: row.try_get("id").map_err(store_error)?,
+        principal: row.try_get("principal").map_err(store_error)?,
+        user_id: row.try_get("user_id").map_err(store_error)?,
+    })
+}
+
 fn export_from_row(row: sqlx::sqlite::SqliteRow) -> Result<NfsExport, NfsRepositoryError> {
     let generation = row
         .try_get::<i64, _>("generation")
@@ -417,6 +507,83 @@ mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::*;
+
+    #[tokio::test]
+    async fn nfs_krb_principal_mappings_round_trip() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE nfs_krb_principals (
+                id TEXT PRIMARY KEY,
+                principal TEXT NOT NULL UNIQUE,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO users (id, enabled) VALUES ('usr_alice', 1), ('usr_bob', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let store = Store { pool };
+        let mut mapping = NfsKrbPrincipal {
+            id: "nkp_alice".to_owned(),
+            principal: "alice@EXAMPLE.COM".to_owned(),
+            user_id: "usr_alice".to_owned(),
+        };
+        store.insert_nfs_krb_principal(&mapping).await.unwrap();
+
+        assert_eq!(
+            store
+                .find_nfs_krb_principal("alice@EXAMPLE.COM")
+                .await
+                .unwrap(),
+            Some(mapping.clone())
+        );
+        assert_eq!(
+            store.list_nfs_krb_principals().await.unwrap(),
+            vec![mapping.clone()]
+        );
+
+        mapping.principal = "alice/admin@EXAMPLE.COM".to_owned();
+        mapping.user_id = "usr_bob".to_owned();
+        assert!(store.update_nfs_krb_principal(&mapping).await.unwrap());
+        assert!(
+            store
+                .find_nfs_krb_principal("alice@EXAMPLE.COM")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .find_nfs_krb_principal("alice/admin@EXAMPLE.COM")
+                .await
+                .unwrap(),
+            Some(mapping.clone())
+        );
+
+        assert!(store.delete_nfs_krb_principal(&mapping.id).await.unwrap());
+        assert!(store.list_nfs_krb_principals().await.unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn nfs_handle_secret_is_created_once_and_reused() {
