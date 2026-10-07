@@ -2,9 +2,17 @@ name: nfs-real-smoke
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "crates/naos-nfs/**"
+      - "crates/naos-core/src/path.rs"
+      - "scripts/ci/nfs-real-smoke.sh"
+      - ".github/workflows/nfs-real-smoke.yml"
 
 jobs:
   linux-nfs-client:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, linux, nfs]
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +39,7 @@ jobs:
         run: sudo env NAOS_NFS_SMOKE_SERVER="$NAOS_NFS_SMOKE_SERVER" bash scripts/ci/nfs-real-smoke.sh
 
   windows-nfs-client:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, windows, nfs]
     defaults:
       run:
