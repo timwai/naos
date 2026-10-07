@@ -244,7 +244,7 @@ pub struct NfsFileHandleRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NfsExclusiveCreateRecord {
     pub verifier: [u8; 8],
-    pub identity: [u8; 32],
+    pub identity: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Error)]
