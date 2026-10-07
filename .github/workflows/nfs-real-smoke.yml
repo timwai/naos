@@ -38,6 +38,11 @@ on:
         required: false
         default: "35"
         type: string
+      remote_macos_nlm:
+        description: "Run the dedicated macOS NFS client remote NLM/reclaim smoke"
+        required: false
+        default: true
+        type: boolean
       remote_linux_nlm:
         description: "Also run the dedicated Linux NFS client remote NLM/reclaim smoke"
         required: false
@@ -135,7 +140,7 @@ jobs:
             bash scripts/ci/nfs-remote-lock-smoke.sh
 
   remote-macos-nlm-client:
-    if: github.event_name == 'workflow_dispatch' && inputs.remote_nlm_host != ''
+    if: github.event_name == 'workflow_dispatch' && inputs.remote_nlm_host != '' && inputs.remote_macos_nlm
     concurrency:
       group: nfs-remote-lock-${{ inputs.remote_nlm_host }}
       cancel-in-progress: false
