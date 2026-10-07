@@ -18,9 +18,8 @@ use crate::{
     handle::FileHandleTable,
     rpc::{
         AUTH_NONE, AUTH_SYS, RPC_VERSION, RpcCall, RpcCredential, RpcDecodeError,
-        accepted_garbage_args,
-        accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
-        accepted_success, decode_call, denied_rpc_mismatch,
+        accepted_garbage_args, accepted_procedure_unavailable, accepted_program_mismatch,
+        accepted_program_unavailable, accepted_success, decode_call, denied_rpc_mismatch,
     },
     rpcbind::{RpcTransport, lookup_port},
     transport::{read_record, write_record},
@@ -288,13 +287,7 @@ impl NlmV4Service {
         reclaim: bool,
     ) -> NlmResult {
         self.lock_with_block(
-            client_ip,
-            credential,
-            cookie,
-            false,
-            exclusive,
-            lock,
-            reclaim,
+            client_ip, credential, cookie, false, exclusive, lock, reclaim,
         )
         .await
     }
@@ -338,9 +331,10 @@ impl NlmV4Service {
             }
 
             let mut waiters = self.waiters.lock().await;
-            if !waiters.iter().any(|waiter| {
-                blocked_lock_matches(waiter, &validated, exclusive, &lock, &cookie)
-            }) {
+            if !waiters
+                .iter()
+                .any(|waiter| blocked_lock_matches(waiter, &validated, exclusive, &lock, &cookie))
+            {
                 waiters.push(BlockedLock {
                     client_ip,
                     cookie: cookie.clone(),
@@ -504,33 +498,27 @@ impl NlmV4Service {
 
     async fn send_granted_callback(&self, waiter: &BlockedLock) -> bool {
         let rpcbind_address = SocketAddr::new(waiter.client_ip, self.callback_rpcbind_port);
-        let port = match lookup_port(
-            rpcbind_address,
-            NLM_PROGRAM,
-            NLM_VERSION,
-            RpcTransport::Udp,
-        )
-        .await
-        {
-            Ok(Some(port)) => port,
-            Ok(None) => {
-                trace_callback_failure(
-                    waiter.client_ip,
-                    NLMPROC4_GRANTED,
-                    "client NLMv4 UDP port is not registered",
-                );
-                return false;
-            }
-            Err(error) => {
-                if std::env::var_os("NAOS_NFS_TRACE_RPC").is_some() {
-                    eprintln!(
-                        "NLM4_GRANTED_CALLBACK peer={} rpcbind_error={error}",
-                        waiter.client_ip
+        let port =
+            match lookup_port(rpcbind_address, NLM_PROGRAM, NLM_VERSION, RpcTransport::Udp).await {
+                Ok(Some(port)) => port,
+                Ok(None) => {
+                    trace_callback_failure(
+                        waiter.client_ip,
+                        NLMPROC4_GRANTED,
+                        "client NLMv4 UDP port is not registered",
                     );
+                    return false;
                 }
-                return false;
-            }
-        };
+                Err(error) => {
+                    if std::env::var_os("NAOS_NFS_TRACE_RPC").is_some() {
+                        eprintln!(
+                            "NLM4_GRANTED_CALLBACK peer={} rpcbind_error={error}",
+                            waiter.client_ip
+                        );
+                    }
+                    return false;
+                }
+            };
 
         let bind_ip = if waiter.client_ip.is_ipv4() {
             IpAddr::V4(Ipv4Addr::UNSPECIFIED)
@@ -1146,7 +1134,9 @@ fn callback_rpc_call_with_xid(xid: u32, procedure: u32, body: &[u8]) -> Vec<u8> 
 
     let mut credential = XdrWriter::new();
     credential.u32(0);
-    credential.string("naos").expect("fixed callback machine name");
+    credential
+        .string("naos")
+        .expect("fixed callback machine name");
     credential.u32(0);
     credential.u32(0);
     credential.u32_array(&[]).expect("empty callback groups");
