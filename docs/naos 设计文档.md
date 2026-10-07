@@ -1684,7 +1684,7 @@ NFSv3 数据面当前实现约束：
 - `rpcbind/portmapper` 注册是显式可选项，默认关闭；开启时仅向本机 `127.0.0.1:111` 发起 portmapper v2 TCP SET/UNSET；
 - naos **不自行监听 111**，也不启动、停止或覆盖系统 rpcbind；注册失败视为 NFS 启动失败；
 - 不启用 rpcbind 时，客户端必须显式知道 NFS/MOUNT 端口，或由部署层提供等价服务发现；
-- 当前实现的 NFSv3 procedure 至少包含 `NULL/GETATTR/LOOKUP/ACCESS/READ/WRITE/CREATE/MKDIR/REMOVE/RMDIR/RENAME/READDIR/READDIRPLUS/FSSTAT/FSINFO/PATHCONF/COMMIT`；
+- 当前实现的 NFSv3 procedure 至少包含 `NULL/GETATTR/SETATTR/LOOKUP/ACCESS/READ/WRITE/CREATE/MKDIR/REMOVE/RMDIR/RENAME/READDIR/READDIRPLUS/FSSTAT/FSINFO/PATHCONF/COMMIT`；
 - MOUNT v3 支持 `NULL/MNT/DUMP/UMNT/UMNTALL/EXPORT`；
 - MOUNT 与 NFSv3 共用同一 file-handle table，rename 后已签发 handle 保持有效，delete 后对应 handle 变为 stale；
 - 当前 file-handle path registry 为进程内状态；`naosd` 重启后旧 handle 视为 stale，v1 客户端需要重新 mount。若未来要求 daemon restart 后 handle 持久稳定，需单独设计持久 object identity/handle index，而不能把绝对路径直接暴露进 handle；
@@ -2319,7 +2319,7 @@ package
 
 对 NFS root/privileged 测试使用专门 runner 或能力受控的集成环境，不能假设普通 GitHub hosted runner 可完成全部 mount 场景。
 
-当前仓库提供手动工作流 `.github/workflows/nfs-real-smoke.yml`，仅匹配 `[self-hosted, linux, nfs]` runner。该 runner 必须预装 Linux NFS client（至少提供 `mount.nfs`）、允许 passwordless `sudo` 执行测试挂载，并允许 loopback TCP。工作流先构建 `naos-nfs` 的 `nfs-smoke-server` example，再以 `scripts/ci/nfs-real-smoke.sh` 完成真实内核客户端验证。测试显式传入高位 `port/mountport`，不依赖 rpcbind，覆盖 mount、read、write、rename、directory listing、mkdir/rmdir 与 delete。
+当前仓库提供手动工作流 `.github/workflows/nfs-real-smoke.yml`，仅匹配 `[self-hosted, linux, nfs]` runner。该 runner 必须预装 Linux NFS client（至少提供 `mount.nfs`）、允许 passwordless `sudo` 执行测试挂载，并允许 loopback TCP。工作流先构建 `naos-nfs` 的 `nfs-smoke-server` example，再以 `scripts/ci/nfs-real-smoke.sh` 完成真实内核客户端验证。测试显式传入高位 `port/mountport`，不依赖 rpcbind，覆盖 mount、CREATE、truncate/SETATTR、read、write、rename、directory listing、mkdir/rmdir 与 delete。
 
 ---
 
