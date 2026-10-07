@@ -119,6 +119,24 @@ pub mod nfs {
     pub struct NfsBindingsResponse {
         pub items: Vec<NfsBindingDto>,
     }
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct NfsKrbPrincipalCreateRequest {
+        pub principal: String,
+        pub user_id: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct NfsKrbPrincipalDto {
+        pub id: String,
+        pub principal: String,
+        pub user_id: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct NfsKrbPrincipalsResponse {
+        pub items: Vec<NfsKrbPrincipalDto>,
+    }
 }
 
 pub mod operation {

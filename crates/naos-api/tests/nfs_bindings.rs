@@ -344,3 +344,127 @@ async fn nfs_binding_crud_normalizes_and_rejects_duplicates() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+#[tokio::test]
+async fn nfs_kerberos_principal_crud_is_admin_and_csrf_protected() {
+    let (app, _store, _dir) = test_app().await;
+    let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 34001);
+    let (admin_id, cookie, csrf) = login_admin(&app, peer).await;
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/nfs/principals",
+            Some(json!({
+                "principal": " alice@EXAMPLE.COM ",
+                "user_id": admin_id
+            })),
+            peer,
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/nfs/principals",
+            Some(json!({
+                "principal": " alice@EXAMPLE.COM ",
+                "user_id": admin_id
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = json_body(response).await;
+    assert_eq!(created["principal"], "alice@EXAMPLE.COM");
+    assert_eq!(created["user_id"], admin_id);
+    let principal_id = created["id"].as_str().unwrap().to_owned();
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/nfs/principals",
+            Some(json!({
+                "principal": "alice@EXAMPLE.COM",
+                "user_id": admin_id
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/nfs/principals",
+            None,
+            peer,
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let listed = json_body(response).await;
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["items"][0]["principal"], "alice@EXAMPLE.COM");
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/nfs/principals",
+            Some(json!({
+                "principal": " ",
+                "user_id": admin_id
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/v1/nfs/principals/{principal_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/v1/nfs/principals/{principal_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

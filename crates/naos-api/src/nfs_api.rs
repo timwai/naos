@@ -3,15 +3,21 @@ use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, put},
+    routing::{delete, get, put},
 };
 use naos_contract::{
     auth::ErrorResponse,
-    nfs::{NfsBindingDto, NfsBindingUpsertRequest, NfsBindingsResponse},
+    nfs::{
+        NfsBindingDto, NfsBindingUpsertRequest, NfsBindingsResponse,
+        NfsKrbPrincipalCreateRequest, NfsKrbPrincipalDto, NfsKrbPrincipalsResponse,
+    },
 };
 use naos_core::{
     auth::{AuthService, AuthenticatedSession},
-    nfs::{NfsBinding, NfsBindingInput, NfsBindingLevel, NfsBindingServiceError},
+    nfs::{
+        NfsBinding, NfsBindingInput, NfsBindingLevel, NfsBindingServiceError, NfsKrbPrincipal,
+        NfsKrbPrincipalInput, NfsKrbPrincipalServiceError,
+    },
 };
 use utoipa::OpenApi;
 
@@ -26,6 +32,14 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/shares/{share_id}/nfs-bindings/{binding_id}",
             put(update_binding).delete(delete_binding),
+        )
+        .route(
+            "/nfs/principals",
+            get(list_krb_principals).post(create_krb_principal),
+        )
+        .route(
+            "/nfs/principals/{principal_id}",
+            delete(delete_krb_principal),
         )
 }
 
@@ -139,6 +153,86 @@ async fn delete_binding(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/nfs/principals",
+    responses(
+        (status = 200, body = NfsKrbPrincipalsResponse),
+        (status = 401, body = ErrorResponse),
+        (status = 403, body = ErrorResponse)
+    ),
+    tag = "nfs"
+)]
+async fn list_krb_principals(
+    State(state): State<AppState>,
+    Extension(session): Extension<AuthenticatedSession>,
+) -> Result<Json<NfsKrbPrincipalsResponse>, ApiError> {
+    AuthService::ensure_admin(&session)?;
+    let principals = state.nfs_principals.list().await?;
+    Ok(Json(NfsKrbPrincipalsResponse {
+        items: principals.into_iter().map(krb_principal_dto).collect(),
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/nfs/principals",
+    request_body = NfsKrbPrincipalCreateRequest,
+    responses(
+        (status = 201, body = NfsKrbPrincipalDto),
+        (status = 401, body = ErrorResponse),
+        (status = 403, body = ErrorResponse),
+        (status = 409, body = ErrorResponse),
+        (status = 422, body = ErrorResponse)
+    ),
+    tag = "nfs"
+)]
+async fn create_krb_principal(
+    State(state): State<AppState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Json(input): Json<NfsKrbPrincipalCreateRequest>,
+) -> Result<Response, ApiError> {
+    AuthService::ensure_admin(&session)?;
+    let principal = state
+        .nfs_principals
+        .create(NfsKrbPrincipalInput {
+            principal: input.principal,
+            user_id: input.user_id,
+        })
+        .await?;
+    Ok((StatusCode::CREATED, Json(krb_principal_dto(principal))).into_response())
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/nfs/principals/{principal_id}",
+    params(("principal_id" = String, Path, description = "NFS Kerberos principal mapping ID")),
+    responses(
+        (status = 204),
+        (status = 401, body = ErrorResponse),
+        (status = 403, body = ErrorResponse),
+        (status = 404, body = ErrorResponse)
+    ),
+    tag = "nfs"
+)]
+async fn delete_krb_principal(
+    State(state): State<AppState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Path(principal_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    AuthService::ensure_admin(&session)?;
+    state.nfs_principals.delete(&principal_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn krb_principal_dto(principal: NfsKrbPrincipal) -> NfsKrbPrincipalDto {
+    NfsKrbPrincipalDto {
+        id: principal.id,
+        principal: principal.principal,
+        user_id: principal.user_id,
+    }
+}
+
 fn binding_input(input: NfsBindingUpsertRequest) -> NfsBindingInput {
     NfsBindingInput {
         cidr: input.cidr,
@@ -167,6 +261,25 @@ fn binding_dto(binding: NfsBinding) -> NfsBindingDto {
     }
 }
 
+impl From<NfsKrbPrincipalServiceError> for ApiError {
+    fn from(error: NfsKrbPrincipalServiceError) -> Self {
+        match error {
+            NfsKrbPrincipalServiceError::Validation { field, message } => {
+                ApiError::validation(field, message)
+            }
+            NfsKrbPrincipalServiceError::NotFound => {
+                ApiError::new(StatusCode::NOT_FOUND, "NOT_FOUND", "资源不存在")
+            }
+            NfsKrbPrincipalServiceError::Conflict => ApiError::new(
+                StatusCode::CONFLICT,
+                "NFS_KRB_PRINCIPAL_CONFLICT",
+                "该 Kerberos principal 已绑定用户",
+            ),
+            NfsKrbPrincipalServiceError::Repository(_) => ApiError::internal(),
+        }
+    }
+}
+
 impl From<NfsBindingServiceError> for ApiError {
     fn from(error: NfsBindingServiceError) -> Self {
         match error {
@@ -188,14 +301,25 @@ impl From<NfsBindingServiceError> for ApiError {
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(list_bindings, create_binding, update_binding, delete_binding),
+    paths(
+        list_bindings,
+        create_binding,
+        update_binding,
+        delete_binding,
+        list_krb_principals,
+        create_krb_principal,
+        delete_krb_principal
+    ),
     components(schemas(
         NfsBindingUpsertRequest,
         NfsBindingDto,
         NfsBindingsResponse,
+        NfsKrbPrincipalCreateRequest,
+        NfsKrbPrincipalDto,
+        NfsKrbPrincipalsResponse,
         ErrorResponse
     )),
-    tags((name = "nfs", description = "NFS identity bindings"))
+    tags((name = "nfs", description = "NFS identity bindings and Kerberos principals"))
 )]
 struct NfsApiDoc;
 
