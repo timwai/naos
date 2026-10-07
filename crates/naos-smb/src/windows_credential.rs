@@ -233,6 +233,19 @@ impl WindowsSmbCredentialManager {
             deny_interactive_applied: true,
         })
     }
+    pub async fn disable(&self, username: &str) -> Result<(), WindowsSmbCredentialError> {
+        ensure_windows()?;
+        let account = SystemAccountName::from_username(username)?;
+        self.accounts.disable(&account).await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, username: &str) -> Result<(), WindowsSmbCredentialError> {
+        ensure_windows()?;
+        let account = SystemAccountName::from_username(username)?;
+        self.accounts.delete(&account).await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]

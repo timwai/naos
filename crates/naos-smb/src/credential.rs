@@ -99,6 +99,37 @@ impl LinuxSambaCredentialManager {
             system_account,
         })
     }
+    pub async fn disable(&self, username: &str) -> Result<(), SambaCredentialError> {
+        ensure_linux()?;
+        let account = SystemAccountName::from_username(username)?;
+
+        let spec = CommandSpec::new("smbpasswd").args([
+            "-d".to_owned(),
+            "-c".to_owned(),
+            self.config_path.to_string_lossy().into_owned(),
+            account.as_str().to_owned(),
+        ]);
+        let output = self.runner.run(spec.clone()).await?;
+        require_success(&spec, &output)?;
+        self.accounts.disable(&account).await?;
+        Ok(())
+    }
+
+    pub async fn delete(&self, username: &str) -> Result<(), SambaCredentialError> {
+        ensure_linux()?;
+        let account = SystemAccountName::from_username(username)?;
+
+        let spec = CommandSpec::new("smbpasswd").args([
+            "-x".to_owned(),
+            "-c".to_owned(),
+            self.config_path.to_string_lossy().into_owned(),
+            account.as_str().to_owned(),
+        ]);
+        let output = self.runner.run(spec.clone()).await?;
+        require_success(&spec, &output)?;
+        self.accounts.delete(&account).await?;
+        Ok(())
+    }
 }
 
 fn ensure_linux() -> Result<(), SambaCredentialError> {
@@ -180,6 +211,11 @@ mod tests {
                     stdout: "naos_alice:900:Managed by naos\n".to_owned(),
                     stderr: String::new(),
                 },
+                "smbpasswd" | "usermod" | "userdel" => CommandOutput {
+                    status: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
                 _ => CommandOutput {
                     status: 1,
                     stdout: String::new(),
@@ -233,6 +269,29 @@ mod tests {
             secret_inputs.as_slice(),
             [format!("{password}\n{password}\n").into_bytes()]
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn disable_and_delete_revoke_samba_before_system_account() {
+        let runner = Arc::new(FakeRunner::default());
+        let manager =
+            LinuxSambaCredentialManager::new(PathBuf::from("/etc/samba/smb.conf"), runner.clone());
+
+        manager.disable("alice").await.unwrap();
+        manager.delete("alice").await.unwrap();
+
+        let commands = runner.commands.lock().unwrap();
+        let programs = commands
+            .iter()
+            .map(|command| command.program.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            programs,
+            ["smbpasswd", "getent", "usermod", "smbpasswd", "getent", "userdel"]
+        );
+        assert_eq!(commands[0].args[0], "-d");
+        assert_eq!(commands[3].args[0], "-x");
     }
 
     #[test]
