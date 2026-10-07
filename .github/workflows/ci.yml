@@ -67,6 +67,18 @@ jobs:
         run: cargo test -p naos-nfs --features system-gss --test system_gss_real -- --nocapture
 
 
+  nfs-windows-sspi:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p naosd --features windows-sspi --all-targets
+      - run: cargo test -p naos-nfs --features windows-sspi
+
+
   samba-integration:
     runs-on: ubuntu-latest
     steps:
