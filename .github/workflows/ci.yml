@@ -17,6 +17,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Check NFS smoke shell syntax
+        if: runner.os == 'Linux'
+        run: bash -n scripts/ci/nfs-real-smoke.sh scripts/ci/nfs-remote-lock-smoke.sh
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace

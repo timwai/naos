@@ -52,7 +52,6 @@ pub struct NfsServer {
     nsm_service: NsmV1Service,
     nsm_notifications: mpsc::UnboundedReceiver<NsmNotification>,
     restart_nsm_peers: Vec<IpAddr>,
-    nsm_notify_name: String,
     rpc_registrations: [RpcRegistration; 6],
     rpcbind_address: Option<SocketAddr>,
 }
@@ -129,7 +128,6 @@ impl NfsServer {
             Vec::new()
         };
         let nsm_state = repository.advance_nfs_nsm_state().await?;
-        let nsm_notify_name = config.listen.to_string();
         let mount_repository: Arc<dyn NfsBindingRepository> = repository.clone();
         let nfs_access_repository: Arc<dyn NfsAccessRepository> = repository.clone();
         let nfs_identity_repository: Arc<dyn NfsBindingRepository> = repository.clone();
@@ -211,7 +209,6 @@ impl NfsServer {
             nsm_service,
             nsm_notifications,
             restart_nsm_peers,
-            nsm_notify_name,
             rpc_registrations,
             rpcbind_address: config.rpcbind_address,
         })
@@ -236,10 +233,9 @@ impl NfsServer {
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<(), NfsServerError> {
         for peer_ip in std::mem::take(&mut self.restart_nsm_peers) {
             let service = self.nsm_service.clone();
-            let notify_name = self.nsm_notify_name.clone();
             tokio::spawn(async move {
                 for attempt in 0..5 {
-                    if service.notify_reboot_peer(peer_ip, &notify_name).await {
+                    if service.notify_reboot_peer(peer_ip).await {
                         return;
                     }
                     if attempt < 4 {
