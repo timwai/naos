@@ -536,15 +536,7 @@ mod tests {
 
     #[test]
     fn unavailable_rpcsec_gss_rejects_context_creation_as_auth_error() {
-        let init = rpcsec_gss_call(
-            RPCSEC_GSS_INIT,
-            0,
-            0,
-            0,
-            &[],
-            AUTH_NONE,
-            &[],
-        );
+        let init = rpcsec_gss_call(RPCSEC_GSS_INIT, 0, 0, 0, &[], AUTH_NONE, &[]);
         assert_eq!(
             auth_error_status(&rpcsec_gss_unavailable_reply(&init).unwrap()),
             AUTH_REJECTEDCRED
@@ -584,15 +576,7 @@ mod tests {
 
     #[test]
     fn rpcsec_gss_shape_validation_rejects_bad_control_and_data_fields() {
-        let bad_init = rpcsec_gss_call(
-            RPCSEC_GSS_INIT,
-            1,
-            0,
-            0,
-            &[],
-            AUTH_NONE,
-            &[],
-        );
+        let bad_init = rpcsec_gss_call(RPCSEC_GSS_INIT, 1, 0, 0, &[], AUTH_NONE, &[]);
         assert_eq!(
             auth_error_status(&rpcsec_gss_unavailable_reply(&bad_init).unwrap()),
             AUTH_BADCRED
