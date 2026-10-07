@@ -165,8 +165,7 @@ impl NfsServer {
         );
         if let Some(acceptor) = rpcsec_gss_acceptor {
             let registry = RpcSecGssContextRegistry::new();
-            mount_service =
-                mount_service.with_rpcsec_gss(registry.clone(), acceptor.clone());
+            mount_service = mount_service.with_rpcsec_gss(registry.clone(), acceptor.clone());
             nfs_service = nfs_service.with_rpcsec_gss(registry, acceptor);
         }
         let nlm_service =
@@ -752,10 +751,7 @@ mod tests {
         assert_eq!(reader.u32().unwrap(), 0);
         let root_handle = reader.opaque(64).unwrap();
         assert!(!root_handle.is_empty());
-        assert_eq!(
-            reader.u32_array(4).unwrap(),
-            vec![crate::rpc::RPCSEC_GSS]
-        );
+        assert_eq!(reader.u32_array(4).unwrap(), vec![crate::rpc::RPCSEC_GSS]);
 
         let mut getattr_body = XdrWriter::new();
         getattr_body.opaque(&root_handle).unwrap();
@@ -1124,12 +1120,7 @@ mod tests {
         rpc_call(xid, NFS_PROGRAM, NFS_VERSION, 1, &body.into_bytes())
     }
 
-    fn rpcsec_gss_init_call(
-        xid: u32,
-        program: u32,
-        version: u32,
-        token: &[u8],
-    ) -> Vec<u8> {
+    fn rpcsec_gss_init_call(xid: u32, program: u32, version: u32, token: &[u8]) -> Vec<u8> {
         let mut writer = XdrWriter::new();
         writer.u32(xid);
         writer.u32(0);
