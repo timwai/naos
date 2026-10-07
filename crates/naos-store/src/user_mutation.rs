@@ -173,6 +173,12 @@ impl UserMutationRepository for Store {
             .try_get::<String, _>("updated_at")
             .map_err(store_error)?;
 
+        if target.action == UserMutationAction::Delete {
+            let mut tx = self.pool.begin().await.map_err(store_error)?;
+            ensure_no_acl_references(&mut tx, &target.user_id).await?;
+            tx.rollback().await.map_err(store_error)?;
+        }
+
         Ok(role == target.current_role
             && enabled == target.current_enabled
             && updated_at == target.expected_updated_at)
@@ -347,7 +353,16 @@ async fn ensure_no_acl_references(
     .fetch_one(&mut **tx)
     .await
     .map_err(store_error)?;
-    if count == 0 {
+    let active_acl_operations = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)
+         FROM operations
+         WHERE kind = 'acl.replace' AND state IN ('queued', 'running')",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(store_error)?;
+
+    if count == 0 && active_acl_operations == 0 {
         Ok(())
     } else {
         Err(UserMutationRepositoryError::AclReferenced)
