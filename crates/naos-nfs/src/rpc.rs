@@ -67,6 +67,21 @@ pub struct RpcVerifier {
     pub body: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpcSecGssIntegrityBody {
+    pub seq_num: u32,
+    pub arguments: Vec<u8>,
+    pub checksum: Vec<u8>,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum RpcSecGssBodyError {
+    #[error(transparent)]
+    Xdr(#[from] XdrError),
+    #[error("RPCSEC_GSS body sequence number does not match credential")]
+    SequenceMismatch { expected: u32, actual: u32 },
+}
+
 impl RpcCredential {
     pub const fn uid(&self) -> Option<u32> {
         match self {
@@ -195,6 +210,69 @@ fn decode_rpcsec_gss(body: &[u8]) -> Result<RpcSecGssCredential, XdrError> {
     };
     reader.finish()?;
     Ok(credential)
+}
+
+pub fn decode_rpcsec_gss_integrity_body(
+    body: &[u8],
+    expected_seq_num: u32,
+) -> Result<RpcSecGssIntegrityBody, RpcSecGssBodyError> {
+    let mut outer = XdrReader::new(body);
+    let databody = outer.opaque(MAX_RPC_RECORD_BYTES)?;
+    let checksum = outer.opaque(MAX_RPC_RECORD_BYTES)?;
+    outer.finish()?;
+
+    let mut inner = XdrReader::new(&databody);
+    let seq_num = inner.u32()?;
+    if seq_num != expected_seq_num {
+        return Err(RpcSecGssBodyError::SequenceMismatch {
+            expected: expected_seq_num,
+            actual: seq_num,
+        });
+    }
+
+    Ok(RpcSecGssIntegrityBody {
+        seq_num,
+        arguments: inner.remaining().to_vec(),
+        checksum,
+    })
+}
+
+pub fn decode_rpcsec_gss_unwrapped_body(
+    plaintext: &[u8],
+    expected_seq_num: u32,
+) -> Result<Vec<u8>, RpcSecGssBodyError> {
+    let mut reader = XdrReader::new(plaintext);
+    let seq_num = reader.u32()?;
+    if seq_num != expected_seq_num {
+        return Err(RpcSecGssBodyError::SequenceMismatch {
+            expected: expected_seq_num,
+            actual: seq_num,
+        });
+    }
+    Ok(reader.remaining().to_vec())
+}
+
+pub fn encode_rpcsec_gss_plaintext(
+    seq_num: u32,
+    arguments: &[u8],
+) -> Vec<u8> {
+    let mut writer = XdrWriter::new();
+    writer.u32(seq_num);
+    let mut output = writer.into_bytes();
+    output.extend_from_slice(arguments);
+    output
+}
+
+pub fn encode_rpcsec_gss_integrity_body(
+    seq_num: u32,
+    arguments: &[u8],
+    checksum: &[u8],
+) -> Result<Vec<u8>, XdrError> {
+    let databody = encode_rpcsec_gss_plaintext(seq_num, arguments);
+    let mut writer = XdrWriter::new();
+    writer.opaque(&databody)?;
+    writer.opaque(checksum)?;
+    Ok(writer.into_bytes())
 }
 
 pub fn accepted_success(xid: u32, body: &[u8]) -> Vec<u8> {
@@ -493,6 +571,59 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rpcsec_gss_integrity_envelope_round_trips_sequence_arguments_and_mic() {
+        let mut arguments = XdrWriter::new();
+        arguments.u32(99);
+        arguments.string("payload").unwrap();
+        let arguments = arguments.into_bytes();
+
+        let encoded =
+            encode_rpcsec_gss_integrity_body(17, &arguments, b"body-mic").unwrap();
+        let decoded = decode_rpcsec_gss_integrity_body(&encoded, 17).unwrap();
+
+        assert_eq!(decoded.seq_num, 17);
+        assert_eq!(decoded.arguments, arguments);
+        assert_eq!(decoded.checksum, b"body-mic");
+    }
+
+    #[test]
+    fn rpcsec_gss_integrity_envelope_rejects_sequence_mismatch_and_trailing_data() {
+        let encoded =
+            encode_rpcsec_gss_integrity_body(18, b"arguments", b"body-mic").unwrap();
+        assert_eq!(
+            decode_rpcsec_gss_integrity_body(&encoded, 17),
+            Err(RpcSecGssBodyError::SequenceMismatch {
+                expected: 17,
+                actual: 18,
+            })
+        );
+
+        let mut trailing = encoded;
+        trailing.extend_from_slice(&0u32.to_be_bytes());
+        assert_eq!(
+            decode_rpcsec_gss_integrity_body(&trailing, 18),
+            Err(RpcSecGssBodyError::Xdr(XdrError::TrailingData))
+        );
+    }
+
+    #[test]
+    fn rpcsec_gss_unwrapped_plaintext_requires_matching_sequence() {
+        let plaintext = encode_rpcsec_gss_plaintext(23, b"plain-arguments");
+        assert_eq!(
+            decode_rpcsec_gss_unwrapped_body(&plaintext, 23).unwrap(),
+            b"plain-arguments"
+        );
+        assert_eq!(
+            decode_rpcsec_gss_unwrapped_body(&plaintext, 24),
+            Err(RpcSecGssBodyError::SequenceMismatch {
+                expected: 24,
+                actual: 23,
+            })
+        );
+    }
+
+    #[test]
     fn auth_error_status(reply: &[u8]) -> u32 {
         let mut reader = XdrReader::new(reply);
         reader.u32().unwrap();
