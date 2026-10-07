@@ -47,6 +47,8 @@ const NLMPROC4_LOCK_RES: u32 = 12;
 const NLMPROC4_CANCEL_RES: u32 = 13;
 const NLMPROC4_UNLOCK_RES: u32 = 14;
 const NLMPROC4_GRANTED_RES: u32 = 15;
+const NLMPROC4_SHARE: u32 = 20;
+const NLMPROC4_UNSHARE: u32 = 21;
 const NLMPROC4_NM_LOCK: u32 = 22;
 const NLMPROC4_FREE_ALL: u32 = 23;
 
@@ -151,6 +153,43 @@ struct BlockedLock {
     validated: ValidatedLock,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NlmShare {
+    caller_name: String,
+    file_handle: Vec<u8>,
+    owner_handle: Vec<u8>,
+    mode: u32,
+    access: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShareOwnerKey {
+    client_ip: IpAddr,
+    caller_name: String,
+    owner_handle: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShareReservation {
+    file_key: [u8; 32],
+    owner: ShareOwnerKey,
+    mode: u32,
+    access: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ValidatedShare {
+    file_key: [u8; 32],
+    owner: ShareOwnerKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NlmShareResult {
+    cookie: Vec<u8>,
+    status: u32,
+    sequence: i32,
+}
+
 #[derive(Clone)]
 pub struct NlmV4Service {
     identity_repository: Arc<dyn NfsBindingRepository>,
@@ -158,6 +197,7 @@ pub struct NlmV4Service {
     handles: FileHandleTable,
     locks: Arc<Mutex<Vec<HeldLock>>>,
     waiters: Arc<Mutex<Vec<BlockedLock>>>,
+    shares: Arc<Mutex<Vec<ShareReservation>>>,
     state_guard: Arc<Mutex<()>>,
     callback_rpcbind_port: u16,
     grace_until: Option<Instant>,
@@ -175,6 +215,7 @@ impl NlmV4Service {
             handles,
             locks: Arc::new(Mutex::new(Vec::new())),
             waiters: Arc::new(Mutex::new(Vec::new())),
+            shares: Arc::new(Mutex::new(Vec::new())),
             state_guard: Arc::new(Mutex::new(())),
             callback_rpcbind_port: 111,
             grace_until: None,
