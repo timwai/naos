@@ -257,8 +257,8 @@ async fn send_reboot_notification(peer_ip: IpAddr, state: u32) -> bool {
     }
 
     let mut reply = vec![0u8; 4096];
-    let received = tokio::time::timeout(std::time::Duration::from_secs(2), socket.recv(&mut reply))
-        .await;
+    let received =
+        tokio::time::timeout(std::time::Duration::from_secs(2), socket.recv(&mut reply)).await;
     let Ok(Ok(length)) = received else {
         return false;
     };
@@ -269,9 +269,7 @@ async fn send_reboot_notification(peer_ip: IpAddr, state: u32) -> bool {
 fn parse_notify_reply(reply: &[u8], expected_xid: u32) -> bool {
     let mut reader = XdrReader::new(reply);
     let parsed = (|| {
-        if reader.u32().ok()? != expected_xid
-            || reader.u32().ok()? != 1
-            || reader.u32().ok()? != 0
+        if reader.u32().ok()? != expected_xid || reader.u32().ok()? != 1 || reader.u32().ok()? != 0
         {
             return None;
         }
