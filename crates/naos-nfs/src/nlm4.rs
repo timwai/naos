@@ -129,6 +129,15 @@ struct ValidatedLock {
 }
 
 #[derive(Debug, Clone)]
+struct LockRequest {
+    cookie: Vec<u8>,
+    block: bool,
+    exclusive: bool,
+    lock: NlmLock,
+    reclaim: bool,
+}
+
+#[derive(Debug, Clone)]
 struct BlockedLock {
     client_ip: IpAddr,
     cookie: Vec<u8>,
@@ -277,6 +286,7 @@ impl NlmV4Service {
         }
     }
 
+    #[cfg(test)]
     async fn lock(
         &self,
         client_ip: IpAddr,
@@ -286,22 +296,33 @@ impl NlmV4Service {
         lock: NlmLock,
         reclaim: bool,
     ) -> NlmResult {
-        self.lock_with_block(
-            client_ip, credential, cookie, false, exclusive, lock, reclaim,
+        self.lock_request(
+            client_ip,
+            credential,
+            LockRequest {
+                cookie,
+                block: false,
+                exclusive,
+                lock,
+                reclaim,
+            },
         )
         .await
     }
 
-    async fn lock_with_block(
+    async fn lock_request(
         &self,
         client_ip: IpAddr,
         credential: &RpcCredential,
-        cookie: Vec<u8>,
-        block: bool,
-        exclusive: bool,
-        lock: NlmLock,
-        reclaim: bool,
+        request: LockRequest,
     ) -> NlmResult {
+        let LockRequest {
+            cookie,
+            block,
+            exclusive,
+            lock,
+            reclaim,
+        } = request;
         if reclaim {
             return NlmResult {
                 cookie,
@@ -912,14 +933,16 @@ async fn lock_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -
     }
 
     let result = service
-        .lock_with_block(
+        .lock_request(
             client_ip,
             &call.credential,
-            cookie,
-            block,
-            exclusive,
-            lock,
-            reclaim,
+            LockRequest {
+                cookie,
+                block,
+                exclusive,
+                lock,
+                reclaim,
+            },
         )
         .await;
     accepted_success(call.xid, &encode_result(&result))
@@ -1024,14 +1047,16 @@ async fn lock_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCal
     let rollback_lock = lock.clone();
     let rollback_cookie = cookie.clone();
     let result = service
-        .lock_with_block(
+        .lock_request(
             client_ip,
             &call.credential,
-            cookie,
-            block,
-            exclusive,
-            lock,
-            reclaim,
+            LockRequest {
+                cookie,
+                block,
+                exclusive,
+                lock,
+                reclaim,
+            },
         )
         .await;
     let callback_sent = service
@@ -1570,14 +1595,16 @@ mod tests {
         let blocked_lock = lock(handle, "client-b", 20, 0, 100);
         assert_eq!(
             service
-                .lock_with_block(
+                .lock_request(
                     client_ip,
                     &credential(1000),
-                    vec![2],
-                    true,
-                    true,
-                    blocked_lock,
-                    false,
+                    LockRequest {
+                        cookie: vec![2],
+                        block: true,
+                        exclusive: true,
+                        lock: blocked_lock,
+                        reclaim: false,
+                    },
                 )
                 .await
                 .status,
@@ -1657,14 +1684,16 @@ mod tests {
         let blocked_lock = lock(handle, "client-b", 20, 0, 100);
         assert_eq!(
             service
-                .lock_with_block(
+                .lock_request(
                     client_ip,
                     &credential(1000),
-                    vec![2],
-                    true,
-                    true,
-                    blocked_lock.clone(),
-                    false,
+                    LockRequest {
+                        cookie: vec![2],
+                        block: true,
+                        exclusive: true,
+                        lock: blocked_lock.clone(),
+                        reclaim: false,
+                    },
                 )
                 .await
                 .status,
