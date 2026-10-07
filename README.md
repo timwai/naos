@@ -27,6 +27,21 @@
 - **SMB 适配**：现阶段不自研 SMB Server；Linux 复用 Samba，Windows 复用系统 SMB Server，macOS 优先复用可管理的系统 SMB provider；启动/Apply 前检测 TCP/445 归属并拒绝未知冲突
 
 
+## 🌐 生产 Web 控制台
+
+开发模式继续使用 Vite dev server。生产单二进制构建先生成 SPA，再启用 `embedded-web` feature：
+
+```bash
+cd web
+npm install --no-audit --no-fund
+npm run build
+cd ..
+cargo build --release -p naosd --features embedded-web
+```
+
+该构建会把 `web/dist/index.html`、`assets/app.js` 与 `assets/app.css` 编译进 `naosd`。服务端对 React Router 深链路回退到 `index.html`，但不会用 SPA fallback 掩盖 `/api`、`/health` 或 `/dav` 的 404。若同时需要 NFS Kerberos，可组合为 `--features embedded-web,system-gss`。
+
+
 ## 🔐 NFS Kerberos（可选）
 
 Linux / macOS / Windows 可使用 `system-gss` feature 将 NFS RPCSEC_GSS 接到平台 Kerberos provider：
