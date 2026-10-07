@@ -142,10 +142,17 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let signal_task = tokio::spawn(signal_shutdown(shutdown_tx));
+    let signal_task = tokio::spawn(signal_shutdown(shutdown_tx.clone()));
     let nfs_task = nfs_server.map(|server| {
         let shutdown = shutdown_rx.clone();
-        tokio::spawn(async move { server.run(shutdown).await })
+        let failure_shutdown = shutdown_tx.clone();
+        tokio::spawn(async move {
+            let result = server.run(shutdown).await;
+            if result.is_err() {
+                let _ = failure_shutdown.send(true);
+            }
+            result
+        })
     });
 
     info!(listen = %cli.listen, port = cli.port, "naosd started");
@@ -174,7 +181,21 @@ fn init_tracing() {
 }
 
 async fn signal_shutdown(shutdown: watch::Sender<bool>) {
-    let _ = tokio::signal::ctrl_c().await;
+    #[cfg(unix)]
+    {
+        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+
     info!("shutdown signal received");
     let _ = shutdown.send(true);
 }
