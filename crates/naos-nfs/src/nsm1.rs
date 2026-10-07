@@ -65,8 +65,14 @@ struct NsmState {
 
 impl Default for NsmState {
     fn default() -> Self {
+        Self::with_state(INITIAL_UP_STATE)
+    }
+}
+
+impl NsmState {
+    fn with_state(state: u32) -> Self {
         Self {
-            state: INITIAL_UP_STATE,
+            state: normalize_up_state(state),
             monitors: Vec::new(),
             notifications: Vec::new(),
         }
@@ -96,8 +102,15 @@ impl NsmV1Service {
     pub fn with_notification_sender(
         notification_tx: mpsc::UnboundedSender<NsmNotification>,
     ) -> Self {
+        Self::with_state_and_notification_sender(INITIAL_UP_STATE, notification_tx)
+    }
+
+    pub fn with_state_and_notification_sender(
+        state: u32,
+        notification_tx: mpsc::UnboundedSender<NsmNotification>,
+    ) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(NsmState::default())),
+            inner: Arc::new(Mutex::new(NsmState::with_state(state))),
             notification_tx: Some(notification_tx),
         }
     }
@@ -160,6 +173,14 @@ impl NsmV1Service {
         if let Some(notification_tx) = &self.notification_tx {
             let _ = notification_tx.send(notification);
         }
+    }
+}
+
+fn normalize_up_state(state: u32) -> u32 {
+    if state == 0 {
+        INITIAL_UP_STATE
+    } else {
+        state | 1
     }
 }
 
@@ -364,6 +385,13 @@ mod tests {
         rpc::{AUTH_NONE, RPC_VERSION},
         xdr::XdrWriter,
     };
+
+    #[tokio::test]
+    async fn configured_state_is_normalized_and_reported() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let service = NsmV1Service::with_state_and_notification_sender(2, tx);
+        assert_eq!(service.current_state().await, 3);
+    }
 
     #[tokio::test]
     async fn stat_returns_success_and_current_odd_state() {

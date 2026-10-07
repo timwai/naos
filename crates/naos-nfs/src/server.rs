@@ -120,6 +120,7 @@ impl NfsServer {
         let handle_records = repository.list_nfs_file_handles().await?;
         let handles = FileHandleTable::from_records(secret, handle_records);
         let restarted = repository.mark_nfs_lock_manager_started().await?;
+        let nsm_state = repository.advance_nfs_nsm_state().await?;
         let mount_repository: Arc<dyn NfsBindingRepository> = repository.clone();
         let nfs_access_repository: Arc<dyn NfsAccessRepository> = repository.clone();
         let nfs_identity_repository: Arc<dyn NfsBindingRepository> = repository.clone();
@@ -139,7 +140,8 @@ impl NfsServer {
             nlm_service
         };
         let (nsm_notification_tx, nsm_notifications) = mpsc::unbounded_channel();
-        let nsm_service = NsmV1Service::with_notification_sender(nsm_notification_tx);
+        let nsm_service =
+            NsmV1Service::with_state_and_notification_sender(nsm_state, nsm_notification_tx);
         let rpc_registrations = [
             RpcRegistration {
                 program: NFS_PROGRAM,
@@ -369,6 +371,7 @@ mod tests {
         handle_secret: Mutex<Option<[u8; 32]>>,
         file_handles: Mutex<Vec<NfsFileHandleRecord>>,
         lock_manager_started: Mutex<bool>,
+        nsm_state: Mutex<Option<u32>>,
     }
 
     #[async_trait]
@@ -471,6 +474,22 @@ mod tests {
             *started = true;
             Ok(restarted)
         }
+
+        async fn advance_nfs_nsm_state(&self) -> Result<u32, NfsRepositoryError> {
+            let mut state = self
+                .nsm_state
+                .lock()
+                .map_err(|_| NfsRepositoryError::Unavailable)?;
+            let next = match *state {
+                None => 1,
+                Some(current) => {
+                    let advanced = current.wrapping_add(2);
+                    if advanced == 0 { 1 } else { advanced | 1 }
+                }
+            };
+            *state = Some(next);
+            Ok(next)
+        }
     }
 
     #[async_trait]
@@ -525,6 +544,7 @@ mod tests {
             handle_secret: Mutex::new(None),
             file_handles: Mutex::new(Vec::new()),
             lock_manager_started: Mutex::new(false),
+            nsm_state: Mutex::new(None),
         })
     }
 
@@ -632,6 +652,7 @@ mod tests {
         .unwrap();
         let second_nfs = second.nfs_address().unwrap();
         let second_nlm = second.nlm_address().unwrap();
+        let second_nsm = second.nsm_address().unwrap();
         let (second_shutdown_tx, second_shutdown_rx) = watch::channel(false);
         let second_task = tokio::spawn(second.run(second_shutdown_rx));
 
@@ -653,6 +674,9 @@ mod tests {
         write_record(&mut nlm_stream, &reclaim_lock).await.unwrap();
         let reclaim_reply = read_record(&mut nlm_stream).await.unwrap().unwrap();
         assert_eq!(parse_nlm_status(&reclaim_reply, 64), crate::nlm4::NLM4_GRANTED);
+
+        let stat_reply = rpc_round_trip(second_nsm, nsm_stat_call(65, "server.example")).await;
+        assert_eq!(parse_nsm_stat_state(&stat_reply, 65), 3);
 
         second_shutdown_tx.send(true).unwrap();
         second_task.await.unwrap().unwrap();
@@ -788,6 +812,19 @@ mod tests {
         assert_rpc_success_prefix(reply, xid);
         let mut reader = XdrReader::new(&reply[24..]);
         reader.opaque(16).unwrap();
+        reader.u32().unwrap()
+    }
+
+    fn nsm_stat_call(xid: u32, mon_name: &str) -> Vec<u8> {
+        let mut body = XdrWriter::new();
+        body.string(mon_name).unwrap();
+        rpc_call(xid, NSM_PROGRAM, NSM_VERSION, 1, &body.into_bytes())
+    }
+
+    fn parse_nsm_stat_state(reply: &[u8], xid: u32) -> u32 {
+        assert_rpc_success_prefix(reply, xid);
+        let mut reader = XdrReader::new(&reply[24..]);
+        assert_eq!(reader.u32().unwrap(), 0);
         reader.u32().unwrap()
     }
 
