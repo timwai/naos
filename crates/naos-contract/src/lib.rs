@@ -217,3 +217,29 @@ pub mod doctor {
         pub findings: Vec<SmbDoctorFindingDto>,
     }
 }
+
+pub mod share {
+    use serde::Serialize;
+    use utoipa::ToSchema;
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct ShareDto {
+        pub id: String,
+        pub name: String,
+        pub path: String,
+        pub canonical_path: String,
+        pub comment: Option<String>,
+        pub enabled: bool,
+        pub smb_enabled: bool,
+        pub webdav_enabled: bool,
+        pub nfs_enabled: bool,
+        pub generation: u64,
+        pub applied_generation: u64,
+        pub apply_state: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct SharesResponse {
+        pub items: Vec<ShareDto>,
+    }
+}

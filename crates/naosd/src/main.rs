@@ -12,6 +12,7 @@ use naos_core::{
     nfs::NfsBindingService,
     operation::OperationService,
     reconcile::Reconciler,
+    share::ShareCatalogService,
 };
 #[cfg(all(any(unix, windows), feature = "system-gss"))]
 use naos_nfs::rpcsec_gss::StatefulRpcSecGssAcceptor;
@@ -113,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
     let operations = Arc::new(OperationService::new(store.clone()));
     let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
     let nfs_principals = Arc::new(naos_core::nfs::NfsKrbPrincipalService::new(store.clone()));
+    let shares = Arc::new(ShareCatalogService::new(store.clone()));
     let reconciler = Arc::new(Reconciler::new(operations.clone()));
     let smb_doctor = Arc::new(SmbDoctor::default());
 
@@ -123,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         operations,
         nfs_bindings,
         nfs_principals,
+        shares,
         reconciler,
         smb_doctor,
     })

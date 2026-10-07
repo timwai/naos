@@ -13,6 +13,9 @@ export const queryKeys = {
   operations: {
     detail: (operationId: string) => ["operations", operationId] as const,
   },
+  shares: {
+    list: () => ["shares", "list"] as const,
+  },
   system: {
     smbDoctor: () => ["system", "smb-doctor"] as const,
   },

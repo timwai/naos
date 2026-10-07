@@ -20,6 +20,7 @@ export type SetupAdminRequest =
   components["schemas"]["SetupAdminRequest"];
 export type SetupStatusResponse =
   components["schemas"]["SetupStatusResponse"];
+export type SharesResponse = components["schemas"]["SharesResponse"];
 export type SmbDoctorResponse =
   components["schemas"]["SmbDoctorResponse"];
 export type UsersResponse = components["schemas"]["UsersResponse"];
@@ -192,4 +193,8 @@ export async function deleteNfsPrincipal(principalId: string) {
 
 export async function listUsers() {
   return requestJson<UsersResponse>("/api/v1/users");
+}
+
+export async function listShares() {
+  return requestJson<SharesResponse>("/api/v1/shares");
 }

@@ -7,6 +7,7 @@ import { LoginPage } from "../pages/LoginPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
 import { ProfilePage } from "../pages/ProfilePage";
 import { SettingsPage } from "../pages/SettingsPage";
+import { SharesPage } from "../pages/SharesPage";
 import { UsersPage } from "../pages/UsersPage";
 
 function RequireAuth() {
@@ -60,15 +61,7 @@ export function App() {
           <Route path="profile" element={<ProfilePage />} />
 
           <Route element={<RequireAdmin />}>
-            <Route
-              path="shares"
-              element={
-                <PlaceholderPage
-                  title="共享"
-                  description="共享、ACL 与 NFS binding 将直接使用后端 API。"
-                />
-              }
-            />
+            <Route path="shares" element={<SharesPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route
               path="acl-simulator"
