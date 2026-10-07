@@ -244,6 +244,69 @@ impl NfsBindingRepository for Store {
         Ok(())
     }
 
+    async fn get_nfs_exclusive_create_verifier(
+        &self,
+        share_id: &str,
+        relative_path: &RelativePath,
+    ) -> Result<Option<[u8; 8]>, NfsRepositoryError> {
+        let value = sqlx::query_scalar::<_, Vec<u8>>(
+            "SELECT verifier
+             FROM nfs_exclusive_creates
+             WHERE share_id = ? AND rel_path = ?",
+        )
+        .bind(share_id)
+        .bind(relative_path.as_slash_path())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(store_error)?;
+
+        value
+            .map(|value| {
+                value
+                    .try_into()
+                    .map_err(|_| NfsRepositoryError::Unavailable)
+            })
+            .transpose()
+    }
+
+    async fn set_nfs_exclusive_create_verifier(
+        &self,
+        share_id: &str,
+        relative_path: &RelativePath,
+        verifier: [u8; 8],
+    ) -> Result<(), NfsRepositoryError> {
+        sqlx::query(
+            "INSERT INTO nfs_exclusive_creates (share_id, rel_path, verifier)
+             VALUES (?, ?, ?)
+             ON CONFLICT(share_id, rel_path)
+             DO UPDATE SET verifier = excluded.verifier",
+        )
+        .bind(share_id)
+        .bind(relative_path.as_slash_path())
+        .bind(verifier.as_slice())
+        .execute(&self.pool)
+        .await
+        .map_err(store_error)?;
+        Ok(())
+    }
+
+    async fn clear_nfs_exclusive_create_verifier(
+        &self,
+        share_id: &str,
+        relative_path: &RelativePath,
+    ) -> Result<(), NfsRepositoryError> {
+        sqlx::query(
+            "DELETE FROM nfs_exclusive_creates
+             WHERE share_id = ? AND rel_path = ?",
+        )
+        .bind(share_id)
+        .bind(relative_path.as_slash_path())
+        .execute(&self.pool)
+        .await
+        .map_err(store_error)?;
+        Ok(())
+    }
+
     async fn mark_nfs_lock_manager_started(&self) -> Result<bool, NfsRepositoryError> {
         let inserted = sqlx::query(
             "INSERT INTO nfs_runtime_state (key, value)
@@ -476,6 +539,72 @@ mod tests {
             store.get_or_create_nfs_handle_secret([9; 32]).await,
             Err(NfsRepositoryError::Unavailable)
         ));
+    }
+
+    #[tokio::test]
+    async fn nfs_exclusive_create_verifiers_round_trip_and_clear() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE nfs_exclusive_creates (
+                share_id TEXT NOT NULL,
+                rel_path TEXT NOT NULL,
+                verifier BLOB NOT NULL CHECK(length(verifier) = 8),
+                PRIMARY KEY (share_id, rel_path)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let store = Store { pool };
+        let path = RelativePath::parse("/docs/report.txt").unwrap();
+
+        assert_eq!(
+            store
+                .get_nfs_exclusive_create_verifier("shr_media", &path)
+                .await
+                .unwrap(),
+            None
+        );
+
+        store
+            .set_nfs_exclusive_create_verifier("shr_media", &path, [7; 8])
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .get_nfs_exclusive_create_verifier("shr_media", &path)
+                .await
+                .unwrap(),
+            Some([7; 8])
+        );
+
+        store
+            .set_nfs_exclusive_create_verifier("shr_media", &path, [8; 8])
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .get_nfs_exclusive_create_verifier("shr_media", &path)
+                .await
+                .unwrap(),
+            Some([8; 8])
+        );
+
+        store
+            .clear_nfs_exclusive_create_verifier("shr_media", &path)
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .get_nfs_exclusive_create_verifier("shr_media", &path)
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
