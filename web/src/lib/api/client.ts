@@ -12,6 +12,11 @@ export type AuthSessionResponse =
   components["schemas"]["AuthSessionResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
+export type NfsBindingDto = components["schemas"]["NfsBindingDto"];
+export type NfsBindingUpsertRequest =
+  components["schemas"]["NfsBindingUpsertRequest"];
+export type NfsBindingsResponse =
+  components["schemas"]["NfsBindingsResponse"];
 export type NfsKrbPrincipalCreateRequest =
   components["schemas"]["NfsKrbPrincipalCreateRequest"];
 export type NfsKrbPrincipalsResponse =
@@ -25,6 +30,7 @@ export type SetupAdminRequest =
   components["schemas"]["SetupAdminRequest"];
 export type SetupStatusResponse =
   components["schemas"]["SetupStatusResponse"];
+export type ShareDto = components["schemas"]["ShareDto"];
 export type SharesResponse = components["schemas"]["SharesResponse"];
 export type SmbDoctorResponse =
   components["schemas"]["SmbDoctorResponse"];
@@ -220,5 +226,54 @@ export async function simulateShareAcl(
       method: "POST",
       body: JSON.stringify(input),
     },
+  );
+}
+
+export async function getShare(shareId: string) {
+  return requestJson<ShareDto>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}`,
+  );
+}
+
+export async function listNfsBindings(shareId: string) {
+  return requestJson<NfsBindingsResponse>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/nfs-bindings`,
+  );
+}
+
+export async function createNfsBinding(
+  shareId: string,
+  input: NfsBindingUpsertRequest,
+) {
+  return requestJson<NfsBindingDto>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/nfs-bindings`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function updateNfsBinding(
+  shareId: string,
+  bindingId: string,
+  input: NfsBindingUpsertRequest,
+) {
+  return requestJson<NfsBindingDto>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/nfs-bindings/${encodeURIComponent(bindingId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function deleteNfsBinding(
+  shareId: string,
+  bindingId: string,
+) {
+  return requestJson<void>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/nfs-bindings/${encodeURIComponent(bindingId)}`,
+    { method: "DELETE" },
   );
 }

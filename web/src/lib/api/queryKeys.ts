@@ -9,12 +9,14 @@ export const queryKeys = {
   },
   nfs: {
     principals: () => ["nfs", "principals"] as const,
+    bindings: (shareId: string) => ["nfs", "bindings", shareId] as const,
   },
   operations: {
     detail: (operationId: string) => ["operations", operationId] as const,
   },
   shares: {
     list: () => ["shares", "list"] as const,
+    detail: (shareId: string) => ["shares", "detail", shareId] as const,
     acl: (shareId: string) => ["shares", shareId, "acl"] as const,
   },
   system: {

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 
 import { ApiError, listShares } from "../lib/api/client";
 import { queryKeys } from "../lib/api/queryKeys";
@@ -137,6 +138,12 @@ export function SharesPage() {
                     <span className="share-generation">
                       gen {share.applied_generation}/{share.generation}
                     </span>
+                    <Link
+                      className="button secondary button-link"
+                      to={`/shares/${share.id}`}
+                    >
+                      详情
+                    </Link>
                   </div>
                 </article>
               );

@@ -8,6 +8,7 @@ import { LoginPage } from "../pages/LoginPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
 import { ProfilePage } from "../pages/ProfilePage";
 import { SettingsPage } from "../pages/SettingsPage";
+import { ShareDetailPage } from "../pages/ShareDetailPage";
 import { SharesPage } from "../pages/SharesPage";
 import { UsersPage } from "../pages/UsersPage";
 
@@ -63,6 +64,7 @@ export function App() {
 
           <Route element={<RequireAdmin />}>
             <Route path="shares" element={<SharesPage />} />
+            <Route path="shares/:id" element={<ShareDetailPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="acl-simulator" element={<AclSimulatorPage />} />
             <Route
