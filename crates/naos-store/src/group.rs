@@ -1,9 +1,7 @@
 use async_trait::async_trait;
 use naos_core::{
     auth::{Role, UserSummary},
-    group::{
-        GroupDetail, GroupRepository, GroupRepositoryError, GroupSummary, GroupWriteInput,
-    },
+    group::{GroupDetail, GroupRepository, GroupRepositoryError, GroupSummary, GroupWriteInput},
 };
 use sqlx::{Row, Sqlite, Transaction};
 
@@ -26,10 +24,7 @@ impl GroupRepository for Store {
         rows.into_iter().map(summary_from_row).collect()
     }
 
-    async fn get_group(
-        &self,
-        group_id: &str,
-    ) -> Result<Option<GroupDetail>, GroupRepositoryError> {
+    async fn get_group(&self, group_id: &str) -> Result<Option<GroupDetail>, GroupRepositoryError> {
         get_group_from_pool(&self.pool, group_id).await
     }
 
@@ -129,15 +124,14 @@ impl GroupRepository for Store {
                 }
                 placeholders.push('?');
             }
-            let sql = format!(
-                "SELECT COUNT(*) FROM users WHERE id IN ({placeholders})"
-            );
+            let sql = format!("SELECT COUNT(*) FROM users WHERE id IN ({placeholders})");
             let mut query = sqlx::query_scalar::<_, i64>(&sql);
             for user_id in user_ids {
                 query = query.bind(user_id);
             }
             let found = query.fetch_one(&mut *tx).await.map_err(store_error)?;
-            if found != i64::try_from(user_ids.len()).map_err(|_| GroupRepositoryError::Unavailable)?
+            if found
+                != i64::try_from(user_ids.len()).map_err(|_| GroupRepositoryError::Unavailable)?
             {
                 return Err(GroupRepositoryError::UserNotFound);
             }
@@ -178,13 +172,11 @@ impl GroupRepository for Store {
         &self,
         user_id: &str,
     ) -> Result<Vec<GroupSummary>, GroupRepositoryError> {
-        let exists = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM users WHERE id = ?",
-        )
-        .bind(user_id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(store_error)?;
+        let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(store_error)?;
         if exists == 0 {
             return Err(GroupRepositoryError::UserNotFound);
         }
@@ -211,13 +203,11 @@ async fn ensure_group_exists(
     tx: &mut Transaction<'_, Sqlite>,
     group_id: &str,
 ) -> Result<(), GroupRepositoryError> {
-    let exists = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM groups WHERE id = ?",
-    )
-    .bind(group_id)
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(store_error)?;
+    let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM groups WHERE id = ?")
+        .bind(group_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(store_error)?;
     if exists == 0 {
         Err(GroupRepositoryError::NotFound)
     } else {
@@ -268,9 +258,7 @@ async fn get_group_from_pool(
 }
 
 fn summary_from_row(row: sqlx::sqlite::SqliteRow) -> Result<GroupSummary, GroupRepositoryError> {
-    let member_count = row
-        .try_get::<i64, _>("member_count")
-        .map_err(store_error)?;
+    let member_count = row.try_get::<i64, _>("member_count").map_err(store_error)?;
     Ok(GroupSummary {
         id: row.try_get("id").map_err(store_error)?,
         name: row.try_get("name").map_err(store_error)?,

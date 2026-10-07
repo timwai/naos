@@ -1042,7 +1042,10 @@ async fn group_crud_and_atomic_membership_are_visible_from_user_relationships() 
         .await
         .unwrap();
     assert_eq!(clear.status(), StatusCode::OK);
-    assert_eq!(json_body(clear).await["members"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        json_body(clear).await["members"].as_array().unwrap().len(),
+        0
+    );
 
     let delete = app
         .clone()

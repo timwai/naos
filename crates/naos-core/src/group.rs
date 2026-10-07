@@ -175,10 +175,7 @@ impl GroupService {
             .map_err(map_repository)
     }
 
-    pub async fn list_user_groups(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<GroupSummary>, GroupError> {
+    pub async fn list_user_groups(&self, user_id: &str) -> Result<Vec<GroupSummary>, GroupError> {
         self.repository
             .list_user_groups(user_id)
             .await
