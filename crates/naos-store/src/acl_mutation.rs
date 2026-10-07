@@ -182,7 +182,10 @@ async fn build_apply_rules(
                 .await
                 .map_err(store_error)?
                 .ok_or(AclMutationRepositoryError::UserNotFound)?;
-                AclApplySubject::User { username }
+                AclApplySubject::User {
+                    user_id: user_id.clone(),
+                    username,
+                }
             }
             Subject::Group(group_id) => {
                 if let Some(subject) = groups.get(group_id) {
@@ -240,7 +243,10 @@ async fn load_apply_rules(
                 .await
                 .map_err(store_error)?
                 .ok_or(AclMutationRepositoryError::UserNotFound)?;
-                AclApplySubject::User { username }
+                AclApplySubject::User {
+                    user_id: subject_id.clone(),
+                    username,
+                }
             }
             "group" => {
                 if let Some(subject) = groups.get(&subject_id) {
