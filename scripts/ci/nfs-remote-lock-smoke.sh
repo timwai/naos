@@ -38,6 +38,7 @@ RESTART_TARGET="${NAOS_NFS_REMOTE_RESTART_TARGET:-}"
 RESTART_SERVICE="${NAOS_NFS_REMOTE_RESTART_SERVICE:-naosd}"
 RESTART_GRACE_WAIT="${NAOS_NFS_REMOTE_RESTART_GRACE_WAIT:-35}"
 RESTART_RPC_TIMEOUT="${NAOS_NFS_REMOTE_RESTART_RPC_TIMEOUT:-60}"
+NLM_PROBE="${NAOS_NFS_REMOTE_NLM_PROBE:-}"
 
 if [[ -z "$HOST" ]]; then
   echo "NAOS_NFS_REMOTE_HOST is required" >&2
@@ -60,7 +61,16 @@ for port in "$NFS_PORT" "$MOUNT_PORT"; do
   fi
 done
 
+if [[ -n "$NLM_PROBE" && ! -x "$NLM_PROBE" ]]; then
+  echo "NAOS_NFS_REMOTE_NLM_PROBE must point to an executable probe" >&2
+  exit 4
+fi
+
 if [[ -n "$RESTART_TARGET" ]]; then
+  if [[ -z "$NLM_PROBE" ]]; then
+    echo "restart/reclaim mode requires NAOS_NFS_REMOTE_NLM_PROBE" >&2
+    exit 4
+  fi
   command -v ssh >/dev/null || {
     echo "missing required command: ssh" >&2
     exit 3
@@ -132,9 +142,14 @@ python3 - \
   "$RESTART_TARGET" \
   "$RESTART_SERVICE" \
   "$RESTART_GRACE_WAIT" \
-  "$RESTART_RPC_TIMEOUT" <<'PY'
+  "$RESTART_RPC_TIMEOUT" \
+  "$EXPORT" \
+  "$NFS_PORT" \
+  "$MOUNT_PORT" \
+  "$NLM_PROBE" <<'PY'
 import errno
 import fcntl
+import os
 import subprocess
 import sys
 import time
@@ -145,6 +160,10 @@ restart_target = sys.argv[3]
 restart_service = sys.argv[4]
 grace_wait = int(sys.argv[5])
 rpc_timeout = int(sys.argv[6])
+export = sys.argv[7]
+nfs_port = sys.argv[8]
+mount_port = sys.argv[9]
+nlm_probe = sys.argv[10]
 
 holder_code = r"""
 import fcntl
@@ -201,6 +220,23 @@ def wait_for_remote_rpc_services():
     )
 
 
+def assert_server_lock_state(expected):
+    if not nlm_probe:
+        return
+    subprocess.run(
+        [
+            nlm_probe,
+            host,
+            export,
+            os.path.basename(path),
+            nfs_port,
+            mount_port,
+            expected,
+        ],
+        check=True,
+    )
+
+
 holder = subprocess.Popen(
     [sys.executable, "-c", holder_code, path],
     stdin=subprocess.PIPE,
@@ -220,6 +256,7 @@ try:
 
     if not conflicting_lock_is_denied():
         raise RuntimeError("second process unexpectedly acquired a conflicting remote NFS lock")
+    assert_server_lock_state("locked")
 
     if restart_target:
         subprocess.run(
@@ -254,6 +291,7 @@ try:
                 "conflicting lock succeeded after server restart and grace period; "
                 "the original client lock was not reclaimed"
             )
+        assert_server_lock_state("locked")
 
     holder.stdin.write("\n")
     holder.stdin.flush()
@@ -262,6 +300,7 @@ try:
 
     if conflicting_lock_is_denied():
         raise RuntimeError("lock remained unavailable after the original holder released it")
+    assert_server_lock_state("unlocked")
 finally:
     if holder.poll() is None:
         holder.kill()
