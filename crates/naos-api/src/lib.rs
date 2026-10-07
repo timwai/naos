@@ -1,6 +1,7 @@
 mod acl_api;
 mod audit_api;
 mod doctor_api;
+mod files_api;
 mod nfs_api;
 mod operation_api;
 mod share_api;
@@ -43,6 +44,7 @@ pub struct AppState {
     pub acl_mutations: Arc<naos_core::acl::AclMutationService>,
     pub acl_reconcile_factory: Arc<dyn naos_core::acl::AclReconcileDriverFactory>,
     pub audit: Arc<naos_core::audit::AuditService>,
+    pub files: Arc<naos_core::files::FileService>,
     pub operations: Arc<naos_core::operation::OperationService>,
     pub share_mutations: Arc<naos_core::share::ShareMutationService>,
     pub share_reconcile_factory: Arc<dyn naos_core::share::ShareReconcileDriverFactory>,
@@ -70,6 +72,7 @@ pub fn router(state: AppState) -> Router {
         .merge(audit_api::routes())
         .merge(operation_api::routes())
         .merge(doctor_api::routes())
+        .merge(files_api::routes())
         .merge(nfs_api::routes())
         .merge(share_api::routes())
         .route_layer(middleware::from_fn_with_state(
@@ -603,6 +606,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     document.merge(audit_api::openapi());
     document.merge(operation_api::openapi());
     document.merge(doctor_api::openapi());
+    document.merge(files_api::openapi());
     document.merge(nfs_api::openapi());
     document.merge(share_api::openapi());
     document

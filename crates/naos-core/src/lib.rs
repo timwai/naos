@@ -2,6 +2,7 @@ pub mod acl;
 pub mod audit;
 pub mod auth;
 pub mod doctor;
+pub mod files;
 pub mod nfs;
 pub mod operation;
 pub mod path;

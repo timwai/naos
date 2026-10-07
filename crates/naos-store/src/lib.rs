@@ -1,6 +1,7 @@
 mod acl_admin;
 mod acl_mutation;
 mod audit;
+mod files;
 mod nfs;
 mod operation;
 mod share_apply;

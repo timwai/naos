@@ -326,6 +326,49 @@ pub mod acl {
     }
 }
 
+pub mod files {
+    use serde::{Deserialize, Serialize};
+    use utoipa::ToSchema;
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct FileShareDto {
+        pub id: String,
+        pub name: String,
+        pub effective_permission: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct FileSharesResponse {
+        pub items: Vec<FileShareDto>,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct FileEntryDto {
+        pub name: String,
+        pub kind: String,
+        pub size: Option<u64>,
+        pub modified_at: Option<String>,
+        pub effective_permission: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct FileDirectoryResponse {
+        pub path: String,
+        pub entries: Vec<FileEntryDto>,
+    }
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct CreateDirectoryRequest {
+        pub path: String,
+    }
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct MoveFileRequest {
+        pub source_path: String,
+        pub destination_path: String,
+    }
+}
+
 pub mod audit {
     use serde::Serialize;
     use serde_json::Value;
