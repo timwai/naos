@@ -447,11 +447,13 @@ mod tests {
             service.mount(client_ip, &rpcsec_gss(), "/media").await,
             Err(MountError::AccessDenied)
         ));
-        assert!(service
-            .exports(client_ip, &rpcsec_gss())
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            service
+                .exports(client_ip, &rpcsec_gss())
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
