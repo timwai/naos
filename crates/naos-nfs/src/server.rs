@@ -125,6 +125,7 @@ impl NfsServer {
         let nfs_access_repository: Arc<dyn NfsAccessRepository> = repository.clone();
         let nfs_identity_repository: Arc<dyn NfsBindingRepository> = repository.clone();
         let nlm_access_repository: Arc<dyn NfsAccessRepository> = repository.clone();
+        let nsm_state_repository: Arc<dyn NfsBindingRepository> = repository.clone();
         let nlm_identity_repository: Arc<dyn NfsBindingRepository> = repository;
         let mount_service = MountService::with_handles(mount_repository, handles.clone());
         let nfs_service = NfsV3Service::new(
@@ -140,8 +141,11 @@ impl NfsServer {
             nlm_service
         };
         let (nsm_notification_tx, nsm_notifications) = mpsc::unbounded_channel();
-        let nsm_service =
-            NsmV1Service::with_state_and_notification_sender(nsm_state, nsm_notification_tx);
+        let nsm_service = NsmV1Service::with_persistent_state_and_notification_sender(
+            nsm_state,
+            nsm_state_repository,
+            nsm_notification_tx,
+        );
         let rpc_registrations = [
             RpcRegistration {
                 program: NFS_PROGRAM,
@@ -681,6 +685,11 @@ mod tests {
         let stat_reply = rpc_round_trip(second_nsm, nsm_stat_call(65, "server.example")).await;
         assert_eq!(parse_nsm_stat_state(&stat_reply, 65), 3);
 
+        let crash_reply = rpc_round_trip(second_nsm, nsm_simulate_crash_call(66)).await;
+        assert_rpc_success_prefix(&crash_reply, 66);
+        let stat_reply = rpc_round_trip(second_nsm, nsm_stat_call(67, "server.example")).await;
+        assert_eq!(parse_nsm_stat_state(&stat_reply, 67), 5);
+
         second_shutdown_tx.send(true).unwrap();
         second_task.await.unwrap().unwrap();
     }
@@ -816,6 +825,10 @@ mod tests {
         let mut reader = XdrReader::new(&reply[24..]);
         reader.opaque(16).unwrap();
         reader.u32().unwrap()
+    }
+
+    fn nsm_simulate_crash_call(xid: u32) -> Vec<u8> {
+        rpc_call(xid, NSM_PROGRAM, NSM_VERSION, 5, &[])
     }
 
     fn nsm_stat_call(xid: u32, mon_name: &str) -> Vec<u8> {

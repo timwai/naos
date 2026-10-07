@@ -1,12 +1,13 @@
 use std::{io, net::IpAddr, sync::Arc};
 
+use naos_core::nfs::{NfsBindingRepository, NfsRepositoryError};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::{
     rpc::{
         RpcCall, RpcDecodeError, accepted_garbage_args, accepted_procedure_unavailable,
-        accepted_program_mismatch, accepted_program_unavailable, accepted_success, decode_call,
-        denied_rpc_mismatch,
+        accepted_program_mismatch, accepted_program_unavailable, accepted_success,
+        accepted_system_error, decode_call, denied_rpc_mismatch,
     },
     transport::{read_record, write_record},
     xdr::{XdrReader, XdrWriter},
@@ -79,10 +80,11 @@ impl NsmState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct NsmV1Service {
     inner: Arc<Mutex<NsmState>>,
     notification_tx: Option<mpsc::UnboundedSender<NsmNotification>>,
+    state_repository: Option<Arc<dyn NfsBindingRepository>>,
 }
 
 impl Default for NsmV1Service {
@@ -90,6 +92,7 @@ impl Default for NsmV1Service {
         Self {
             inner: Arc::new(Mutex::new(NsmState::default())),
             notification_tx: None,
+            state_repository: None,
         }
     }
 }
@@ -112,6 +115,19 @@ impl NsmV1Service {
         Self {
             inner: Arc::new(Mutex::new(NsmState::with_state(state))),
             notification_tx: Some(notification_tx),
+            state_repository: None,
+        }
+    }
+
+    pub fn with_persistent_state_and_notification_sender(
+        state: u32,
+        state_repository: Arc<dyn NfsBindingRepository>,
+        notification_tx: mpsc::UnboundedSender<NsmNotification>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(NsmState::with_state(state))),
+            notification_tx: Some(notification_tx),
+            state_repository: Some(state_repository),
         }
     }
 
@@ -158,10 +174,18 @@ impl NsmV1Service {
         state.state
     }
 
-    async fn simulate_crash(&self) {
+    async fn simulate_crash(&self) -> Result<(), NfsRepositoryError> {
+        let next_state = if let Some(repository) = &self.state_repository {
+            repository.advance_nfs_nsm_state().await?
+        } else {
+            let state = self.inner.lock().await;
+            next_up_state(state.state)
+        };
+
         let mut state = self.inner.lock().await;
-        state.state = next_up_state(state.state);
+        state.state = normalize_up_state(next_state);
         state.monitors.clear();
+        Ok(())
     }
 
     async fn record_notification(&self, notification: NsmNotification) {
@@ -321,8 +345,10 @@ async fn simu_crash_reply(service: &NsmV1Service, call: &RpcCall) -> Vec<u8> {
     if !call.body.is_empty() {
         return accepted_garbage_args(call.xid);
     }
-    service.simulate_crash().await;
-    accepted_success(call.xid, &[])
+    match service.simulate_crash().await {
+        Ok(()) => accepted_success(call.xid, &[]),
+        Err(_) => accepted_system_error(call.xid),
+    }
 }
 
 async fn notify_reply(service: &NsmV1Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
