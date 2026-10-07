@@ -8,9 +8,7 @@ use naos_core::{
     },
     reconcile::{ReconcileDriver, ReconcileFailure},
 };
-use naos_platform::{
-    SystemAccountName, SystemGroupError, SystemGroupManager, SystemGroupName,
-};
+use naos_platform::{SystemAccountName, SystemGroupError, SystemGroupManager, SystemGroupName};
 use serde_json::{Value, json};
 
 pub struct PlatformGroupReconcileDriverFactory {
@@ -124,7 +122,10 @@ impl ReconcileDriver for PlatformGroupReconcileDriver {
         let group = self.group()?;
         match self.target.action {
             GroupMutationAction::ReplaceMembers => {
-                self.manager.ensure(&group).await.map_err(platform_failure)?;
+                self.manager
+                    .ensure(&group)
+                    .await
+                    .map_err(platform_failure)?;
                 let members = Self::members(&self.target.desired_members)?;
                 self.manager
                     .replace_members(&group, &members)
@@ -199,7 +200,10 @@ impl ReconcileDriver for PlatformGroupReconcileDriver {
             }
         }
 
-        self.manager.ensure(&group).await.map_err(platform_failure)?;
+        self.manager
+            .ensure(&group)
+            .await
+            .map_err(platform_failure)?;
         let members = Self::members(&self.target.current_members)?;
         self.manager
             .replace_members(&group, &members)
