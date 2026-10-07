@@ -26,7 +26,17 @@ use crate::{
     },
 };
 
-const KERBEROS_PACKAGE: &[u16] = &[b'K' as u16, b'e' as u16, b'r' as u16, b'b' as u16, b'e' as u16, b'r' as u16, b'o' as u16, b's' as u16, 0];
+const KERBEROS_PACKAGE: &[u16] = &[
+    b'K' as u16,
+    b'e' as u16,
+    b'r' as u16,
+    b'b' as u16,
+    b'e' as u16,
+    b'r' as u16,
+    b'o' as u16,
+    b's' as u16,
+    0,
+];
 const MAX_SSPI_TOKEN_BYTES: usize = 64 * 1024;
 const GSS_S_FAILURE: u32 = 13 << 16;
 
@@ -274,9 +284,7 @@ struct WindowsSspiSecurityContext {
 }
 
 impl WindowsSspiSecurityContext {
-    fn lock(
-        &self,
-    ) -> Result<MutexGuard<'_, WindowsContextHandle>, RpcSecGssSecurityError> {
+    fn lock(&self) -> Result<MutexGuard<'_, WindowsContextHandle>, RpcSecGssSecurityError> {
         self.context
             .lock()
             .map_err(|_| RpcSecGssSecurityError::ProviderFailure)
@@ -288,11 +296,7 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
         &self.principal
     }
 
-    fn verify_mic(
-        &self,
-        message: &[u8],
-        mic: &[u8],
-    ) -> Result<(), RpcSecGssSecurityError> {
+    fn verify_mic(&self, message: &[u8], mic: &[u8]) -> Result<(), RpcSecGssSecurityError> {
         let mut context = self.lock()?;
         let mut data = message.to_vec();
         let mut token = mic.to_vec();
