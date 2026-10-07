@@ -87,7 +87,7 @@ impl FileUpload {
         self.replace_existing
     }
 
-    pub async fn commit(mut self) -> Result<(), FileServiceError> {
+    pub async fn commit(self) -> Result<(), FileServiceError> {
         self.file
             .sync_all()
             .await
