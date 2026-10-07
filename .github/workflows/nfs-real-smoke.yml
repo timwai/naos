@@ -23,6 +23,21 @@ on:
         required: false
         default: "20048"
         type: string
+      remote_nlm_restart_target:
+        description: "Optional SSH user@host used to restart the remote naosd service during reclaim validation"
+        required: false
+        default: ""
+        type: string
+      remote_nlm_restart_service:
+        description: "Validated systemd service name to restart on the remote NFS server"
+        required: false
+        default: "naosd"
+        type: string
+      remote_nlm_restart_grace_wait:
+        description: "Seconds to wait after RPC recovery before checking reclaimed locks (must exceed 30s grace)"
+        required: false
+        default: "35"
+        type: string
   push:
     branches: [main]
     paths:
@@ -77,12 +92,20 @@ jobs:
           NAOS_NFS_REMOTE_EXPORT: ${{ inputs.remote_nlm_export }}
           NAOS_NFS_REMOTE_NFS_PORT: ${{ inputs.remote_nfs_port }}
           NAOS_NFS_REMOTE_MOUNT_PORT: ${{ inputs.remote_mount_port }}
+          NAOS_NFS_REMOTE_RESTART_TARGET: ${{ inputs.remote_nlm_restart_target }}
+          NAOS_NFS_REMOTE_RESTART_SERVICE: ${{ inputs.remote_nlm_restart_service }}
+          NAOS_NFS_REMOTE_RESTART_GRACE_WAIT: ${{ inputs.remote_nlm_restart_grace_wait }}
         run: |
           sudo env \
             NAOS_NFS_REMOTE_HOST="$NAOS_NFS_REMOTE_HOST" \
             NAOS_NFS_REMOTE_EXPORT="$NAOS_NFS_REMOTE_EXPORT" \
+            HOME="$HOME" \
+            SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-}" \
             NAOS_NFS_REMOTE_NFS_PORT="$NAOS_NFS_REMOTE_NFS_PORT" \
             NAOS_NFS_REMOTE_MOUNT_PORT="$NAOS_NFS_REMOTE_MOUNT_PORT" \
+            NAOS_NFS_REMOTE_RESTART_TARGET="$NAOS_NFS_REMOTE_RESTART_TARGET" \
+            NAOS_NFS_REMOTE_RESTART_SERVICE="$NAOS_NFS_REMOTE_RESTART_SERVICE" \
+            NAOS_NFS_REMOTE_RESTART_GRACE_WAIT="$NAOS_NFS_REMOTE_RESTART_GRACE_WAIT" \
             bash scripts/ci/nfs-remote-lock-smoke.sh
 
   windows-nfs-client:
