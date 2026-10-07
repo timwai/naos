@@ -514,7 +514,8 @@ impl NlmV4Service {
         self.grant_waiters().await;
     }
 
-    pub(crate) async fn release_client(&self, client_ip: IpAddr) {
+    #[cfg(test)]
+    async fn release_client(&self, client_ip: IpAddr) {
         {
             let _state = self.state_guard.lock().await;
             self.locks
