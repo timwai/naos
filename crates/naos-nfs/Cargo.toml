@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 hmac.workspace = true
 fs2.workspace = true
+filetime.workspace = true
 naos-core = { path = "../naos-core" }
 rand_core.workspace = true
 sha2.workspace = true

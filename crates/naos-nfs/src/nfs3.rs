@@ -3,11 +3,13 @@ use std::{
     net::IpAddr,
     path::{Path, PathBuf},
     sync::Arc,
+    time::SystemTime,
 };
 
 #[cfg(not(unix))]
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
+use filetime::FileTime;
 use naos_core::{
     acl::{AclEngine, FileOperation, Permission, Principal},
     nfs::{
@@ -42,6 +44,7 @@ pub const MAX_NFS_TRANSFER: usize = 1024 * 1024;
 
 const NFSPROC3_NULL: u32 = 0;
 const NFSPROC3_GETATTR: u32 = 1;
+const NFSPROC3_SETATTR: u32 = 2;
 const NFSPROC3_LOOKUP: u32 = 3;
 const NFSPROC3_ACCESS: u32 = 4;
 const NFSPROC3_READ: u32 = 6;
@@ -61,6 +64,7 @@ const NFSPROC3_COMMIT: u32 = 21;
 const NFS3_OK: u32 = 0;
 const NFS3ERR_NOENT: u32 = 2;
 const NFS3ERR_IO: u32 = 5;
+const NFS3ERR_NOT_SYNC: u32 = 10002;
 const NFS3ERR_ACCES: u32 = 13;
 const NFS3ERR_EXIST: u32 = 17;
 const NFS3ERR_XDEV: u32 = 18;
@@ -71,6 +75,7 @@ const NFS3ERR_NOTEMPTY: u32 = 66;
 const NFS3ERR_STALE: u32 = 70;
 const NFS3ERR_BADHANDLE: u32 = 10001;
 const NFS3ERR_BAD_COOKIE: u32 = 10003;
+const NFS3ERR_NOTSUPP: u32 = 10004;
 const NFS3ERR_TOOSMALL: u32 = 10005;
 const NFS3ERR_SERVERFAULT: u32 = 10006;
 
@@ -88,7 +93,7 @@ const FSF3_HOMOGENEOUS: u32 = 0x0008;
 const MAX_NAME_BYTES: usize = 255;
 const MAX_HANDLE_BYTES: usize = 64;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NfsTime {
     pub seconds: u32,
     pub nseconds: u32,
@@ -113,6 +118,36 @@ pub struct NfsAttributes {
 impl NfsAttributes {
     pub const fn is_directory(&self) -> bool {
         self.file_type == NF3DIR
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetTime {
+    DontChange,
+    ServerTime,
+    ClientTime(NfsTime),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetAttributes {
+    pub mode: Option<u32>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub size: Option<u64>,
+    pub atime: SetTime,
+    pub mtime: SetTime,
+}
+
+impl SetAttributes {
+    pub const fn size(size: u64) -> Self {
+        Self {
+            mode: None,
+            uid: None,
+            gid: None,
+            size: Some(size),
+            atime: SetTime::DontChange,
+            mtime: SetTime::DontChange,
+        }
     }
 }
 
@@ -232,6 +267,10 @@ pub enum NfsV3Error {
     BadCookie,
     #[error("NFS directory reply budget is too small")]
     TooSmall,
+    #[error("NFS guarded attribute update is out of sync")]
+    NotSynchronized,
+    #[error("NFS attribute change is not supported")]
+    NotSupported,
     #[error("invalid NFS argument")]
     Invalid,
     #[error("NFS I/O failure")]
@@ -315,6 +354,57 @@ impl NfsV3Service {
         self.authorize(&context, &context.relative_path, FileOperation::Stat)
             .await?;
         let path = resolve_existing(&context)?;
+        attributes(&path).await
+    }
+
+    pub async fn setattr(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        handle: &[u8],
+        changes: SetAttributes,
+        guard: Option<NfsTime>,
+    ) -> Result<NfsAttributes, NfsV3Error> {
+        let context = self.resolve_handle(client_ip, credential, handle).await?;
+        self.authorize(&context, &context.relative_path, FileOperation::Write)
+            .await?;
+        let path = resolve_existing(&context)?;
+        let before = attributes(&path).await?;
+
+        if guard.is_some_and(|expected| expected != before.ctime) {
+            return Err(NfsV3Error::NotSynchronized);
+        }
+        if changes.mode.is_some() || changes.uid.is_some() || changes.gid.is_some() {
+            return Err(NfsV3Error::NotSupported);
+        }
+
+        if let Some(size) = changes.size {
+            if before.is_directory() {
+                return Err(NfsV3Error::IsDirectory);
+            }
+            let file = OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .await
+                .map_err(io_error)?;
+            file.set_len(size).await.map_err(io_error)?;
+            file.sync_all().await.map_err(io_error)?;
+        }
+
+        if changes.atime != SetTime::DontChange || changes.mtime != SetTime::DontChange {
+            let current_atime = nfs_time_to_filetime(before.atime);
+            let current_mtime = nfs_time_to_filetime(before.mtime);
+            let atime = resolve_set_time(changes.atime, current_atime);
+            let mtime = resolve_set_time(changes.mtime, current_mtime);
+            let timestamp_path = path.clone();
+            tokio::task::spawn_blocking(move || {
+                filetime::set_file_times(timestamp_path, atime, mtime)
+            })
+            .await
+            .map_err(|_| NfsV3Error::Io)?
+            .map_err(io_error)?;
+        }
+
         attributes(&path).await
     }
 
@@ -948,6 +1038,18 @@ fn resolve_existing(context: &HandleContext) -> Result<PathBuf, NfsV3Error> {
         .map_err(path_error)
 }
 
+fn nfs_time_to_filetime(time: NfsTime) -> FileTime {
+    FileTime::from_unix_time(i64::from(time.seconds), time.nseconds)
+}
+
+fn resolve_set_time(value: SetTime, current: FileTime) -> FileTime {
+    match value {
+        SetTime::DontChange => current,
+        SetTime::ServerTime => FileTime::from_system_time(SystemTime::now()),
+        SetTime::ClientTime(time) => nfs_time_to_filetime(time),
+    }
+}
+
 fn directory_cookie_verifier(export: &NfsExport, attributes: &NfsAttributes) -> [u8; 8] {
     let value = attributes.fileid
         ^ export.generation.rotate_left(17)
@@ -1219,6 +1321,7 @@ pub async fn dispatch_nfs3_rpc(
     match call.procedure {
         NFSPROC3_NULL => accepted_success(call.xid, &[]),
         NFSPROC3_GETATTR => getattr_reply(service, client_ip, &call).await,
+        NFSPROC3_SETATTR => setattr_reply(service, client_ip, &call).await,
         NFSPROC3_LOOKUP => lookup_reply(service, client_ip, &call).await,
         NFSPROC3_ACCESS => access_reply(service, client_ip, &call).await,
         NFSPROC3_READ => read_reply(service, client_ip, &call).await,
@@ -1250,6 +1353,52 @@ async fn getattr_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall
             encode_fattr(&mut writer, &attributes);
         }
         Err(error) => writer.u32(nfs_status(error)),
+    }
+    accepted_success(call.xid, &writer.into_bytes())
+}
+
+async fn setattr_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let handle = match reader.opaque(MAX_HANDLE_BYTES) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let changes = match decode_sattr3(&mut reader) {
+        Ok(changes) => changes,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let guard = match reader.u32() {
+        Ok(0) => None,
+        Ok(1) => {
+            let seconds = match reader.u32() {
+                Ok(value) => value,
+                Err(_) => return accepted_garbage_args(call.xid),
+            };
+            let nseconds = match reader.u32() {
+                Ok(value) if value < 1_000_000_000 => value,
+                _ => return accepted_garbage_args(call.xid),
+            };
+            Some(NfsTime { seconds, nseconds })
+        }
+        _ => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let mut writer = XdrWriter::new();
+    match service
+        .setattr(client_ip, &call.credential, &handle, changes, guard)
+        .await
+    {
+        Ok(attributes) => {
+            writer.u32(NFS3_OK);
+            encode_wcc_after(&mut writer, Some(&attributes));
+        }
+        Err(error) => {
+            writer.u32(nfs_status(error));
+            encode_wcc_after(&mut writer, None);
+        }
     }
     accepted_success(call.xid, &writer.into_bytes())
 }
@@ -1842,45 +1991,44 @@ async fn commit_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall)
     accepted_success(call.xid, &writer.into_bytes())
 }
 
-fn decode_sattr3(reader: &mut XdrReader<'_>) -> Result<(), ()> {
-    decode_optional_u32(reader)?;
-    decode_optional_u32(reader)?;
-    decode_optional_u32(reader)?;
-    decode_optional_u64(reader)?;
-    decode_set_time(reader)?;
-    decode_set_time(reader)?;
-    Ok(())
+fn decode_sattr3(reader: &mut XdrReader<'_>) -> Result<SetAttributes, ()> {
+    Ok(SetAttributes {
+        mode: decode_optional_u32(reader)?,
+        uid: decode_optional_u32(reader)?,
+        gid: decode_optional_u32(reader)?,
+        size: decode_optional_u64(reader)?,
+        atime: decode_set_time(reader)?,
+        mtime: decode_set_time(reader)?,
+    })
 }
 
-fn decode_optional_u32(reader: &mut XdrReader<'_>) -> Result<(), ()> {
+fn decode_optional_u32(reader: &mut XdrReader<'_>) -> Result<Option<u32>, ()> {
     match reader.u32().map_err(|_| ())? {
-        0 => Ok(()),
-        1 => {
-            reader.u32().map_err(|_| ())?;
-            Ok(())
-        }
+        0 => Ok(None),
+        1 => reader.u32().map(Some).map_err(|_| ()),
         _ => Err(()),
     }
 }
 
-fn decode_optional_u64(reader: &mut XdrReader<'_>) -> Result<(), ()> {
+fn decode_optional_u64(reader: &mut XdrReader<'_>) -> Result<Option<u64>, ()> {
     match reader.u32().map_err(|_| ())? {
-        0 => Ok(()),
-        1 => {
-            reader.u64().map_err(|_| ())?;
-            Ok(())
-        }
+        0 => Ok(None),
+        1 => reader.u64().map(Some).map_err(|_| ()),
         _ => Err(()),
     }
 }
 
-fn decode_set_time(reader: &mut XdrReader<'_>) -> Result<(), ()> {
+fn decode_set_time(reader: &mut XdrReader<'_>) -> Result<SetTime, ()> {
     match reader.u32().map_err(|_| ())? {
-        0 | 1 => Ok(()),
+        0 => Ok(SetTime::DontChange),
+        1 => Ok(SetTime::ServerTime),
         2 => {
-            reader.u32().map_err(|_| ())?;
-            reader.u32().map_err(|_| ())?;
-            Ok(())
+            let seconds = reader.u32().map_err(|_| ())?;
+            let nseconds = reader.u32().map_err(|_| ())?;
+            if nseconds >= 1_000_000_000 {
+                return Err(());
+            }
+            Ok(SetTime::ClientTime(NfsTime { seconds, nseconds }))
         }
         _ => Err(()),
     }
@@ -1948,6 +2096,8 @@ fn nfs_status(error: NfsV3Error) -> u32 {
         NfsV3Error::CrossDevice => NFS3ERR_XDEV,
         NfsV3Error::BadCookie => NFS3ERR_BAD_COOKIE,
         NfsV3Error::TooSmall => NFS3ERR_TOOSMALL,
+        NfsV3Error::NotSynchronized => NFS3ERR_NOT_SYNC,
+        NfsV3Error::NotSupported => NFS3ERR_NOTSUPP,
         NfsV3Error::Invalid => NFS3ERR_INVAL,
         NfsV3Error::Io => NFS3ERR_IO,
         NfsV3Error::Repository => NFS3ERR_SERVERFAULT,
@@ -2130,6 +2280,85 @@ mod tests {
             std::fs::read(temp.path().join("report.txt")).unwrap(),
             b"HELLO"
         );
+    }
+
+    #[tokio::test]
+    async fn setattr_truncates_and_honors_ctime_guard() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("report.txt"), b"hello").unwrap();
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadWrite);
+        let root_handle = handles.issue_root(&export);
+        let client_ip = "192.168.1.10".parse().unwrap();
+        let credential = auth_sys(1000);
+        let lookup = service
+            .lookup(client_ip, &credential, &root_handle, "report.txt")
+            .await
+            .unwrap();
+
+        let before = service
+            .getattr(client_ip, &credential, &lookup.file_handle)
+            .await
+            .unwrap();
+        let after = service
+            .setattr(
+                client_ip,
+                &credential,
+                &lookup.file_handle,
+                SetAttributes::size(2),
+                Some(before.ctime),
+            )
+            .await
+            .unwrap();
+        assert_eq!(after.size, 2);
+        assert_eq!(std::fs::read(temp.path().join("report.txt")).unwrap(), b"he");
+
+        assert!(matches!(
+            service
+                .setattr(
+                    client_ip,
+                    &credential,
+                    &lookup.file_handle,
+                    SetAttributes::size(1),
+                    Some(NfsTime {
+                        seconds: 0,
+                        nseconds: 0,
+                    }),
+                )
+                .await,
+            Err(NfsV3Error::NotSynchronized)
+        ));
+    }
+
+    #[tokio::test]
+    async fn setattr_rejects_host_identity_and_mode_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("report.txt"), b"hello").unwrap();
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadWrite);
+        let handle = handles.issue(
+            &export,
+            &RelativePath::parse("/report.txt").unwrap(),
+        );
+        let changes = SetAttributes {
+            mode: Some(0o600),
+            uid: None,
+            gid: None,
+            size: None,
+            atime: SetTime::DontChange,
+            mtime: SetTime::DontChange,
+        };
+
+        assert!(matches!(
+            service
+                .setattr(
+                    "192.168.1.10".parse().unwrap(),
+                    &auth_sys(1000),
+                    &handle,
+                    changes,
+                    None,
+                )
+                .await,
+            Err(NfsV3Error::NotSupported)
+        ));
     }
 
     #[tokio::test]
