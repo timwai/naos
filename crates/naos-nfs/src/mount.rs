@@ -509,6 +509,27 @@ mod tests {
         reader.finish().unwrap();
     }
 
+    #[tokio::test]
+    async fn rpcsec_gss_init_is_rejected_before_mount_null_dispatch() {
+        let credential = RpcCredential::RpcSecGss(crate::rpc::RpcSecGssCredential {
+            version: crate::rpc::RPCSEC_GSS_VERSION_1,
+            gss_proc: crate::rpc::RPCSEC_GSS_INIT,
+            seq_num: 0,
+            service: 0,
+            handle: Vec::new(),
+        });
+        let call = rpc_call(101, MOUNTPROC_NULL, credential, &[]);
+        let reply = dispatch_mount_rpc(&service(), "192.168.1.25".parse().unwrap(), &call).await;
+
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 101);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), crate::rpc::AUTH_REJECTEDCRED);
+        reader.finish().unwrap();
+    }
+
     fn rpc_call(xid: u32, procedure: u32, credential: RpcCredential, body: &[u8]) -> Vec<u8> {
         let mut writer = XdrWriter::new();
         writer.u32(xid);
