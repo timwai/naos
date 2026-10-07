@@ -33,6 +33,7 @@ use crate::{
         RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
         accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch,
+        rpcsec_gss_unavailable_reply,
     },
     transport::{read_record, write_record},
     xdr::{XdrReader, XdrWriter},
@@ -1533,6 +1534,10 @@ pub async fn dispatch_nfs3_rpc(
         }
         Err(RpcDecodeError::Xdr(_)) => return Vec::new(),
     };
+
+    if let Some(reply) = rpcsec_gss_unavailable_reply(&call) {
+        return reply;
+    }
 
     if call.program != NFS_PROGRAM {
         return accepted_program_unavailable(call.xid);

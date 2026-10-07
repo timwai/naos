@@ -12,6 +12,7 @@ use crate::{
         AUTH_NONE, AUTH_SYS, RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
         accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch,
+        rpcsec_gss_unavailable_reply,
     },
     transport::{read_record, write_record},
     xdr::{XdrReader, XdrWriter},
@@ -201,6 +202,10 @@ pub async fn dispatch_mount_rpc(
         Err(RpcDecodeError::MalformedCredential { xid }) => return accepted_garbage_args(xid),
         Err(RpcDecodeError::Xdr(_)) => return Vec::new(),
     };
+
+    if let Some(reply) = rpcsec_gss_unavailable_reply(&call) {
+        return reply;
+    }
 
     if call.program != MOUNT_PROGRAM {
         return accepted_program_unavailable(call.xid);
@@ -502,6 +507,27 @@ mod tests {
         assert_eq!(reader.u32().unwrap(), MNT3_OK);
         assert!(!reader.opaque(64).unwrap().is_empty());
         assert_eq!(reader.u32_array(4).unwrap(), vec![AUTH_SYS]);
+        reader.finish().unwrap();
+    }
+
+    #[tokio::test]
+    async fn rpcsec_gss_init_is_rejected_before_mount_null_dispatch() {
+        let credential = RpcCredential::RpcSecGss(crate::rpc::RpcSecGssCredential {
+            version: crate::rpc::RPCSEC_GSS_VERSION_1,
+            gss_proc: crate::rpc::RPCSEC_GSS_INIT,
+            seq_num: 0,
+            service: 0,
+            handle: Vec::new(),
+        });
+        let call = rpc_call(101, MOUNTPROC_NULL, credential, &[]);
+        let reply = dispatch_mount_rpc(&service(), "192.168.1.25".parse().unwrap(), &call).await;
+
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 101);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), crate::rpc::AUTH_REJECTEDCRED);
         reader.finish().unwrap();
     }
 

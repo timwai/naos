@@ -14,6 +14,11 @@ pub const RPCSEC_GSS_DESTROY: u32 = 3;
 pub const RPCSEC_GSS_SVC_NONE: u32 = 1;
 pub const RPCSEC_GSS_SVC_INTEGRITY: u32 = 2;
 pub const RPCSEC_GSS_SVC_PRIVACY: u32 = 3;
+pub const RPCSEC_GSS_MAXSEQ: u32 = 0x8000_0000;
+pub const AUTH_BADCRED: u32 = 1;
+pub const AUTH_REJECTEDCRED: u32 = 2;
+pub const AUTH_BADVERF: u32 = 3;
+pub const RPCSEC_GSS_CREDPROBLEM: u32 = 13;
 pub const MAX_AUTH_BYTES: usize = 400;
 pub const MAX_RPC_RECORD_BYTES: usize = 16 * 1024 * 1024;
 
@@ -22,6 +27,7 @@ const REPLY: u32 = 1;
 const MSG_ACCEPTED: u32 = 0;
 const MSG_DENIED: u32 = 1;
 const RPC_MISMATCH: u32 = 0;
+const AUTH_ERROR: u32 = 1;
 const SUCCESS: u32 = 0;
 const PROG_UNAVAIL: u32 = 1;
 const PROG_MISMATCH: u32 = 2;
@@ -226,6 +232,82 @@ pub fn denied_rpc_mismatch(xid: u32) -> Vec<u8> {
     writer.into_bytes()
 }
 
+pub fn denied_auth_error(xid: u32, auth_status: u32) -> Vec<u8> {
+    let mut writer = XdrWriter::new();
+    writer.u32(xid);
+    writer.u32(REPLY);
+    writer.u32(MSG_DENIED);
+    writer.u32(AUTH_ERROR);
+    writer.u32(auth_status);
+    writer.into_bytes()
+}
+
+pub fn rpcsec_gss_unavailable_reply(call: &RpcCall) -> Option<Vec<u8>> {
+    let RpcCredential::RpcSecGss(credential) = &call.credential else {
+        return None;
+    };
+
+    let auth_status = if credential.version != RPCSEC_GSS_VERSION_1 {
+        AUTH_REJECTEDCRED
+    } else {
+        match credential.gss_proc {
+            RPCSEC_GSS_INIT => {
+                if call.procedure != 0 || !credential.handle.is_empty() {
+                    AUTH_BADCRED
+                } else if call.verifier.flavor != AUTH_NONE || !call.verifier.body.is_empty() {
+                    AUTH_BADVERF
+                } else {
+                    AUTH_REJECTEDCRED
+                }
+            }
+            RPCSEC_GSS_CONTINUE_INIT => {
+                if call.procedure != 0 || credential.handle.is_empty() {
+                    AUTH_BADCRED
+                } else if call.verifier.flavor != AUTH_NONE || !call.verifier.body.is_empty() {
+                    AUTH_BADVERF
+                } else {
+                    AUTH_REJECTEDCRED
+                }
+            }
+            RPCSEC_GSS_DATA => {
+                if credential.handle.is_empty()
+                    || credential.seq_num >= RPCSEC_GSS_MAXSEQ
+                    || !rpcsec_gss_service_is_valid(credential.service)
+                {
+                    AUTH_BADCRED
+                } else if call.verifier.flavor != RPCSEC_GSS || call.verifier.body.is_empty() {
+                    AUTH_BADVERF
+                } else {
+                    RPCSEC_GSS_CREDPROBLEM
+                }
+            }
+            RPCSEC_GSS_DESTROY => {
+                if call.procedure != 0
+                    || credential.handle.is_empty()
+                    || credential.seq_num >= RPCSEC_GSS_MAXSEQ
+                    || !rpcsec_gss_service_is_valid(credential.service)
+                {
+                    AUTH_BADCRED
+                } else if call.verifier.flavor != RPCSEC_GSS || call.verifier.body.is_empty() {
+                    AUTH_BADVERF
+                } else {
+                    RPCSEC_GSS_CREDPROBLEM
+                }
+            }
+            _ => AUTH_BADCRED,
+        }
+    };
+
+    Some(denied_auth_error(call.xid, auth_status))
+}
+
+fn rpcsec_gss_service_is_valid(service: u32) -> bool {
+    matches!(
+        service,
+        RPCSEC_GSS_SVC_NONE | RPCSEC_GSS_SVC_INTEGRITY | RPCSEC_GSS_SVC_PRIVACY
+    )
+}
+
 fn accepted_reply(xid: u32, status: u32, mismatch: Option<(u32, u32)>, body: &[u8]) -> Vec<u8> {
     let mut writer = XdrWriter::new();
     writer.u32(xid);
@@ -409,6 +491,142 @@ mod tests {
             decode_call(&writer.into_bytes()),
             Err(RpcDecodeError::MalformedCredential { xid: 100 })
         );
+    }
+
+    fn auth_error_status(reply: &[u8]) -> u32 {
+        let mut reader = XdrReader::new(reply);
+        reader.u32().unwrap();
+        assert_eq!(reader.u32().unwrap(), REPLY);
+        assert_eq!(reader.u32().unwrap(), MSG_DENIED);
+        assert_eq!(reader.u32().unwrap(), AUTH_ERROR);
+        let status = reader.u32().unwrap();
+        reader.finish().unwrap();
+        status
+    }
+
+    fn rpcsec_gss_call(
+        gss_proc: u32,
+        procedure: u32,
+        seq_num: u32,
+        service: u32,
+        handle: &[u8],
+        verifier_flavor: u32,
+        verifier: &[u8],
+    ) -> RpcCall {
+        RpcCall {
+            xid: 700,
+            program: 100003,
+            version: 3,
+            procedure,
+            credential: RpcCredential::RpcSecGss(RpcSecGssCredential {
+                version: RPCSEC_GSS_VERSION_1,
+                gss_proc,
+                seq_num,
+                service,
+                handle: handle.to_vec(),
+            }),
+            verifier: RpcVerifier {
+                flavor: verifier_flavor,
+                body: verifier.to_vec(),
+            },
+            header_through_credential: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn unavailable_rpcsec_gss_rejects_context_creation_as_auth_error() {
+        let init = rpcsec_gss_call(RPCSEC_GSS_INIT, 0, 0, 0, &[], AUTH_NONE, &[]);
+        assert_eq!(
+            auth_error_status(&rpcsec_gss_unavailable_reply(&init).unwrap()),
+            AUTH_REJECTEDCRED
+        );
+
+        let continue_init = rpcsec_gss_call(
+            RPCSEC_GSS_CONTINUE_INIT,
+            0,
+            0,
+            0,
+            b"context",
+            AUTH_NONE,
+            &[],
+        );
+        assert_eq!(
+            auth_error_status(&rpcsec_gss_unavailable_reply(&continue_init).unwrap()),
+            AUTH_REJECTEDCRED
+        );
+    }
+
+    #[test]
+    fn unavailable_rpcsec_gss_rejects_data_without_context() {
+        let data = rpcsec_gss_call(
+            RPCSEC_GSS_DATA,
+            1,
+            17,
+            RPCSEC_GSS_SVC_INTEGRITY,
+            b"context",
+            RPCSEC_GSS,
+            b"header-mic",
+        );
+        assert_eq!(
+            auth_error_status(&rpcsec_gss_unavailable_reply(&data).unwrap()),
+            RPCSEC_GSS_CREDPROBLEM
+        );
+    }
+
+    #[test]
+    fn rpcsec_gss_shape_validation_rejects_bad_control_and_data_fields() {
+        let bad_init = rpcsec_gss_call(RPCSEC_GSS_INIT, 1, 0, 0, &[], AUTH_NONE, &[]);
+        assert_eq!(
+            auth_error_status(&rpcsec_gss_unavailable_reply(&bad_init).unwrap()),
+            AUTH_BADCRED
+        );
+
+        let bad_verifier = rpcsec_gss_call(
+            RPCSEC_GSS_DATA,
+            1,
+            17,
+            RPCSEC_GSS_SVC_NONE,
+            b"context",
+            AUTH_NONE,
+            &[],
+        );
+        assert_eq!(
+            auth_error_status(&rpcsec_gss_unavailable_reply(&bad_verifier).unwrap()),
+            AUTH_BADVERF
+        );
+
+        let bad_sequence = rpcsec_gss_call(
+            RPCSEC_GSS_DATA,
+            1,
+            RPCSEC_GSS_MAXSEQ,
+            RPCSEC_GSS_SVC_NONE,
+            b"context",
+            RPCSEC_GSS,
+            b"header-mic",
+        );
+        assert_eq!(
+            auth_error_status(&rpcsec_gss_unavailable_reply(&bad_sequence).unwrap()),
+            AUTH_BADCRED
+        );
+    }
+
+    #[test]
+    fn non_rpcsec_gss_calls_do_not_trigger_the_gate() {
+        let call = RpcCall {
+            xid: 701,
+            program: 100003,
+            version: 3,
+            procedure: 0,
+            credential: RpcCredential::AuthNone,
+            verifier: RpcVerifier {
+                flavor: AUTH_NONE,
+                body: Vec::new(),
+            },
+            header_through_credential: Vec::new(),
+            body: Vec::new(),
+        };
+        assert!(rpcsec_gss_unavailable_reply(&call).is_none());
     }
 
     #[test]
