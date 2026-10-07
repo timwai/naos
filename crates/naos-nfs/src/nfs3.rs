@@ -53,6 +53,7 @@ const NFSPROC3_WRITE: u32 = 7;
 const NFSPROC3_CREATE: u32 = 8;
 const NFSPROC3_MKDIR: u32 = 9;
 const NFSPROC3_SYMLINK: u32 = 10;
+const NFSPROC3_MKNOD: u32 = 11;
 const NFSPROC3_REMOVE: u32 = 12;
 const NFSPROC3_RMDIR: u32 = 13;
 const NFSPROC3_RENAME: u32 = 14;
@@ -84,7 +85,11 @@ const NFS3ERR_SERVERFAULT: u32 = 10006;
 
 const NF3REG: u32 = 1;
 const NF3DIR: u32 = 2;
+const NF3BLK: u32 = 3;
+const NF3CHR: u32 = 4;
 const NF3LNK: u32 = 5;
+const NF3SOCK: u32 = 6;
+const NF3FIFO: u32 = 7;
 
 const ACCESS3_READ: u32 = 0x0001;
 const ACCESS3_LOOKUP: u32 = 0x0002;
@@ -1548,6 +1553,7 @@ pub async fn dispatch_nfs3_rpc(
         NFSPROC3_CREATE => create_reply(service, client_ip, &call).await,
         NFSPROC3_MKDIR => mkdir_reply(service, client_ip, &call).await,
         NFSPROC3_SYMLINK => symlink_reply(service, client_ip, &call).await,
+        NFSPROC3_MKNOD => mknod_reply(&call),
         NFSPROC3_REMOVE => remove_reply(service, client_ip, &call).await,
         NFSPROC3_RMDIR => rmdir_reply(service, client_ip, &call).await,
         NFSPROC3_RENAME => rename_reply(service, client_ip, &call).await,
@@ -1935,6 +1941,41 @@ async fn symlink_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall
             encode_wcc_after(&mut writer, None);
         }
     }
+    accepted_success(call.xid, &writer.into_bytes())
+}
+
+fn mknod_reply(call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    if reader.opaque(MAX_HANDLE_BYTES).is_err() || reader.string(MAX_NAME_BYTES).is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let file_type = match reader.u32() {
+        Ok(file_type @ NF3REG..=NF3FIFO) => file_type,
+        _ => return accepted_garbage_args(call.xid),
+    };
+    match file_type {
+        NF3BLK | NF3CHR => {
+            if decode_sattr3(&mut reader).is_err() || reader.u32().is_err() || reader.u32().is_err()
+            {
+                return accepted_garbage_args(call.xid);
+            }
+        }
+        NF3SOCK | NF3FIFO => {
+            if decode_sattr3(&mut reader).is_err() {
+                return accepted_garbage_args(call.xid);
+            }
+        }
+        NF3REG | NF3DIR | NF3LNK => {}
+        _ => unreachable!(),
+    }
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let mut writer = XdrWriter::new();
+    writer.u32(NFS3ERR_NOTSUPP);
+    encode_wcc_after(&mut writer, None);
     accepted_success(call.xid, &writer.into_bytes())
 }
 
@@ -2995,6 +3036,94 @@ mod tests {
         assert_eq!(reader.u32().unwrap(), 0);
         assert_eq!(reader.u32().unwrap(), 0);
         assert_eq!(reader.u32().unwrap(), NFS3_OK);
+    }
+
+    #[tokio::test]
+    async fn wire_mknod_fifo_returns_nfs3_notsupp() {
+        let temp = tempfile::tempdir().unwrap();
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadWrite);
+        let directory = handles.issue_root(&export);
+
+        let mut args = XdrWriter::new();
+        args.opaque(&directory).unwrap();
+        args.string("pipe").unwrap();
+        args.u32(NF3FIFO);
+        encode_empty_sattr3(&mut args);
+        let call = rpc_call(56, NFSPROC3_MKNOD, auth_sys(1000), &args.into_bytes());
+        let reply = dispatch_nfs3_rpc(&service, "192.168.1.10".parse().unwrap(), &call).await;
+
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 56);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), crate::rpc::AUTH_NONE);
+        assert!(reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), NFS3ERR_NOTSUPP);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), 0);
+        reader.finish().unwrap();
+    }
+
+    #[tokio::test]
+    async fn wire_mknod_block_device_consumes_specdata_before_notsupp() {
+        let temp = tempfile::tempdir().unwrap();
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadWrite);
+        let directory = handles.issue_root(&export);
+
+        let mut args = XdrWriter::new();
+        args.opaque(&directory).unwrap();
+        args.string("device").unwrap();
+        args.u32(NF3BLK);
+        encode_empty_sattr3(&mut args);
+        args.u32(8);
+        args.u32(1);
+        let call = rpc_call(57, NFSPROC3_MKNOD, auth_sys(1000), &args.into_bytes());
+        let reply = dispatch_nfs3_rpc(&service, "192.168.1.10".parse().unwrap(), &call).await;
+
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 57);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), crate::rpc::AUTH_NONE);
+        assert!(reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), NFS3ERR_NOTSUPP);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), 0);
+        reader.finish().unwrap();
+    }
+
+    #[tokio::test]
+    async fn wire_mknod_rejects_truncated_union_as_garbage_args() {
+        let temp = tempfile::tempdir().unwrap();
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadWrite);
+        let directory = handles.issue_root(&export);
+
+        let mut args = XdrWriter::new();
+        args.opaque(&directory).unwrap();
+        args.string("pipe").unwrap();
+        args.u32(NF3FIFO);
+        let call = rpc_call(58, NFSPROC3_MKNOD, auth_sys(1000), &args.into_bytes());
+        let reply = dispatch_nfs3_rpc(&service, "192.168.1.10".parse().unwrap(), &call).await;
+
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 58);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), crate::rpc::AUTH_NONE);
+        assert!(reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reader.u32().unwrap(), 4);
+        reader.finish().unwrap();
+    }
+
+    fn encode_empty_sattr3(writer: &mut XdrWriter) {
+        writer.u32(0);
+        writer.u32(0);
+        writer.u32(0);
+        writer.u32(0);
+        writer.u32(0);
+        writer.u32(0);
     }
 
     fn rpc_call(xid: u32, procedure: u32, credential: RpcCredential, body: &[u8]) -> Vec<u8> {
