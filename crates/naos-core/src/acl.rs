@@ -363,9 +363,30 @@ pub struct NewAclRule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AclApplySubject {
+    User {
+        username: String,
+    },
+    Group {
+        group_id: String,
+        group_updated_at: String,
+        member_usernames: Vec<String>,
+    },
+}
+
+impl AclApplySubject {
+    pub fn group_id(&self) -> Option<&str> {
+        match self {
+            Self::User { .. } => None,
+            Self::Group { group_id, .. } => Some(group_id),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AclApplyRule {
     pub path: RelativePath,
-    pub username: String,
+    pub subject: AclApplySubject,
     pub permission: Permission,
     pub inherit: bool,
 }
@@ -400,6 +421,8 @@ pub enum AclMutationRepositoryError {
     ShareNotFound,
     #[error("ACL user was not found or is disabled")]
     UserNotFound,
+    #[error("ACL group was not found")]
+    GroupNotFound,
     #[error("ACL mutation conflicts with current state")]
     Conflict,
     #[error("ACL mutation store is unavailable")]
@@ -412,10 +435,10 @@ pub enum AclMutationError {
     ShareNotFound,
     #[error("ACL user was not found or is disabled")]
     UserNotFound,
+    #[error("ACL group was not found")]
+    GroupNotFound,
     #[error("ACL mutation conflicts with current state")]
     Conflict,
-    #[error("group ACL filesystem mapping is not supported yet")]
-    GroupUnsupported,
     #[error("{message}")]
     Validation {
         field: &'static str,
@@ -437,6 +460,11 @@ pub trait AclMutationRepository: Send + Sync {
         operation: &NewOperation,
         queued_event: &NewOperationEvent,
     ) -> Result<AclMutationCommit, AclMutationRepositoryError>;
+
+    async fn validate_group_snapshots(
+        &self,
+        rules: &[AclApplyRule],
+    ) -> Result<bool, AclMutationRepositoryError>;
 }
 
 pub struct AclMutationService {
@@ -473,21 +501,18 @@ impl AclMutationService {
         let mut rules = Vec::with_capacity(inputs.len());
         for input in inputs {
             let subject_type = input.subject_type.trim();
-            if subject_type != "user" {
-                if subject_type == "group" {
-                    return Err(AclMutationError::GroupUnsupported);
-                }
+            if !matches!(subject_type, "user" | "group") {
                 return Err(AclMutationError::Validation {
                     field: "subject.type",
                     message: "ACL subject type 仅支持 user 或 group".to_owned(),
                 });
             }
 
-            let user_id = input.subject_id.trim().to_owned();
-            if user_id.is_empty() || user_id.len() > 128 {
+            let subject_id = input.subject_id.trim().to_owned();
+            if subject_id.is_empty() || subject_id.len() > 128 {
                 return Err(AclMutationError::Validation {
                     field: "subject.id",
-                    message: "ACL user id 无效".to_owned(),
+                    message: "ACL subject id 无效".to_owned(),
                 });
             }
 
@@ -509,20 +534,29 @@ impl AclMutationService {
                 }
             };
 
-            let key = (path.as_slash_path(), user_id.clone());
+            let key = (
+                path.as_slash_path(),
+                subject_type.to_owned(),
+                subject_id.clone(),
+            );
             if !seen.insert(key) {
                 return Err(AclMutationError::Validation {
                     field: "items",
-                    message: "同一路径不能重复配置同一用户".to_owned(),
+                    message: "同一路径不能重复配置同一 ACL subject".to_owned(),
                 });
             }
 
+            let subject = match subject_type {
+                "user" => Subject::User(subject_id),
+                "group" => Subject::Group(subject_id),
+                _ => unreachable!("subject type validated above"),
+            };
             rules.push(NewAclRule {
                 id: format!("acl_{}", Ulid::new()),
                 share_id: share_id.to_owned(),
                 rule: AclRule {
                     path,
-                    subject: Subject::User(user_id),
+                    subject,
                     permission,
                     inherit: input.inherit,
                 },
@@ -565,6 +599,7 @@ fn map_acl_mutation_repository_error(error: AclMutationRepositoryError) -> AclMu
     match error {
         AclMutationRepositoryError::ShareNotFound => AclMutationError::ShareNotFound,
         AclMutationRepositoryError::UserNotFound => AclMutationError::UserNotFound,
+        AclMutationRepositoryError::GroupNotFound => AclMutationError::GroupNotFound,
         AclMutationRepositoryError::Conflict => AclMutationError::Conflict,
         AclMutationRepositoryError::Unavailable => AclMutationError::Repository,
     }
@@ -576,11 +611,15 @@ pub trait AclReconcileDriverFactory: Send + Sync {
 
 pub struct DatabaseAclReconcileDriverFactory {
     shares: Arc<dyn ShareApplyRepository>,
+    acl: Arc<dyn AclMutationRepository>,
 }
 
 impl DatabaseAclReconcileDriverFactory {
-    pub fn new(shares: Arc<dyn ShareApplyRepository>) -> Self {
-        Self { shares }
+    pub fn new(
+        shares: Arc<dyn ShareApplyRepository>,
+        acl: Arc<dyn AclMutationRepository>,
+    ) -> Self {
+        Self { shares, acl }
     }
 }
 
@@ -588,6 +627,7 @@ impl AclReconcileDriverFactory for DatabaseAclReconcileDriverFactory {
     fn driver(&self, target: AclMutationTarget) -> Arc<dyn ReconcileDriver> {
         Arc::new(DatabaseAclReconcileDriver {
             shares: self.shares.clone(),
+            acl: self.acl.clone(),
             target,
         })
     }
@@ -595,13 +635,14 @@ impl AclReconcileDriverFactory for DatabaseAclReconcileDriverFactory {
 
 struct DatabaseAclReconcileDriver {
     shares: Arc<dyn ShareApplyRepository>,
+    acl: Arc<dyn AclMutationRepository>,
     target: AclMutationTarget,
 }
 
 #[async_trait]
 impl ReconcileDriver for DatabaseAclReconcileDriver {
     fn lock_keys(&self) -> Vec<String> {
-        vec![format!("share:{}", self.target.share_id)]
+        acl_lock_keys(&self.target)
     }
 
     fn target_type(&self) -> &str {
@@ -617,6 +658,18 @@ impl ReconcileDriver for DatabaseAclReconcileDriver {
     }
 
     async fn validate(&self) -> Result<(), ReconcileFailure> {
+        if !self
+            .acl
+            .validate_group_snapshots(&self.target.desired)
+            .await
+            .map_err(acl_repository_failure)?
+        {
+            return Err(ReconcileFailure::new(
+                "ACL_GROUP_CONFLICT",
+                "group membership changed before ACL apply",
+            ));
+        }
+
         let updated = self
             .shares
             .set_apply_state_if_generation(
@@ -686,6 +739,20 @@ impl ReconcileDriver for DatabaseAclReconcileDriver {
             "ACL filesystem rollback is not available",
         ))
     }
+}
+
+pub fn acl_lock_keys(target: &AclMutationTarget) -> Vec<String> {
+    let mut keys = vec![format!("share:{}", target.share_id)];
+    for rule in target.previous.iter().chain(target.desired.iter()) {
+        if let Some(group_id) = rule.subject.group_id() {
+            keys.push(format!("group:{group_id}"));
+        }
+    }
+    keys
+}
+
+fn acl_repository_failure(_error: AclMutationRepositoryError) -> ReconcileFailure {
+    ReconcileFailure::new("ACL_STORE_UNAVAILABLE", "ACL store is unavailable")
 }
 
 fn acl_share_repository_failure(_error: ShareApplyRepositoryError) -> ReconcileFailure {
