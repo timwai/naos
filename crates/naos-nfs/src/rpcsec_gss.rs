@@ -270,8 +270,7 @@ pub async fn authenticate_data_call(
     let arguments = match credential.service {
         RPCSEC_GSS_SVC_NONE => call.body.clone(),
         RPCSEC_GSS_SVC_INTEGRITY => {
-            let protected =
-                decode_rpcsec_gss_integrity_body(&call.body, credential.seq_num)?;
+            let protected = decode_rpcsec_gss_integrity_body(&call.body, credential.seq_num)?;
             let plaintext = encode_rpcsec_gss_plaintext(credential.seq_num, &protected.arguments);
             security.verify_mic(&plaintext, &protected.checksum)?;
             protected.arguments
@@ -447,9 +446,7 @@ mod tests {
         let bad = data_call(RPCSEC_GSS_SVC_NONE, 10, b"args".to_vec(), b"wrong");
         assert_eq!(
             authenticate_data_call(&registry, &bad).await.err(),
-            Some(RpcSecGssDataError::Security(
-                RpcSecGssSecurityError::BadMic
-            ))
+            Some(RpcSecGssDataError::Security(RpcSecGssSecurityError::BadMic))
         );
 
         let good = data_call(RPCSEC_GSS_SVC_NONE, 10, b"args".to_vec(), b"header");
@@ -459,9 +456,7 @@ mod tests {
 
         assert_eq!(
             authenticate_data_call(&registry, &good).await.err(),
-            Some(RpcSecGssDataError::Registry(
-                RpcSecGssRegistryError::Replay
-            ))
+            Some(RpcSecGssDataError::Registry(RpcSecGssRegistryError::Replay))
         );
     }
 
@@ -476,12 +471,7 @@ mod tests {
         let integrity_plaintext = encode_rpcsec_gss_plaintext(20, b"integrity-args");
         let integrity_body =
             encode_rpcsec_gss_integrity_body(20, b"integrity-args", &integrity_plaintext).unwrap();
-        let integrity = data_call(
-            RPCSEC_GSS_SVC_INTEGRITY,
-            20,
-            integrity_body,
-            b"header",
-        );
+        let integrity = data_call(RPCSEC_GSS_SVC_INTEGRITY, 20, integrity_body, b"header");
         let authenticated = authenticate_data_call(&registry, &integrity).await.unwrap();
         assert_eq!(authenticated.arguments(), b"integrity-args");
 
@@ -522,8 +512,7 @@ mod tests {
             match service {
                 RPCSEC_GSS_SVC_NONE => assert_eq!(protected.body, b"reply-args"),
                 RPCSEC_GSS_SVC_INTEGRITY => {
-                    let decoded =
-                        decode_rpcsec_gss_integrity_body(&protected.body, 33).unwrap();
+                    let decoded = decode_rpcsec_gss_integrity_body(&protected.body, 33).unwrap();
                     assert_eq!(decoded.arguments, b"reply-args");
                     assert_eq!(
                         decoded.checksum,
