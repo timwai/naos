@@ -5,12 +5,12 @@ use std::collections::HashSet;
 
 use thiserror::Error;
 
+#[cfg(target_os = "linux")]
+use crate::account::SystemAccountManager;
 use crate::{
     account::{AccountError, SystemAccountName, SystemGroupName},
     command::{CommandError, CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner},
 };
-#[cfg(target_os = "linux")]
-use crate::account::SystemAccountManager;
 
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 const GROUP_MARKER: &str = "Managed by naos";
@@ -147,7 +147,10 @@ impl SystemGroupManager {
     }
 
     #[cfg(target_os = "linux")]
-    async fn probe_linux(&self, group: &SystemGroupName) -> Result<CommandOutput, SystemGroupError> {
+    async fn probe_linux(
+        &self,
+        group: &SystemGroupName,
+    ) -> Result<CommandOutput, SystemGroupError> {
         self.runner
             .run(CommandSpec::new("getent").args(["group", group.as_str()]))
             .await
@@ -239,7 +242,10 @@ impl SystemGroupManager {
     }
 
     #[cfg(target_os = "macos")]
-    async fn probe_macos(&self, group: &SystemGroupName) -> Result<CommandOutput, SystemGroupError> {
+    async fn probe_macos(
+        &self,
+        group: &SystemGroupName,
+    ) -> Result<CommandOutput, SystemGroupError> {
         let path = format!("/Groups/{}", group.as_str());
         self.runner
             .run(CommandSpec::new("dscl").args([".", "-read", path.as_str()]))
@@ -386,7 +392,10 @@ impl SystemGroupManager {
         members: &[SystemAccountName],
     ) -> Result<(), SystemGroupError> {
         const SCRIPT: &str = "$g=Get-LocalGroup -Name $env:NAOS_GROUP -ErrorAction SilentlyContinue; if ($null -eq $g) { exit 3 }; if ($g.Description -ne 'Managed by naos') { exit 4 }; $current=@(Get-LocalGroupMember -Group $env:NAOS_GROUP -ErrorAction Stop); foreach ($m in $current) { Remove-LocalGroupMember -Group $env:NAOS_GROUP -Member $m.Name -ErrorAction Stop }; $desired=@(); if ($env:NAOS_MEMBERS) { $desired=@($env:NAOS_MEMBERS -split \"\\n\" | Where-Object { $_ }) }; foreach ($m in $desired) { Add-LocalGroupMember -Group $env:NAOS_GROUP -Member $m -ErrorAction Stop }; exit 0";
-        let desired = member_names(members).into_iter().collect::<Vec<_>>().join("\n");
+        let desired = member_names(members)
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join("\n");
         let spec = CommandSpec::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
             .env(WINDOWS_GROUP_ENV, group.as_str())
@@ -402,7 +411,10 @@ impl SystemGroupManager {
         members: &[SystemAccountName],
     ) -> Result<(), SystemGroupError> {
         const SCRIPT: &str = "$g=Get-LocalGroup -Name $env:NAOS_GROUP -ErrorAction SilentlyContinue; if ($null -eq $g) { exit 3 }; if ($g.Description -ne 'Managed by naos') { exit 4 }; $desired=@(); if ($env:NAOS_MEMBERS) { $desired=@($env:NAOS_MEMBERS -split \"\\n\" | Where-Object { $_ } | Sort-Object -Unique) }; $current=@(Get-LocalGroupMember -Group $env:NAOS_GROUP -ErrorAction Stop | ForEach-Object { ($_.Name -split '\\\\')[-1] } | Sort-Object -Unique); if (Compare-Object -ReferenceObject $desired -DifferenceObject $current) { exit 5 }; exit 0";
-        let desired = member_names(members).into_iter().collect::<Vec<_>>().join("\n");
+        let desired = member_names(members)
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join("\n");
         let spec = CommandSpec::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
             .env(WINDOWS_GROUP_ENV, group.as_str())
@@ -454,7 +466,7 @@ fn linux_group_is_managed(output: &str, group: &SystemGroupName, guard: &str) ->
         .collect::<Vec<_>>();
 
     name == group.as_str()
-        && members.iter().any(|member| *member == guard)
+        && members.contains(&guard)
         && members.iter().all(|member| member.starts_with("naos_"))
 }
 
@@ -508,11 +520,7 @@ fn require_macos_managed(output: &CommandOutput) -> Result<(), SystemGroupError>
 fn macos_group_members(output: &str) -> BTreeSet<String> {
     output
         .lines()
-        .find_map(|line| {
-            line.trim()
-                .strip_prefix("GroupMembership:")
-                .map(str::trim)
-        })
+        .find_map(|line| line.trim().strip_prefix("GroupMembership:").map(str::trim))
         .unwrap_or_default()
         .split_whitespace()
         .map(ToOwned::to_owned)
@@ -625,22 +633,30 @@ mod tests {
 
     #[test]
     fn macos_parser_finds_marker_members_and_reserved_gid() {
-        let record =
-            "RealName: Managed by naos\nPrimaryGroupID: 60000\nGroupMembership: naos_bob naos_alice";
+        let record = "RealName: Managed by naos\nPrimaryGroupID: 60000\nGroupMembership: naos_bob naos_alice";
         assert!(macos_group_is_managed(record));
         assert_eq!(
             macos_group_members(record),
             BTreeSet::from(["naos_alice".to_owned(), "naos_bob".to_owned()])
         );
-        assert_eq!(next_macos_gid("wheel 0\nstaff 60000\nother 60002"), Some(60_001));
+        assert_eq!(
+            next_macos_gid("wheel 0\nstaff 60000\nother 60002"),
+            Some(60_001)
+        );
     }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn linux_replace_members_uses_exact_sorted_membership() {
         let group = group();
-        let existing = format!("{}:x:998:naos_alice", group.as_str());
+        let managed_guard =
+            "naos_group_guard:x:900:900:Managed by naos:/nonexistent:/usr/sbin/nologin";
+        let existing = format!(
+            "{}:x:998:naos_group_guard,naos_alice",
+            group.as_str()
+        );
         let runner = Arc::new(FakeRunner::new(vec![
+            output(0, managed_guard),
             output(0, &existing),
             output(0, ""),
         ]));
@@ -648,9 +664,12 @@ mod tests {
 
         manager.replace_members(&group, &members()).await.unwrap();
         let commands = runner.commands();
-        assert_eq!(commands[1].program, "gpasswd");
-        assert_eq!(commands[1].args[0], "-M");
-        assert_eq!(commands[1].args[1], "naos_alice,naos_bob");
+        assert_eq!(commands[2].program, "gpasswd");
+        assert_eq!(commands[2].args[0], "-M");
+        assert_eq!(
+            commands[2].args[1],
+            "naos_alice,naos_bob,naos_group_guard"
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -658,10 +677,7 @@ mod tests {
     async fn macos_replace_members_clears_then_appends_sorted_members() {
         let group = group();
         let runner = Arc::new(FakeRunner::new(vec![
-            output(
-                0,
-                "RealName: Managed by naos\nGroupMembership: naos_old",
-            ),
+            output(0, "RealName: Managed by naos\nGroupMembership: naos_old"),
             output(0, ""),
             output(0, ""),
             output(0, ""),
@@ -671,8 +687,14 @@ mod tests {
         manager.replace_members(&group, &members()).await.unwrap();
         let commands = runner.commands();
         assert!(commands[1].args.contains(&"-delete".to_owned()));
-        assert_eq!(commands[2].args.last().map(String::as_str), Some("naos_alice"));
-        assert_eq!(commands[3].args.last().map(String::as_str), Some("naos_bob"));
+        assert_eq!(
+            commands[2].args.last().map(String::as_str),
+            Some("naos_alice")
+        );
+        assert_eq!(
+            commands[3].args.last().map(String::as_str),
+            Some("naos_bob")
+        );
     }
 
     #[cfg(target_os = "windows")]
@@ -686,9 +708,11 @@ mod tests {
         let command = &runner.commands()[0];
         assert!(command.args.iter().all(|arg| !arg.contains(group.as_str())));
         assert!(command.args.iter().all(|arg| !arg.contains("naos_alice")));
-        assert!(command
-            .env
-            .iter()
-            .any(|(key, value)| key == WINDOWS_MEMBERS_ENV && value == "naos_alice\nnaos_bob"));
+        assert!(
+            command
+                .env
+                .iter()
+                .any(|(key, value)| key == WINDOWS_MEMBERS_ENV && value == "naos_alice\nnaos_bob")
+        );
     }
 }
