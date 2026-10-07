@@ -299,6 +299,20 @@ pub trait NfsBindingRepository: Send + Sync {
         Ok(false)
     }
 
+    async fn remember_nfs_nsm_peer(&self, peer_ip: IpAddr) -> Result<(), NfsRepositoryError> {
+        let _ = peer_ip;
+        Ok(())
+    }
+
+    async fn list_nfs_nsm_peers(&self) -> Result<Vec<IpAddr>, NfsRepositoryError> {
+        Ok(Vec::new())
+    }
+
+    async fn forget_nfs_nsm_peer(&self, peer_ip: IpAddr) -> Result<(), NfsRepositoryError> {
+        let _ = peer_ip;
+        Ok(())
+    }
+
     async fn advance_nfs_nsm_state(&self) -> Result<u32, NfsRepositoryError> {
         Ok(1)
     }
