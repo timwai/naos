@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use thiserror::Error;
 
 use crate::{
-    account::{SystemAccountName, SystemGroupName},
+    account::{AccountError, SystemAccountManager, SystemAccountName, SystemGroupName},
     command::{CommandError, CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner},
 };
 
@@ -38,6 +38,8 @@ pub enum SystemGroupError {
         status: i32,
         stderr: String,
     },
+    #[error("managed group guard account could not be reconciled")]
+    Account(#[from] AccountError),
     #[error("platform group command could not be started")]
     Command(#[from] CommandError),
 }
@@ -154,9 +156,14 @@ impl SystemGroupManager {
         &self,
         group: &SystemGroupName,
     ) -> Result<EnsureGroupResult, SystemGroupError> {
+        let guard = linux_group_guard()?;
+        SystemAccountManager::new(self.runner.clone())
+            .ensure(&guard)
+            .await?;
+
         let existing = self.probe_linux(group).await?;
         if existing.success() {
-            if linux_group_is_managed(&existing.stdout, group) {
+            if linux_group_is_managed(&existing.stdout, group, guard.as_str()) {
                 return Ok(EnsureGroupResult::Existing);
             }
             return Err(SystemGroupError::OwnershipConflict);
@@ -165,6 +172,10 @@ impl SystemGroupManager {
         let spec = CommandSpec::new("groupadd").args(["--system", group.as_str()]);
         let output = self.runner.run(spec.clone()).await?;
         require_success(&spec, &output)?;
+
+        let mark = CommandSpec::new("gpasswd").args(["-a", guard.as_str(), group.as_str()]);
+        let output = self.runner.run(mark.clone()).await?;
+        require_success(&mark, &output)?;
         Ok(EnsureGroupResult::Created)
     }
 
@@ -174,10 +185,16 @@ impl SystemGroupManager {
         group: &SystemGroupName,
         members: &[SystemAccountName],
     ) -> Result<(), SystemGroupError> {
+        let guard = linux_group_guard()?;
+        SystemAccountManager::new(self.runner.clone())
+            .ensure(&guard)
+            .await?;
         let existing = self.probe_linux(group).await?;
-        require_linux_managed(group, &existing)?;
+        require_linux_managed(group, guard.as_str(), &existing)?;
 
-        let desired = member_names(members).into_iter().collect::<Vec<_>>().join(",");
+        let mut desired = member_names(members);
+        desired.insert(guard.as_str().to_owned());
+        let desired = desired.into_iter().collect::<Vec<_>>().join(",");
         let spec = CommandSpec::new("gpasswd").args(["-M", desired.as_str(), group.as_str()]);
         let output = self.runner.run(spec.clone()).await?;
         require_success(&spec, &output)
@@ -189,9 +206,14 @@ impl SystemGroupManager {
         group: &SystemGroupName,
         members: &[SystemAccountName],
     ) -> Result<(), SystemGroupError> {
+        let guard = linux_group_guard()?;
+        SystemAccountManager::new(self.runner.clone())
+            .ensure(&guard)
+            .await?;
         let existing = self.probe_linux(group).await?;
-        require_linux_managed(group, &existing)?;
-        let current = linux_group_members(&existing.stdout);
+        require_linux_managed(group, guard.as_str(), &existing)?;
+        let mut current = linux_group_members(&existing.stdout);
+        current.remove(guard.as_str());
         if current == member_names(members) {
             Ok(())
         } else {
@@ -201,8 +223,12 @@ impl SystemGroupManager {
 
     #[cfg(target_os = "linux")]
     async fn delete_linux(&self, group: &SystemGroupName) -> Result<(), SystemGroupError> {
+        let guard = linux_group_guard()?;
+        SystemAccountManager::new(self.runner.clone())
+            .ensure(&guard)
+            .await?;
         let existing = self.probe_linux(group).await?;
-        require_linux_managed(group, &existing)?;
+        require_linux_managed(group, guard.as_str(), &existing)?;
 
         let spec = CommandSpec::new("groupdel").args([group.as_str()]);
         let output = self.runner.run(spec.clone()).await?;
@@ -400,32 +426,45 @@ fn member_names(members: &[SystemAccountName]) -> BTreeSet<String> {
         .collect()
 }
 
+#[cfg(target_os = "linux")]
+fn linux_group_guard() -> Result<SystemAccountName, AccountError> {
+    SystemAccountName::from_username("group_guard")
+}
+
 #[cfg(any(target_os = "linux", test))]
-fn linux_group_is_managed(output: &str, group: &SystemGroupName) -> bool {
-    let Some(line) = output.lines().find(|line| line.starts_with(group.as_str())) else {
+fn linux_group_is_managed(output: &str, group: &SystemGroupName, guard: &str) -> bool {
+    let Some(line) = output
+        .lines()
+        .find(|line| line.split(':').next() == Some(group.as_str()))
+    else {
         return false;
     };
     let mut fields = line.split(':');
     let name = fields.next().unwrap_or_default();
     let _password = fields.next();
     let _gid = fields.next();
-    let members = fields.next().unwrap_or_default();
+    let members = fields
+        .next()
+        .unwrap_or_default()
+        .split(',')
+        .filter(|member| !member.is_empty())
+        .collect::<Vec<_>>();
+
     name == group.as_str()
-        && members
-            .split(',')
-            .filter(|member| !member.is_empty())
-            .all(|member| member.starts_with("naos_"))
+        && members.iter().any(|member| *member == guard)
+        && members.iter().all(|member| member.starts_with("naos_"))
 }
 
 #[cfg(target_os = "linux")]
 fn require_linux_managed(
     group: &SystemGroupName,
+    guard: &str,
     output: &CommandOutput,
 ) -> Result<(), SystemGroupError> {
     if !output.success() {
         return Err(SystemGroupError::NotFound);
     }
-    if !linux_group_is_managed(&output.stdout, group) {
+    if !linux_group_is_managed(&output.stdout, group, guard) {
         return Err(SystemGroupError::OwnershipConflict);
     }
     Ok(())
@@ -573,8 +612,8 @@ mod tests {
         let group = group();
         let valid = format!("{}:x:998:naos_alice,naos_bob", group.as_str());
         let invalid = format!("{}:x:998:naos_alice,wheel", group.as_str());
-        assert!(linux_group_is_managed(&valid, &group));
-        assert!(!linux_group_is_managed(&invalid, &group));
+        assert!(linux_group_is_managed(&valid, &group, "naos_alice"));
+        assert!(!linux_group_is_managed(&invalid, &group, "naos_alice"));
         assert_eq!(
             linux_group_members(&valid),
             BTreeSet::from(["naos_alice".to_owned(), "naos_bob".to_owned()])
