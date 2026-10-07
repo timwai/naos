@@ -40,4 +40,4 @@ NAOS_NFS_KERBEROS_SERVICE_PRINCIPAL='nfs/server.example.com@EXAMPLE.COM' \
 
 服务 principal 必须能从系统 GSS acceptor 的凭据来源取得对应密钥；MIT/Heimdal 环境可在启动 `naosd` 前通过 `KRB5_KTNAME` 指定 keytab。若配置了 Kerberos principal 但当前构建不支持 system GSS，或 acceptor credential 无法取得，NFS 数据面会拒绝启动而不会降级认证。
 
-当前系统 GSS provider 支持 `krb5` / `krb5i` 所需的认证与 MIC；`krb5p` 暂时 fail-closed，待底层适配能够验证每个 token 的 GSS confidentiality state 后再启用。
+当前 Unix system GSS provider 支持 `krb5` / `krb5i`，并对 Kerberos RFC 4121 Wrap token 支持 `krb5p`：只有协商出 `GSS_C_CONF_FLAG` 且每个 Wrap token 都设置 `Sealed` 标志时才接受 privacy 请求；未加密、旧格式或无法确认 confidentiality 的 token 会 fail-closed。Linux CI 会用临时 MIT Kerberos realm/keytab 真正跑过 MOUNT → NFS 的 `krb5i` 与 `krb5p` RPCSEC_GSS TCP smoke。
