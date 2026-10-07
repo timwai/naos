@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+kerberos-gssapi = ["dep:libgssapi"]
+
 [dependencies]
 hmac.workspace = true
 fs2.workspace = true
@@ -17,6 +21,9 @@ subtle.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libgssapi = { workspace = true, optional = true }
 
 [dev-dependencies]
 async-trait.workspace = true
