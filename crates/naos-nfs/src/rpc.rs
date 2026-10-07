@@ -252,10 +252,7 @@ pub fn decode_rpcsec_gss_unwrapped_body(
     Ok(reader.remaining().to_vec())
 }
 
-pub fn encode_rpcsec_gss_plaintext(
-    seq_num: u32,
-    arguments: &[u8],
-) -> Vec<u8> {
+pub fn encode_rpcsec_gss_plaintext(seq_num: u32, arguments: &[u8]) -> Vec<u8> {
     let mut writer = XdrWriter::new();
     writer.u32(seq_num);
     let mut output = writer.into_bytes();
@@ -578,8 +575,7 @@ mod tests {
         arguments.string("payload").unwrap();
         let arguments = arguments.into_bytes();
 
-        let encoded =
-            encode_rpcsec_gss_integrity_body(17, &arguments, b"body-mic").unwrap();
+        let encoded = encode_rpcsec_gss_integrity_body(17, &arguments, b"body-mic").unwrap();
         let decoded = decode_rpcsec_gss_integrity_body(&encoded, 17).unwrap();
 
         assert_eq!(decoded.seq_num, 17);
@@ -589,8 +585,7 @@ mod tests {
 
     #[test]
     fn rpcsec_gss_integrity_envelope_rejects_sequence_mismatch_and_trailing_data() {
-        let encoded =
-            encode_rpcsec_gss_integrity_body(18, b"arguments", b"body-mic").unwrap();
+        let encoded = encode_rpcsec_gss_integrity_body(18, b"arguments", b"body-mic").unwrap();
         assert_eq!(
             decode_rpcsec_gss_integrity_body(&encoded, 17),
             Err(RpcSecGssBodyError::SequenceMismatch {
