@@ -18,6 +18,9 @@ const WINDOWS_ACCOUNT_ENV: &str = "NAOS_ACCOUNT";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemAccountName(String);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemGroupName(String);
+
 impl SystemAccountName {
     pub fn from_username(username: &str) -> Result<Self, AccountError> {
         validate_username(username)?;
@@ -54,6 +57,22 @@ impl SystemAccountName {
     }
 }
 
+impl SystemGroupName {
+    pub fn from_group_id(group_id: &str) -> Result<Self, AccountError> {
+        validate_group_id(group_id)?;
+        let digest = Sha256::digest(group_id.as_bytes());
+        let suffix = digest[..7]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        Ok(Self(format!("naosg_{suffix}")))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnsureAccountResult {
     Created,
@@ -64,6 +83,8 @@ pub enum EnsureAccountResult {
 pub enum AccountError {
     #[error("username cannot be mapped to a safe system account")]
     InvalidUsername,
+    #[error("group id cannot be mapped to a safe system group")]
+    InvalidGroupId,
     #[error("system account name already exists but is not owned by naos")]
     OwnershipConflict,
     #[error("managed system account was not found")]
@@ -495,6 +516,19 @@ impl SystemAccountManager {
     }
 }
 
+fn validate_group_id(group_id: &str) -> Result<(), AccountError> {
+    let valid_length = (1..=128).contains(&group_id.len());
+    let valid_chars = group_id
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.'));
+
+    if valid_length && valid_chars {
+        Ok(())
+    } else {
+        Err(AccountError::InvalidGroupId)
+    }
+}
+
 fn validate_username(username: &str) -> Result<(), AccountError> {
     let valid_length = (1..=32).contains(&username.len());
     let valid_chars = username
@@ -612,6 +646,26 @@ mod tests {
     fn rejects_unsafe_username_characters() {
         assert!(SystemAccountName::from_username("../root").is_err());
         assert!(SystemAccountName::from_username("alice smith").is_err());
+    }
+
+    #[test]
+    fn group_ids_map_to_stable_rename_independent_system_groups() {
+        let first = SystemGroupName::from_group_id("grp_01JXYZ1234567890ABCDE").unwrap();
+        let second = SystemGroupName::from_group_id("grp_01JXYZ1234567890ABCDF").unwrap();
+
+        assert_eq!(first.as_str().len(), 20);
+        assert!(first.as_str().starts_with("naosg_"));
+        assert_ne!(first, second);
+        assert_eq!(
+            first,
+            SystemGroupName::from_group_id("grp_01JXYZ1234567890ABCDE").unwrap()
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_group_ids() {
+        assert!(SystemGroupName::from_group_id("../wheel").is_err());
+        assert!(SystemGroupName::from_group_id("group id").is_err());
     }
 
     #[test]

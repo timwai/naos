@@ -3,7 +3,7 @@
 use std::{error::Error, sync::Arc};
 
 use naos_platform::{
-    CommandRunner, CommandSpec, EffectiveAclEntry, FsAclManager, FsAclPermission,
+    CommandRunner, CommandSpec, EffectiveAclEntry, FsAclManager, FsAclPermission, FsAclSubject,
     SystemAccountName, SystemCommandRunner,
 };
 use naos_smb::{WindowsShareSpec, WindowsSmbAdapter, WindowsSmbCredentialManager};
@@ -88,7 +88,7 @@ async fn run_round_trip(
     acl.apply(
         dir.path(),
         &[EffectiveAclEntry {
-            account: account.clone(),
+            subject: FsAclSubject::User(account.clone()),
             permission: FsAclPermission::ReadWrite,
             inherit: true,
         }],

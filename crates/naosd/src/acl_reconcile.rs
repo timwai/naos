@@ -7,7 +7,9 @@ use naos_core::{
     reconcile::{ReconcileDriver, ReconcileFailure},
     share::{ShareApplyRepository, ShareApplyRepositoryError},
 };
-use naos_platform::{EffectiveAclEntry, FsAclManager, FsAclPermission, SystemAccountName};
+use naos_platform::{
+    EffectiveAclEntry, FsAclManager, FsAclPermission, FsAclSubject, SystemAccountName,
+};
 use serde_json::{Value, json};
 
 pub struct PlatformAclReconcileDriverFactory {
@@ -59,7 +61,7 @@ impl PlatformAclReconcileDriver {
         };
 
         Ok(EffectiveAclEntry {
-            account,
+            subject: FsAclSubject::User(account),
             permission,
             inherit: rule.inherit,
         })
@@ -159,7 +161,7 @@ impl ReconcileDriver for PlatformAclReconcileDriver {
             };
             let entry = Self::entry(rule)?;
             self.fs_acl
-                .remove(&path, &entry.account)
+                .remove(&path, &entry.subject)
                 .await
                 .map_err(fs_acl_failure)?;
         }
@@ -208,7 +210,7 @@ impl ReconcileDriver for PlatformAclReconcileDriver {
             };
             let entry = Self::entry(previous)?;
             self.fs_acl
-                .verify_absent(&path, &entry.account)
+                .verify_absent(&path, &entry.subject)
                 .await
                 .map_err(fs_acl_failure)?;
         }
