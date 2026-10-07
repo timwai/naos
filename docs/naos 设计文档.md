@@ -2337,7 +2337,7 @@ package
 | 8 | **SMB macOS provider adapter** | 先检测系统 File Sharing；无端口抢占；支持路径明确 |
 | 9 | SMB Doctor / conflict UX | UI 展示 provider、445 owner、冲突原因和可执行修复建议 |
 | 10 | WebDAV | ACL 一致性矩阵通过 |
-| 11 | NFS L1/L2 | 三系统客户端 mount/read/write |
+| 11 | NFS L1/L2 | 基础数据面 + in-process TCP smoke 已完成；剩三系统客户端 mount/read/write |
 | 12 | NFS L3（feature） | Linux/macOS krb5 测试通过 |
 | 13 | React Web UI | 原型核心页面全部 API 化 |
 | 14 | 审计/Doctor/Verify | 可检索、可导出、漂移可发现 |
