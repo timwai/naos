@@ -2339,7 +2339,7 @@ package
 | 8 | **SMB macOS provider adapter** | 先检测系统 File Sharing；无端口抢占；支持路径明确 |
 | 9 | SMB Doctor / conflict UX | UI 展示 provider、445 owner、冲突原因和可执行修复建议 |
 | 10 | WebDAV | ACL 一致性矩阵通过 |
-| 11 | NFS L1/L2 | 基础数据面 + in-process TCP smoke 已完成；Linux 真实 mount smoke 已有，macOS/Windows 真实客户端 smoke harness 已接入；Windows runner 需预装 Client for NFS + 本地 TCP portmapper，仍需完成跨平台 runner/真机验证 |
+| 11 | NFS L1/L2 | 基础数据面 + in-process TCP smoke 已完成；Linux 真实 mount smoke 已有，macOS 真实内核客户端已自动化并通过 mount/create/truncate/read/write/symlink/readlink/hardlink/rename/delete；Windows smoke harness 已接入，但 runner 仍需预装 Client for NFS + 本地 TCP portmapper 并完成真机验证 |
 | 12 | NFS L3（feature） | Linux/macOS krb5 测试通过 |
 | 13 | React Web UI | 原型核心页面全部 API 化 |
 | 14 | 审计/Doctor/Verify | 可检索、可导出、漂移可发现 |
