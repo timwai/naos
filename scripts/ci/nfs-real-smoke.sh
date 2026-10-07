@@ -44,6 +44,7 @@ if [[ "$LOCKS" != "0" && "$LOCKS" != "1" ]]; then
   exit 4
 fi
 if [[ "$LOCKS" -eq 1 ]]; then
+  export NAOS_NFS_TRACE_RPC=1
   for command in python3 rpcinfo; do
     command -v "$command" >/dev/null || {
       echo "missing required lock-smoke command: $command" >&2

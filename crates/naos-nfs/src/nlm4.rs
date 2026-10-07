@@ -510,6 +510,13 @@ pub async fn dispatch_nlm4_rpc(
         return accepted_program_mismatch(call.xid, NLM_VERSION, NLM_VERSION);
     }
 
+    if std::env::var_os("NAOS_NFS_TRACE_RPC").is_some() {
+        eprintln!(
+            "NLM4_RPC peer={client_ip} xid={} procedure={}",
+            call.xid, call.procedure
+        );
+    }
+
     match call.procedure {
         NLMPROC4_NULL => accepted_success(call.xid, &[]),
         NLMPROC4_TEST => test_reply(service, client_ip, &call).await,

@@ -59,7 +59,7 @@ where
 
 pub async fn dispatch_nsm1_rpc(
     service: &NsmV1Service,
-    _client_ip: IpAddr,
+    client_ip: IpAddr,
     request: &[u8],
 ) -> Vec<u8> {
     let call = match decode_call(request) {
@@ -76,6 +76,13 @@ pub async fn dispatch_nsm1_rpc(
     }
     if call.version != NSM_VERSION {
         return accepted_program_mismatch(call.xid, NSM_VERSION, NSM_VERSION);
+    }
+
+    if std::env::var_os("NAOS_NFS_TRACE_RPC").is_some() {
+        eprintln!(
+            "NSM1_RPC peer={client_ip} xid={} procedure={}",
+            call.xid, call.procedure
+        );
     }
 
     match call.procedure {
