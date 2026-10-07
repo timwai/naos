@@ -97,6 +97,7 @@ jobs:
     concurrency:
       group: nfs-remote-lock-${{ inputs.remote_nlm_host }}
       cancel-in-progress: false
+    timeout-minutes: 20
     runs-on: [self-hosted, macos, nfs]
     steps:
       - uses: actions/checkout@v4
@@ -133,6 +134,7 @@ jobs:
     concurrency:
       group: nfs-remote-lock-${{ inputs.remote_nlm_host }}
       cancel-in-progress: false
+    timeout-minutes: 20
     runs-on: [self-hosted, windows, nfs]
     defaults:
       run:
