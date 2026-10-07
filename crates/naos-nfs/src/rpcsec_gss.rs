@@ -1,4 +1,9 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex as StdMutex},
+};
+
+use rand_core::{OsRng, RngCore};
 
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -6,7 +11,8 @@ use tokio::sync::Mutex;
 use crate::{
     rpc::{
         AUTH_BADCRED, AUTH_BADVERF, AUTH_NONE, AUTH_REJECTEDCRED, GSS_S_COMPLETE,
-        GSS_S_CONTINUE_NEEDED, MAX_AUTH_BYTES, MAX_RPC_RECORD_BYTES, MSG_ACCEPTED, PROG_MISMATCH,
+        GSS_S_CONTINUE_NEEDED, GSS_S_NO_CONTEXT, MAX_AUTH_BYTES, MAX_RPC_RECORD_BYTES,
+        MSG_ACCEPTED, PROG_MISMATCH,
         REPLY, RPCSEC_GSS, RPCSEC_GSS_CONTINUE_INIT, RPCSEC_GSS_CREDPROBLEM, RPCSEC_GSS_CTXPROBLEM,
         RPCSEC_GSS_DATA, RPCSEC_GSS_DESTROY, RPCSEC_GSS_INIT, RPCSEC_GSS_MAXSEQ,
         RPCSEC_GSS_SVC_INTEGRITY, RPCSEC_GSS_SVC_NONE, RPCSEC_GSS_SVC_PRIVACY,
@@ -82,6 +88,150 @@ pub trait RpcSecGssAcceptor: Send + Sync {
         &self,
         request: RpcSecGssAcceptRequest,
     ) -> Result<RpcSecGssAcceptResult, RpcSecGssAcceptorError>;
+}
+
+pub trait RpcSecGssHandshake: Send {
+    fn accept_token(
+        &mut self,
+        token: &[u8],
+    ) -> Result<RpcSecGssHandshakeResult, RpcSecGssAcceptorError>;
+}
+
+pub trait RpcSecGssHandshakeProvider: Send + Sync {
+    fn begin(&self) -> Result<Box<dyn RpcSecGssHandshake>, RpcSecGssAcceptorError>;
+}
+
+pub enum RpcSecGssHandshakeResult {
+    Continue {
+        gss_minor: u32,
+        token: Vec<u8>,
+    },
+    Complete {
+        gss_minor: u32,
+        token: Vec<u8>,
+        security: Arc<dyn RpcSecGssSecurityContext>,
+    },
+    Failure {
+        gss_major: u32,
+        gss_minor: u32,
+    },
+}
+
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum StatefulRpcSecGssAcceptorConfigError {
+    #[error("RPCSEC_GSS sequence window is invalid")]
+    InvalidSequenceWindow,
+}
+
+pub struct StatefulRpcSecGssAcceptor {
+    provider: Arc<dyn RpcSecGssHandshakeProvider>,
+    pending: StdMutex<HashMap<Vec<u8>, Box<dyn RpcSecGssHandshake>>>,
+    sequence_window: u32,
+}
+
+impl StatefulRpcSecGssAcceptor {
+    pub fn new(
+        provider: Arc<dyn RpcSecGssHandshakeProvider>,
+        sequence_window: u32,
+    ) -> Result<Self, StatefulRpcSecGssAcceptorConfigError> {
+        if sequence_window == 0 || sequence_window > MAX_RPCSEC_GSS_SEQUENCE_WINDOW {
+            return Err(StatefulRpcSecGssAcceptorConfigError::InvalidSequenceWindow);
+        }
+        Ok(Self {
+            provider,
+            pending: StdMutex::new(HashMap::new()),
+            sequence_window,
+        })
+    }
+
+    fn next_handle(&self) -> Vec<u8> {
+        let mut handle = vec![0u8; 32];
+        OsRng.fill_bytes(&mut handle);
+        handle
+    }
+
+    fn pending_insert(
+        &self,
+        handle: Vec<u8>,
+        handshake: Box<dyn RpcSecGssHandshake>,
+    ) -> Result<(), RpcSecGssAcceptorError> {
+        self.pending
+            .lock()
+            .map_err(|_| RpcSecGssAcceptorError::ProviderFailure)?
+            .insert(handle, handshake);
+        Ok(())
+    }
+
+    fn pending_remove(
+        &self,
+        handle: &[u8],
+    ) -> Result<Option<Box<dyn RpcSecGssHandshake>>, RpcSecGssAcceptorError> {
+        Ok(self
+            .pending
+            .lock()
+            .map_err(|_| RpcSecGssAcceptorError::ProviderFailure)?
+            .remove(handle))
+    }
+
+    fn accept_step(
+        &self,
+        handle: Vec<u8>,
+        mut handshake: Box<dyn RpcSecGssHandshake>,
+        token: &[u8],
+    ) -> Result<RpcSecGssAcceptResult, RpcSecGssAcceptorError> {
+        match handshake.accept_token(token)? {
+            RpcSecGssHandshakeResult::Continue { gss_minor, token } => {
+                self.pending_insert(handle.clone(), handshake)?;
+                Ok(RpcSecGssAcceptResult::Continue {
+                    handle,
+                    gss_minor,
+                    seq_window: self.sequence_window,
+                    token,
+                })
+            }
+            RpcSecGssHandshakeResult::Complete {
+                gss_minor,
+                token,
+                security,
+            } => Ok(RpcSecGssAcceptResult::Complete {
+                handle,
+                gss_minor,
+                seq_window: self.sequence_window,
+                token,
+                security,
+            }),
+            RpcSecGssHandshakeResult::Failure {
+                gss_major,
+                gss_minor,
+            } => Ok(RpcSecGssAcceptResult::Failure {
+                gss_major,
+                gss_minor,
+            }),
+        }
+    }
+}
+
+impl RpcSecGssAcceptor for StatefulRpcSecGssAcceptor {
+    fn accept(
+        &self,
+        request: RpcSecGssAcceptRequest,
+    ) -> Result<RpcSecGssAcceptResult, RpcSecGssAcceptorError> {
+        match request {
+            RpcSecGssAcceptRequest::Init { token } => {
+                let handshake = self.provider.begin()?;
+                self.accept_step(self.next_handle(), handshake, &token)
+            }
+            RpcSecGssAcceptRequest::Continue { handle, token } => {
+                let Some(handshake) = self.pending_remove(&handle)? else {
+                    return Ok(RpcSecGssAcceptResult::Failure {
+                        gss_major: GSS_S_NO_CONTEXT,
+                        gss_minor: 0,
+                    });
+                };
+                self.accept_step(handle, handshake, &token)
+            }
+        }
+    }
 }
 
 struct RegisteredContext {
