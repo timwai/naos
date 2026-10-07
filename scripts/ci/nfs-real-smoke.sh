@@ -38,6 +38,23 @@ fi
 
 NFS_PORT="${NAOS_NFS_SMOKE_NFS_PORT:-32049}"
 MOUNT_PORT="${NAOS_NFS_SMOKE_MOUNT_PORT:-32048}"
+LOCKS="${NAOS_NFS_SMOKE_LOCKS:-0}"
+if [[ "$LOCKS" != "0" && "$LOCKS" != "1" ]]; then
+  echo "NAOS_NFS_SMOKE_LOCKS must be 0 or 1" >&2
+  exit 4
+fi
+if [[ "$LOCKS" -eq 1 ]]; then
+  for command in python3 rpcinfo; do
+    command -v "$command" >/dev/null || {
+      echo "missing required lock-smoke command: $command" >&2
+      exit 4
+    }
+  done
+  if [[ -z "${NAOS_NFS_SMOKE_RPCBIND:-}" ]]; then
+    echo "lock smoke requires NAOS_NFS_SMOKE_RPCBIND so the client can discover NLMv4" >&2
+    exit 4
+  fi
+fi
 ROOT="$(mktemp -d)"
 SHARE="$ROOT/share"
 MOUNTPOINT="$ROOT/mnt"
@@ -72,11 +89,17 @@ SERVER_PID=$!
 mount_export() {
   case "$OS" in
     Linux)
-      local options="vers=3,proto=tcp,mountproto=tcp,port=$NFS_PORT,mountport=$MOUNT_PORT,nolock,soft,timeo=10,retrans=2"
+      local options="vers=3,proto=tcp,mountproto=tcp,port=$NFS_PORT,mountport=$MOUNT_PORT,soft,timeo=10,retrans=2"
+      if [[ "$LOCKS" -eq 0 ]]; then
+        options="$options,nolock"
+      fi
       mount -t nfs -o "$options" "127.0.0.1:/ci-share" "$MOUNTPOINT"
       ;;
     Darwin)
-      local options="vers=3,tcp,port=$NFS_PORT,mountport=$MOUNT_PORT,nolocks,soft,timeo=10,retrans=2"
+      local options="vers=3,tcp,port=$NFS_PORT,mountport=$MOUNT_PORT,soft,timeo=10,retrans=2"
+      if [[ "$LOCKS" -eq 0 ]]; then
+        options="$options,nolocks"
+      fi
       mount_nfs -o "$options" "127.0.0.1:/ci-share" "$MOUNTPOINT"
       ;;
   esac
@@ -101,6 +124,69 @@ done
 if [[ "$READY" -ne 1 ]]; then
   echo "$OS kernel NFSv3 client could not mount the naos export" >&2
   exit 6
+fi
+
+if [[ "$LOCKS" -eq 1 ]]; then
+  registrations="$(rpcinfo -p 127.0.0.1)"
+  grep -Eq "^[[:space:]]*100021[[:space:]]+4[[:space:]]+tcp[[:space:]]+" <<<"$registrations" || {
+    echo "NLMv4 TCP registration was not visible through rpcbind" >&2
+    exit 7
+  }
+
+  printf 'lock-test\n' >"$MOUNTPOINT/lock-test.txt"
+  python3 - "$MOUNTPOINT/lock-test.txt" <<'PY'
+import errno
+import fcntl
+import subprocess
+import sys
+
+path = sys.argv[1]
+holder_code = r"""
+import fcntl
+import sys
+
+with open(sys.argv[1], "r+") as handle:
+    fcntl.lockf(handle, fcntl.LOCK_EX)
+    print("locked", flush=True)
+    sys.stdin.readline()
+    fcntl.lockf(handle, fcntl.LOCK_UN)
+"""
+
+holder = subprocess.Popen(
+    [sys.executable, "-c", holder_code, path],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
+try:
+    if holder.stdout.readline().strip() != "locked":
+        raise RuntimeError("first process did not acquire the NFS record lock")
+
+    with open(path, "r+") as contender:
+        try:
+            fcntl.lockf(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno not in (errno.EACCES, errno.EAGAIN):
+                raise
+        else:
+            fcntl.lockf(contender, fcntl.LOCK_UN)
+            raise RuntimeError("second process unexpectedly acquired a conflicting NFS lock")
+
+    holder.stdin.write("\n")
+    holder.stdin.flush()
+    if holder.wait(timeout=10) != 0:
+        raise RuntimeError(holder.stderr.read())
+
+    with open(path, "r+") as contender:
+        fcntl.lockf(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.lockf(contender, fcntl.LOCK_UN)
+finally:
+    if holder.poll() is None:
+        holder.kill()
+        holder.wait()
+PY
+  rm "$MOUNTPOINT/lock-test.txt"
 fi
 
 printf 'created\n' >"$MOUNTPOINT/roundtrip.txt"
@@ -139,4 +225,8 @@ rm "$MOUNTPOINT/renamed.txt"
 
 [[ ! -e "$SHARE/dir" && ! -e "$SHARE/renamed.txt" ]]
 
-echo "real $OS NFSv3 mount/create/truncate/read/write/symlink/hardlink/rename/delete smoke test passed"
+if [[ "$LOCKS" -eq 1 ]]; then
+  echo "real $OS NFSv3 mount + NLMv4 record-lock smoke test passed"
+else
+  echo "real $OS NFSv3 mount/create/truncate/read/write/symlink/hardlink/rename/delete smoke test passed (locks disabled)"
+fi
