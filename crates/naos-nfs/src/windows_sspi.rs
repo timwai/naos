@@ -411,13 +411,13 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
                 pvBuffer: ptr::null_mut(),
             },
         ];
-        let mut desc = SecBufferDesc {
+        let desc = SecBufferDesc {
             ulVersion: SECBUFFER_VERSION,
             cBuffers: buffers.len() as u32,
             pBuffers: buffers.as_mut_ptr(),
         };
         let mut qop = 0u32;
-        let status = unsafe { DecryptMessage(&context.handle, &mut desc, 0, &mut qop) };
+        let status = unsafe { DecryptMessage(&context.handle, &desc, 0, &mut qop) };
         if status != SEC_E_OK || qop == SECQOP_WRAP_NO_ENCRYPT {
             return Err(RpcSecGssSecurityError::ProtectionFailure);
         }
@@ -454,12 +454,12 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
                 pvBuffer: mutable_buffer_ptr(&mut padding).cast(),
             },
         ];
-        let mut desc = SecBufferDesc {
+        let desc = SecBufferDesc {
             ulVersion: SECBUFFER_VERSION,
             cBuffers: buffers.len() as u32,
             pBuffers: buffers.as_mut_ptr(),
         };
-        let status = unsafe { EncryptMessage(&context.handle, 0, &mut desc, 0) };
+        let status = unsafe { EncryptMessage(&context.handle, 0, &desc, 0) };
         if status != SEC_E_OK {
             return Err(RpcSecGssSecurityError::ProtectionFailure);
         }
