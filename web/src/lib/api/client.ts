@@ -23,6 +23,11 @@ export type AdminPasswordResetRequest =
   components["schemas"]["AdminPasswordResetRequest"];
 export type AuthSessionResponse =
   components["schemas"]["AuthSessionResponse"];
+export type GroupDetailDto = components["schemas"]["GroupDetailDto"];
+export type GroupMembersReplaceRequest =
+  components["schemas"]["GroupMembersReplaceRequest"];
+export type GroupsResponse = components["schemas"]["GroupsResponse"];
+export type GroupWriteRequest = components["schemas"]["GroupWriteRequest"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
 export type NfsBindingDto = components["schemas"]["NfsBindingDto"];
@@ -379,6 +384,62 @@ export async function deleteUser(
         "idempotency-key": idempotencyKey,
       },
     },
+  );
+}
+
+export async function listGroups() {
+  return requestJson<GroupsResponse>("/api/v1/groups");
+}
+
+export async function createGroup(input: GroupWriteRequest) {
+  return requestJson<GroupDetailDto>("/api/v1/groups", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getGroup(groupId: string) {
+  return requestJson<GroupDetailDto>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}`,
+  );
+}
+
+export async function updateGroup(
+  groupId: string,
+  input: GroupWriteRequest,
+) {
+  return requestJson<GroupDetailDto>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function deleteGroup(groupId: string) {
+  return requestJson<void>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function replaceGroupMembers(
+  groupId: string,
+  input: GroupMembersReplaceRequest,
+) {
+  return requestJson<GroupDetailDto>(
+    `/api/v1/groups/${encodeURIComponent(groupId)}/members`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function listUserGroups(userId: string) {
+  return requestJson<GroupsResponse>(
+    `/api/v1/users/${encodeURIComponent(userId)}/groups`,
   );
 }
 
