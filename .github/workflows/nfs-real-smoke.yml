@@ -33,31 +33,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build NFS smoke server
         run: cargo build -p naos-nfs --example nfs-smoke-server
-      - name: Probe local rpcbind for NLM smoke
-        shell: bash
-        run: |
-          if command -v rpcinfo >/dev/null 2>&1; then
-            sudo launchctl kickstart -k system/com.apple.rpcbind >/dev/null 2>&1 || true
-            for _ in {1..20}; do
-              if rpcinfo -p 127.0.0.1 >/dev/null 2>&1; then
-                echo "NAOS_NFS_SMOKE_RPCBIND=127.0.0.1:111" >> "$GITHUB_ENV"
-                echo "NAOS_NFS_SMOKE_LOCKS=1" >> "$GITHUB_ENV"
-                echo "local rpcbind available; enabling NLMv4 lock smoke"
-                exit 0
-              fi
-              sleep 0.1
-            done
-          fi
-          echo "NAOS_NFS_SMOKE_LOCKS=0" >> "$GITHUB_ENV"
-          echo "local rpcbind unavailable; retaining nolocks mount smoke"
       - name: Run real macOS NFSv3 mount/read/write smoke test
         env:
           NAOS_NFS_SMOKE_SERVER: ${{ github.workspace }}/target/debug/examples/nfs-smoke-server
         run: |
+          # Remote NLM requires client and server to have distinct rpcbind/lockd state.
+          # The hosted runner is a same-host loopback topology, so keep this smoke on nolocks.
           sudo env \
             NAOS_NFS_SMOKE_SERVER="$NAOS_NFS_SMOKE_SERVER" \
-            NAOS_NFS_SMOKE_RPCBIND="${NAOS_NFS_SMOKE_RPCBIND:-}" \
-            NAOS_NFS_SMOKE_LOCKS="${NAOS_NFS_SMOKE_LOCKS:-0}" \
+            NAOS_NFS_SMOKE_LOCKS=0 \
             bash scripts/ci/nfs-real-smoke.sh
 
   windows-nfs-client:
