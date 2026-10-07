@@ -704,7 +704,145 @@ fn validated_binding(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+
     use super::*;
+
+    struct FakeKrbRepository {
+        mappings: Mutex<Vec<NfsKrbPrincipal>>,
+        enabled_users: Mutex<Vec<String>>,
+    }
+
+    impl FakeKrbRepository {
+        fn new(enabled_users: &[&str]) -> Self {
+            Self {
+                mappings: Mutex::new(Vec::new()),
+                enabled_users: Mutex::new(
+                    enabled_users.iter().map(|user| (*user).to_owned()).collect(),
+                ),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl NfsBindingRepository for FakeKrbRepository {
+        async fn find_enabled_nfs_export_by_name(
+            &self,
+            _name: &str,
+        ) -> Result<Option<NfsExport>, NfsRepositoryError> {
+            Ok(None)
+        }
+
+        async fn list_enabled_nfs_exports(&self) -> Result<Vec<NfsExport>, NfsRepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn nfs_share_exists(&self, _share_id: &str) -> Result<bool, NfsRepositoryError> {
+            Ok(false)
+        }
+
+        async fn nfs_user_exists(&self, user_id: &str) -> Result<bool, NfsRepositoryError> {
+            Ok(self
+                .enabled_users
+                .lock()
+                .map_err(|_| NfsRepositoryError::Unavailable)?
+                .iter()
+                .any(|user| user == user_id))
+        }
+
+        async fn list_nfs_bindings(
+            &self,
+            _share_id: &str,
+        ) -> Result<Vec<NfsBinding>, NfsRepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn insert_nfs_binding(
+            &self,
+            _binding: &NfsBinding,
+        ) -> Result<(), NfsRepositoryError> {
+            Err(NfsRepositoryError::Unavailable)
+        }
+
+        async fn update_nfs_binding(
+            &self,
+            _binding: &NfsBinding,
+        ) -> Result<bool, NfsRepositoryError> {
+            Err(NfsRepositoryError::Unavailable)
+        }
+
+        async fn delete_nfs_binding(
+            &self,
+            _share_id: &str,
+            _binding_id: &str,
+        ) -> Result<bool, NfsRepositoryError> {
+            Err(NfsRepositoryError::Unavailable)
+        }
+
+        async fn find_nfs_krb_principal(
+            &self,
+            principal: &str,
+        ) -> Result<Option<NfsKrbPrincipal>, NfsRepositoryError> {
+            Ok(self
+                .mappings
+                .lock()
+                .map_err(|_| NfsRepositoryError::Unavailable)?
+                .iter()
+                .find(|mapping| mapping.principal == principal)
+                .cloned())
+        }
+
+        async fn list_nfs_krb_principals(
+            &self,
+        ) -> Result<Vec<NfsKrbPrincipal>, NfsRepositoryError> {
+            self.mappings
+                .lock()
+                .map(|mappings| mappings.clone())
+                .map_err(|_| NfsRepositoryError::Unavailable)
+        }
+
+        async fn insert_nfs_krb_principal(
+            &self,
+            principal: &NfsKrbPrincipal,
+        ) -> Result<(), NfsRepositoryError> {
+            self.mappings
+                .lock()
+                .map_err(|_| NfsRepositoryError::Unavailable)?
+                .push(principal.clone());
+            Ok(())
+        }
+
+        async fn update_nfs_krb_principal(
+            &self,
+            principal: &NfsKrbPrincipal,
+        ) -> Result<bool, NfsRepositoryError> {
+            let mut mappings = self
+                .mappings
+                .lock()
+                .map_err(|_| NfsRepositoryError::Unavailable)?;
+            let Some(current) = mappings.iter_mut().find(|mapping| mapping.id == principal.id)
+            else {
+                return Ok(false);
+            };
+            *current = principal.clone();
+            Ok(true)
+        }
+
+        async fn delete_nfs_krb_principal(
+            &self,
+            principal_id: &str,
+        ) -> Result<bool, NfsRepositoryError> {
+            let mut mappings = self
+                .mappings
+                .lock()
+                .map_err(|_| NfsRepositoryError::Unavailable)?;
+            let before = mappings.len();
+            mappings.retain(|mapping| mapping.id != principal_id);
+            Ok(mappings.len() != before)
+        }
+    }
 
     fn binding(
         id: &str,
@@ -721,6 +859,114 @@ mod tests {
             user_id: user_id.to_owned(),
             permission,
         }
+    }
+
+    #[tokio::test]
+    async fn krb_principal_mapping_is_exact_unique_and_requires_enabled_user() {
+        let repository = Arc::new(FakeKrbRepository::new(&["usr_alice"]));
+        let service = NfsKrbPrincipalService::new(repository.clone());
+
+        let mapping = service
+            .create(NfsKrbPrincipalInput {
+                principal: "alice@EXAMPLE.COM".to_owned(),
+                user_id: "usr_alice".to_owned(),
+            })
+            .await
+            .unwrap();
+        assert!(mapping.id.starts_with("nkp_"));
+        assert_eq!(
+            service.resolve_user_id("alice@EXAMPLE.COM").await.unwrap(),
+            Some("usr_alice".to_owned())
+        );
+        assert_eq!(
+            service.resolve_user_id("alice@example.com").await.unwrap(),
+            None
+        );
+
+        assert!(matches!(
+            service
+                .create(NfsKrbPrincipalInput {
+                    principal: "alice@EXAMPLE.COM".to_owned(),
+                    user_id: "usr_alice".to_owned(),
+                })
+                .await,
+            Err(NfsKrbPrincipalServiceError::Conflict)
+        ));
+        assert!(matches!(
+            service
+                .create(NfsKrbPrincipalInput {
+                    principal: "bob@EXAMPLE.COM".to_owned(),
+                    user_id: "usr_disabled".to_owned(),
+                })
+                .await,
+            Err(NfsKrbPrincipalServiceError::Validation {
+                field: "user_id",
+                ..
+            })
+        ));
+
+        repository.enabled_users.lock().unwrap().clear();
+        assert_eq!(
+            service.resolve_user_id("alice@EXAMPLE.COM").await.unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn krb_principal_mapping_update_and_delete_are_id_based() {
+        let repository = Arc::new(FakeKrbRepository::new(&["usr_alice", "usr_bob"]));
+        let service = NfsKrbPrincipalService::new(repository);
+
+        let mapping = service
+            .create(NfsKrbPrincipalInput {
+                principal: "alice@EXAMPLE.COM".to_owned(),
+                user_id: "usr_alice".to_owned(),
+            })
+            .await
+            .unwrap();
+
+        let updated = service
+            .update(
+                &mapping.id,
+                NfsKrbPrincipalInput {
+                    principal: "alice/admin@EXAMPLE.COM".to_owned(),
+                    user_id: "usr_bob".to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.user_id, "usr_bob");
+        assert_eq!(
+            service
+                .resolve_user_id("alice/admin@EXAMPLE.COM")
+                .await
+                .unwrap(),
+            Some("usr_bob".to_owned())
+        );
+
+        service.delete(&mapping.id).await.unwrap();
+        assert!(service.list().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn krb_principal_validation_rejects_empty_control_and_oversized_values() {
+        for principal in ["", "alice\n@EXAMPLE.COM"] {
+            assert!(matches!(
+                validate_krb_principal(principal),
+                Err(NfsKrbPrincipalServiceError::Validation {
+                    field: "principal",
+                    ..
+                })
+            ));
+        }
+        assert!(matches!(
+            validate_krb_principal(&"a".repeat(1025)),
+            Err(NfsKrbPrincipalServiceError::Validation {
+                field: "principal",
+                ..
+            })
+        ));
+        assert!(validate_krb_principal("alice/admin@EXAMPLE.COM").is_ok());
     }
 
     #[test]
