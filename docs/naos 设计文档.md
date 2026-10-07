@@ -1675,6 +1675,32 @@ share_id + filesystem identity + generation + nonce/version
 
 避免客户端构造跨共享 handle。
 
+NFSv3 数据面当前实现约束：
+
+- `naos-nfs` 进程内实现 ONC-RPC v2 / XDR / TCP record marking、MOUNT v3 与 NFSv3；
+- v1 仅提供 **TCP** 数据面，不声明 UDP 支持；
+- `naosd` 默认 **不启用 NFS listener**，避免安装后无条件占用 NFS 相关端口；
+- 启用后默认 NFS 端口为 `2049`、MOUNT 端口为 `20048`，两者均可配置；绑定失败直接启动失败，不自动停止/替换其它 listener；
+- `rpcbind/portmapper` 注册是显式可选项，默认关闭；开启时仅向本机 `127.0.0.1:111` 发起 portmapper v2 TCP SET/UNSET；
+- naos **不自行监听 111**，也不启动、停止或覆盖系统 rpcbind；注册失败视为 NFS 启动失败；
+- 不启用 rpcbind 时，客户端必须显式知道 NFS/MOUNT 端口，或由部署层提供等价服务发现；
+- 当前实现的 NFSv3 procedure 至少包含 `NULL/GETATTR/LOOKUP/ACCESS/READ/WRITE/CREATE/MKDIR/REMOVE/RMDIR/RENAME/READDIR/READDIRPLUS/FSSTAT/FSINFO/PATHCONF/COMMIT`；
+- MOUNT v3 支持 `NULL/MNT/DUMP/UMNT/UMNTALL/EXPORT`；
+- MOUNT 与 NFSv3 共用同一 file-handle table，rename 后已签发 handle 保持有效，delete 后对应 handle 变为 stale；
+- 当前 file-handle path registry 为进程内状态；`naosd` 重启后旧 handle 视为 stale，v1 客户端需要重新 mount。若未来要求 daemon restart 后 handle 持久稳定，需单独设计持久 object identity/handle index，而不能把绝对路径直接暴露进 handle；
+- L1/L2 权限继续复用 `NfsBindingRepository + acl-engine + SafePathResolver`，协议层不得另写一套 ACL 规则；
+- L3/RPCSEC_GSS 仍为后续 feature，不属于当前基础数据面的完成条件。
+
+对应运行参数：
+
+```text
+--nfs-enabled / NAOS_NFS_ENABLED
+--nfs-listen  / NAOS_NFS_LISTEN
+--nfs-port    / NAOS_NFS_PORT
+--mount-port  / NAOS_MOUNT_PORT
+--nfs-rpcbind / NAOS_NFS_RPCBIND
+```
+
 ---
 
 ## 10. 数据模型
@@ -2281,7 +2307,9 @@ e2e
 ├─ browser E2E
 ├─ SMB system-provider integration
 ├─ SMB 445 conflict/ownership scenarios
-└─ WebDAV/NFS protocol smoke tests
+├─ WebDAV protocol smoke tests
+├─ NFS in-process TCP smoke: MOUNT root handle → NFS GETATTR
+└─ NFS privileged/client-mount smoke（专用 runner）
 
 package
 ├─ linux
