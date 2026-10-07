@@ -101,7 +101,10 @@ impl MountService {
         credential: &RpcCredential,
         export_path: &str,
     ) -> Result<MountGrant, MountError> {
-        if matches!(credential, RpcCredential::Unsupported { .. }) {
+        if !matches!(
+            credential,
+            RpcCredential::AuthNone | RpcCredential::AuthSys(_)
+        ) {
             return Err(MountError::AccessDenied);
         }
 
@@ -139,7 +142,10 @@ impl MountService {
         client_ip: IpAddr,
         credential: &RpcCredential,
     ) -> Result<Vec<NfsExport>, MountError> {
-        if matches!(credential, RpcCredential::Unsupported { .. }) {
+        if !matches!(
+            credential,
+            RpcCredential::AuthNone | RpcCredential::AuthSys(_)
+        ) {
             return Ok(Vec::new());
         }
 
@@ -358,6 +364,10 @@ mod tests {
     }
 
     fn service() -> MountService {
+        service_with_uid(Some(1000))
+    }
+
+    fn service_with_uid(uid: Option<u32>) -> MountService {
         let export = NfsExport {
             id: "shr_media".to_owned(),
             name: "media".to_owned(),
@@ -368,7 +378,7 @@ mod tests {
             id: "bind_media".to_owned(),
             share_id: export.id.clone(),
             cidr: "192.168.1.0/24".parse::<NfsCidr>().unwrap(),
-            uid: Some(1000),
+            uid,
             user_id: "usr_alice".to_owned(),
             permission: NfsBindingPermission::ReadWrite,
         };
@@ -388,6 +398,16 @@ mod tests {
             uid,
             gid: 100,
             auxiliary_gids: vec![],
+        })
+    }
+
+    fn rpcsec_gss() -> RpcCredential {
+        RpcCredential::RpcSecGss(crate::rpc::RpcSecGssCredential {
+            version: crate::rpc::RPCSEC_GSS_VERSION_1,
+            gss_proc: crate::rpc::RPCSEC_GSS_DATA,
+            seq_num: 1,
+            service: crate::rpc::RPCSEC_GSS_SVC_INTEGRITY,
+            handle: b"unverified-context".to_vec(),
         })
     }
 
@@ -416,6 +436,24 @@ mod tests {
             service.mount(client_ip, &auth_sys(1001), "/media").await,
             Err(MountError::AccessDenied)
         ));
+    }
+
+    #[tokio::test]
+    async fn unverified_rpcsec_gss_does_not_fall_back_to_l1_identity() {
+        let service = service_with_uid(None);
+        let client_ip = "192.168.1.25".parse().unwrap();
+
+        assert!(matches!(
+            service.mount(client_ip, &rpcsec_gss(), "/media").await,
+            Err(MountError::AccessDenied)
+        ));
+        assert!(
+            service
+                .exports(client_ip, &rpcsec_gss())
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -497,6 +535,16 @@ mod tests {
                 body.u32(credential.gid);
                 body.u32_array(&credential.auxiliary_gids).unwrap();
                 writer.u32(AUTH_SYS);
+                writer.opaque(&body.into_bytes()).unwrap();
+            }
+            RpcCredential::RpcSecGss(credential) => {
+                let mut body = XdrWriter::new();
+                body.u32(credential.version);
+                body.u32(credential.gss_proc);
+                body.u32(credential.seq_num);
+                body.u32(credential.service);
+                body.opaque(&credential.handle).unwrap();
+                writer.u32(crate::rpc::RPCSEC_GSS);
                 writer.opaque(&body.into_bytes()).unwrap();
             }
             RpcCredential::Unsupported { flavor } => {

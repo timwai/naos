@@ -72,6 +72,10 @@ impl<'a> XdrReader<'a> {
         &self.input[self.position..]
     }
 
+    pub const fn position(&self) -> usize {
+        self.position
+    }
+
     pub fn finish(self) -> Result<(), XdrError> {
         if self.position == self.input.len() {
             Ok(())
