@@ -747,13 +747,7 @@ async fn file_api_reuses_acl_and_safe_paths_for_browse_download_move_and_delete(
         .unwrap();
     assert_eq!(acl.status(), StatusCode::ACCEPTED);
     let acl = json_body(acl).await;
-    let acl_done = wait_operation(
-        &app,
-        peer,
-        &cookie,
-        acl["operation_id"].as_str().unwrap(),
-    )
-    .await;
+    let acl_done = wait_operation(&app, peer, &cookie, acl["operation_id"].as_str().unwrap()).await;
     assert_eq!(acl_done["state"], "succeeded");
 
     let visible = app
@@ -832,9 +826,7 @@ async fn file_api_reuses_acl_and_safe_paths_for_browse_download_move_and_delete(
         .clone()
         .oneshot(request(
             Method::GET,
-            &format!(
-                "/api/v1/shares/{share_id}/files/download?path=%2Frenamed.txt"
-            ),
+            &format!("/api/v1/shares/{share_id}/files/download?path=%2Frenamed.txt"),
             None,
             peer,
             Some(&cookie),
