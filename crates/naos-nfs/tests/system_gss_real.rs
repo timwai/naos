@@ -1,6 +1,14 @@
-#![cfg(all(unix, feature = "system-gss"))]
+#![cfg(all(target_os = "linux", feature = "system-gss"))]
 
-use std::{env, sync::Arc};
+use std::{
+    env, fs,
+    net::TcpListener,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use libgssapi::{
     context::{ClientCtx, CtxFlags, SecurityContext},
@@ -16,6 +24,108 @@ use naos_nfs::{
     system_gss::SystemGssHandshakeProvider,
 };
 
+struct TestKdc {
+    _tempdir: tempfile::TempDir,
+    child: Child,
+    config_path: PathBuf,
+    keytab_path: PathBuf,
+    realm: String,
+}
+
+impl TestKdc {
+    fn new() -> Self {
+        let tempdir = tempfile::tempdir().expect("create Kerberos tempdir");
+        let dir = tempdir.path().to_path_buf();
+        let realm = "EXAMPLE.COM".to_owned();
+        let port = free_port();
+        let config_path = dir.join("krb5.conf");
+        let keytab_path = dir.join("naos.keytab");
+
+        fs::write(&config_path, build_config(&dir, port, &realm))
+            .expect("write Kerberos config");
+        fs::write(dir.join("kadm5.acl"), "*/admin@EXAMPLE.COM\t*\n")
+            .expect("write Kerberos ACL");
+
+        run_assert(
+            Command::new("kdb5_util")
+                .args(["create", "-s", "-P", "masterpass", "-r", &realm])
+                .env("KRB5_CONFIG", &config_path)
+                .env("KRB5_KDC_PROFILE", &config_path),
+            "create Kerberos database",
+        );
+        run_assert(
+            Command::new("kadmin.local")
+                .args(["-q", "addprinc -pw testpass testuser@EXAMPLE.COM"])
+                .env("KRB5_CONFIG", &config_path)
+                .env("KRB5_KDC_PROFILE", &config_path),
+            "create Kerberos client principal",
+        );
+        run_assert(
+            Command::new("kadmin.local")
+                .args([
+                    "-q",
+                    "addprinc -randkey nfs/test.example.com@EXAMPLE.COM",
+                ])
+                .env("KRB5_CONFIG", &config_path)
+                .env("KRB5_KDC_PROFILE", &config_path),
+            "create Kerberos service principal",
+        );
+        run_assert(
+            Command::new("kadmin.local")
+                .args([
+                    "-q",
+                    &format!(
+                        "ktadd -k {} nfs/test.example.com@EXAMPLE.COM",
+                        keytab_path.display()
+                    ),
+                ])
+                .env("KRB5_CONFIG", &config_path)
+                .env("KRB5_KDC_PROFILE", &config_path),
+            "export Kerberos service keytab",
+        );
+
+        let child = Command::new("krb5kdc")
+            .args(["-n", "-P"])
+            .arg(dir.join("kdc.pid"))
+            .args(["-r", &realm])
+            .env("KRB5_CONFIG", &config_path)
+            .env("KRB5_KDC_PROFILE", &config_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start temporary MIT Kerberos KDC");
+        wait_for_port(port);
+
+        Self {
+            _tempdir: tempdir,
+            child,
+            config_path,
+            keytab_path,
+            realm,
+        }
+    }
+
+    fn apply_env(&self) {
+        // This integration-test binary contains a single test, so no other
+        // thread mutates the process-wide Kerberos environment concurrently.
+        unsafe {
+            env::set_var("KRB5_CONFIG", &self.config_path);
+            env::set_var(
+                "KRB5_KTNAME",
+                format!("FILE:{}", self.keytab_path.display()),
+            );
+            env::set_var("KRB5RCACHENAME", "none:");
+        }
+    }
+}
+
+impl Drop for TestKdc {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 #[test]
 fn real_kerberos_context_establishes_and_round_trips_mic() {
     if env::var_os("NAOS_TEST_KERBEROS_REALM").is_none() {
@@ -23,33 +133,29 @@ fn real_kerberos_context_establishes_and_round_trips_mic() {
         return;
     }
 
-    let service_principal =
-        env::var("NAOS_TEST_KERBEROS_SERVICE_PRINCIPAL").expect("service principal");
-    let client_principal =
-        env::var("NAOS_TEST_KERBEROS_CLIENT_PRINCIPAL").expect("client principal");
+    let kdc = TestKdc::new();
+    kdc.apply_env();
 
+    let service_principal = format!("nfs/test.example.com@{}", kdc.realm);
+    let client_principal = format!("testuser@{}", kdc.realm);
     let mechanisms = OidSet::singleton(GSS_MECH_KRB5).expect("Kerberos mechanism");
-    let target = Name::new(
-        service_principal.as_bytes(),
-        Some(GSS_NT_KRB5_PRINCIPAL),
-    )
-    .expect("import service principal")
-    .canonicalize(Some(GSS_MECH_KRB5))
-    .expect("canonicalize service principal");
-    let client_name = Name::new(
-        client_principal.as_bytes(),
-        Some(GSS_NT_KRB5_PRINCIPAL),
-    )
-    .expect("import client principal")
-    .canonicalize(Some(GSS_MECH_KRB5))
-    .expect("canonicalize client principal");
-    let client_credential = Cred::acquire(
+
+    let target = Name::new(service_principal.as_bytes(), Some(GSS_NT_KRB5_PRINCIPAL))
+        .expect("import service principal")
+        .canonicalize(Some(GSS_MECH_KRB5))
+        .expect("canonicalize service principal");
+    let client_name = Name::new(client_principal.as_bytes(), Some(GSS_NT_KRB5_PRINCIPAL))
+        .expect("import client principal")
+        .canonicalize(Some(GSS_MECH_KRB5))
+        .expect("canonicalize client principal");
+    let client_credential = Cred::acquire_with_password(
         Some(&client_name),
+        "testpass",
         None,
         CredUsage::Initiate,
         Some(&mechanisms),
     )
-    .expect("acquire client credential from ccache");
+    .expect("acquire client credential from temporary KDC");
     let mut client = ClientCtx::new(
         Some(client_credential),
         target,
@@ -59,7 +165,7 @@ fn real_kerberos_context_establishes_and_round_trips_mic() {
 
     let provider = Arc::new(
         SystemGssHandshakeProvider::new(&service_principal)
-            .expect("acquire server credential from keytab"),
+            .expect("acquire server credential from temporary keytab"),
     );
     let acceptor =
         StatefulRpcSecGssAcceptor::new(provider, 32).expect("configure stateful acceptor");
@@ -166,5 +272,68 @@ fn real_kerberos_context_establishes_and_round_trips_mic() {
     assert_eq!(
         security.verify_mic(message, &corrupted),
         Err(RpcSecGssSecurityError::BadMic)
+    );
+}
+
+fn build_config(dir: &Path, port: u16, realm: &str) -> String {
+    format!(
+        r#"[libdefaults]
+    default_realm = {realm}
+    dns_canonicalize_hostname = false
+    rdns = false
+    forwardable = true
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+
+[realms]
+    {realm} = {{
+        kdc = 127.0.0.1:{port}
+        admin_server = 127.0.0.1
+        database_name = {database}
+        admin_keytab = FILE:{admin_keytab}
+        acl_file = {acl}
+        key_stash_file = {stash}
+        max_life = 1h
+        max_renewable_life = 1h
+    }}
+
+[kdcdefaults]
+    kdc_ports = {port}
+    kdc_tcp_ports = {port}
+
+[domain_realm]
+    test.example.com = {realm}
+    .example.com = {realm}
+"#,
+        database = dir.join("principal").display(),
+        admin_keytab = dir.join("kadm5.keytab").display(),
+        acl = dir.join("kadm5.acl").display(),
+        stash = dir.join(".k5stash").display(),
+    )
+}
+
+fn free_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral KDC port");
+    listener.local_addr().expect("local KDC address").port()
+}
+
+fn wait_for_port(port: u16) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("temporary KDC did not start on port {port}");
+}
+
+fn run_assert(command: &mut Command, what: &str) {
+    let output = command.output().unwrap_or_else(|error| panic!("{what}: {error}"));
+    assert!(
+        output.status.success(),
+        "{what} failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
 }
