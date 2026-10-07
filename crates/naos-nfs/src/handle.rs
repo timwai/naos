@@ -193,7 +193,16 @@ impl FileHandleTable {
         source: &RelativePath,
         target: &RelativePath,
     ) -> Result<(), FileHandleError> {
+        if source == target {
+            return Ok(());
+        }
+
         let mut entries = self.entries.write().map_err(|_| FileHandleError::Invalid)?;
+        entries.retain(|_, entry| {
+            entry.share_id != share_id
+                || (entry.relative_path != *target && !target.is_ancestor_of(&entry.relative_path))
+        });
+
         for entry in entries.values_mut() {
             if entry.share_id != share_id {
                 continue;
@@ -342,6 +351,29 @@ mod tests {
         table.invalidate_subtree("shr_media", &target).unwrap();
         assert_eq!(
             table.resolve(&handle, &[export(2)]),
+            Err(FileHandleError::Stale)
+        );
+    }
+
+    #[test]
+    fn rename_invalidates_handles_for_replaced_target() {
+        let table = FileHandleTable::new([12; 32]);
+        let source = RelativePath::parse("/draft.txt").unwrap();
+        let target = RelativePath::parse("/final.txt").unwrap();
+        let source_handle = table.issue(&export(2), &source);
+        let target_handle = table.issue(&export(2), &target);
+
+        table.rename_subtree("shr_media", &source, &target).unwrap();
+
+        assert_eq!(
+            table
+                .resolve(&source_handle, &[export(2)])
+                .unwrap()
+                .relative_path,
+            target
+        );
+        assert_eq!(
+            table.resolve(&target_handle, &[export(2)]),
             Err(FileHandleError::Stale)
         );
     }
