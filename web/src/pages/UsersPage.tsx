@@ -6,6 +6,7 @@ import {
 import { useEffect, useState, type FormEvent } from "react";
 
 import { useSession } from "../features/auth/queries";
+import { GroupManager } from "../features/groups/GroupManager";
 import {
   ApiError,
   createUser,
@@ -435,6 +436,8 @@ export function UsersPage() {
           </div>
         )}
       </article>
+
+      <GroupManager />
     </section>
   );
 }
