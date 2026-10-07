@@ -2,6 +2,7 @@ import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import { useSession } from "../features/auth/queries";
 import { AppShell } from "./layout/AppShell";
+import { AclSimulatorPage } from "../pages/AclSimulatorPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { LoginPage } from "../pages/LoginPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
@@ -63,15 +64,7 @@ export function App() {
           <Route element={<RequireAdmin />}>
             <Route path="shares" element={<SharesPage />} />
             <Route path="users" element={<UsersPage />} />
-            <Route
-              path="acl-simulator"
-              element={
-                <PlaceholderPage
-                  title="权限模拟器"
-                  description="模拟结果将由后端 acl-engine 返回。"
-                />
-              }
-            />
+            <Route path="acl-simulator" element={<AclSimulatorPage />} />
             <Route
               path="audit"
               element={

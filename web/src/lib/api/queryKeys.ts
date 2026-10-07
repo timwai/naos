@@ -15,6 +15,7 @@ export const queryKeys = {
   },
   shares: {
     list: () => ["shares", "list"] as const,
+    acl: (shareId: string) => ["shares", shareId, "acl"] as const,
   },
   system: {
     smbDoctor: () => ["system", "smb-doctor"] as const,

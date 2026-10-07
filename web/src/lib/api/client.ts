@@ -2,6 +2,11 @@ import type { components } from "./generated";
 
 export type AcceptedOperation =
   components["schemas"]["AcceptedOperation"];
+export type AclRulesResponse = components["schemas"]["AclRulesResponse"];
+export type AclSimulateRequest =
+  components["schemas"]["AclSimulateRequest"];
+export type AclSimulationResponse =
+  components["schemas"]["AclSimulationResponse"];
 export type ApiErrorBody = components["schemas"]["ErrorResponse"];
 export type AuthSessionResponse =
   components["schemas"]["AuthSessionResponse"];
@@ -197,4 +202,23 @@ export async function listUsers() {
 
 export async function listShares() {
   return requestJson<SharesResponse>("/api/v1/shares");
+}
+
+export async function listShareAcl(shareId: string) {
+  return requestJson<AclRulesResponse>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/acl`,
+  );
+}
+
+export async function simulateShareAcl(
+  shareId: string,
+  input: AclSimulateRequest,
+) {
+  return requestJson<AclSimulationResponse>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/acl/simulate`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
