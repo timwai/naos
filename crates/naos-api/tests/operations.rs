@@ -666,6 +666,218 @@ async fn acl_replace_is_operation_backed_idempotent_and_bumps_share_generation()
     assert_eq!(json_body(group).await["code"], "ACL_GROUP_UNSUPPORTED");
 }
 
+#[tokio::test]
+async fn file_api_reuses_acl_and_safe_paths_for_browse_download_move_and_delete() {
+    let (app, _store, dir) = test_app().await;
+    let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 33004);
+    let (cookie, csrf) = login_admin(&app, peer).await;
+    let share_root = dir.path().join("files-share");
+    tokio::fs::create_dir_all(&share_root).await.unwrap();
+    tokio::fs::write(share_root.join("notes.txt"), b"hello files")
+        .await
+        .unwrap();
+
+    let create = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/shares",
+            Some(json!({
+                "name": "files-docs",
+                "path": share_root.to_string_lossy(),
+                "comment": null,
+                "enabled": true,
+                "smb_enabled": false,
+                "webdav_enabled": true,
+                "nfs_enabled": false
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("files-share-create-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::ACCEPTED);
+    let create = json_body(create).await;
+    let created = wait_operation(
+        &app,
+        peer,
+        &cookie,
+        create["operation_id"].as_str().unwrap(),
+    )
+    .await;
+    let share_id = created["resource_id"].as_str().unwrap().to_owned();
+
+    let users = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/users",
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let users = json_body(users).await;
+    let admin_id = users["items"][0]["id"].as_str().unwrap().to_owned();
+
+    let acl = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/v1/shares/{share_id}/acl"),
+            Some(json!({
+                "items": [{
+                    "rel_path": "/",
+                    "subject": {"type": "user", "id": admin_id},
+                    "permission": "rw",
+                    "inherit": true
+                }]
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("files-acl-replace-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(acl.status(), StatusCode::ACCEPTED);
+    let acl = json_body(acl).await;
+    let acl_done = wait_operation(
+        &app,
+        peer,
+        &cookie,
+        acl["operation_id"].as_str().unwrap(),
+    )
+    .await;
+    assert_eq!(acl_done["state"], "succeeded");
+
+    let visible = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/files/shares",
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(visible.status(), StatusCode::OK);
+    let visible = json_body(visible).await;
+    assert_eq!(visible["items"][0]["id"], share_id);
+    assert_eq!(visible["items"][0]["effective_permission"], "rw");
+
+    let listing = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/shares/{share_id}/files?path=%2F"),
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(listing.status(), StatusCode::OK);
+    let listing = json_body(listing).await;
+    assert_eq!(listing["path"], "/");
+    assert_eq!(listing["entries"][0]["name"], "notes.txt");
+    assert_eq!(listing["entries"][0]["effective_permission"], "rw");
+
+    let mkdir = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/api/v1/shares/{share_id}/directories"),
+            Some(json!({"path": "/new-dir"})),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(mkdir.status(), StatusCode::CREATED);
+    assert!(share_root.join("new-dir").is_dir());
+
+    let moved = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/api/v1/shares/{share_id}/files/move"),
+            Some(json!({
+                "source_path": "/notes.txt",
+                "destination_path": "/renamed.txt"
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(moved.status(), StatusCode::NO_CONTENT);
+    assert!(share_root.join("renamed.txt").is_file());
+
+    let download = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!(
+                "/api/v1/shares/{share_id}/files/download?path=%2Frenamed.txt"
+            ),
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(download.status(), StatusCode::OK);
+    let bytes = download.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(bytes.as_ref(), b"hello files");
+
+    let traversal = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/shares/{share_id}/files?path=..%2Fsecret"),
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(traversal.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let deleted = app
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/v1/shares/{share_id}/files?path=%2Frenamed.txt"),
+            None,
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    assert!(!share_root.join("renamed.txt").exists());
+}
+
 struct VerifyFailDriver {
     rollback_fails: bool,
 }

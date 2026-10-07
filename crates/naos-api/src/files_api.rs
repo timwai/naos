@@ -6,7 +6,7 @@ use axum::{
         HeaderValue, StatusCode,
         header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
     },
-    response::{IntoResponse, Response},
+    response::Response,
     routing::{get, post},
 };
 use naos_contract::{
