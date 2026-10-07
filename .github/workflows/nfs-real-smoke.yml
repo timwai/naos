@@ -29,3 +29,20 @@ jobs:
         env:
           NAOS_NFS_SMOKE_SERVER: ${{ github.workspace }}/target/debug/examples/nfs-smoke-server
         run: sudo env NAOS_NFS_SMOKE_SERVER="$NAOS_NFS_SMOKE_SERVER" bash scripts/ci/nfs-real-smoke.sh
+
+  windows-nfs-client:
+    runs-on: [self-hosted, windows, nfs]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build NFS smoke server
+        run: cargo build -p naos-nfs --example nfs-smoke-server
+      - name: Run real Windows NFSv3 mount/read/write smoke test
+        env:
+          NAOS_NFS_SMOKE_SERVER: ${{ github.workspace }}\target\debug\examples\nfs-smoke-server.exe
+          NAOS_NFS_SMOKE_RPCBIND: 127.0.0.1:111
+        run: .\scripts\ci\windows-nfs-real-smoke.ps1

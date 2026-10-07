@@ -1,4 +1,4 @@
-use std::{env, error::Error, io, path::PathBuf, sync::Arc};
+use std::{env, error::Error, io, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use naos_core::{
@@ -92,6 +92,7 @@ impl NfsAccessRepository for SmokeRepository {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let (share_path, nfs_port, mount_port) = parse_args()?;
+    let rpcbind_address = parse_rpcbind_address()?;
     let canonical = std::fs::canonicalize(&share_path)?;
     if !canonical.is_dir() {
         return Err(
@@ -129,15 +130,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             listen: "127.0.0.1".parse()?,
             nfs_port,
             mount_port,
-            rpcbind_address: None,
+            rpcbind_address,
         },
     )
     .await?;
 
     println!(
-        "NFS_SMOKE_READY export=/{EXPORT_NAME} nfs={} mount={}",
+        "NFS_SMOKE_READY export=/{EXPORT_NAME} nfs={} mount={} rpcbind={}",
         server.nfs_address()?,
-        server.mount_address()?
+        server.mount_address()?,
+        rpcbind_address
+            .map(|address| address.to_string())
+            .unwrap_or_else(|| "disabled".to_owned())
     );
 
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -156,6 +160,26 @@ fn parse_args() -> Result<(PathBuf, u16, u16), Box<dyn Error>> {
         );
     }
     Ok((share_path, nfs_port, mount_port))
+}
+
+fn parse_rpcbind_address() -> Result<Option<SocketAddr>, io::Error> {
+    let value = match env::var("NAOS_NFS_SMOKE_RPCBIND") {
+        Ok(value) if !value.trim().is_empty() => value,
+        Ok(_) | Err(env::VarError::NotPresent) => return Ok(None),
+        Err(env::VarError::NotUnicode(_)) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "NAOS_NFS_SMOKE_RPCBIND is not valid Unicode",
+            ));
+        }
+    };
+
+    value.parse::<SocketAddr>().map(Some).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid NAOS_NFS_SMOKE_RPCBIND socket address: {value}"),
+        )
+    })
 }
 
 fn required_arg(
