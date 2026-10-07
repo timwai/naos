@@ -6,6 +6,7 @@ import {
 import { useEffect, useState, type FormEvent } from "react";
 
 import { useSession } from "../features/auth/queries";
+import { GroupManager } from "../features/groups/GroupManager";
 import {
   ApiError,
   createUser,
@@ -144,10 +145,10 @@ export function UsersPage() {
       <div className="page-heading">
         <div>
           <p className="eyebrow">Identity</p>
-          <h1>用户</h1>
+          <h1>用户与用户组</h1>
           <p>
             用户变更通过持久化 Operation 协调数据库、系统账号与 SMB credential；
-            密码不会进入响应、Operation payload 或日志。
+            用户组成员关系直接服务统一 ACL 身份，密码不会进入响应、Operation payload 或日志。
           </p>
         </div>
         <button
@@ -435,6 +436,8 @@ export function UsersPage() {
           </div>
         )}
       </article>
+
+      <GroupManager />
     </section>
   );
 }
