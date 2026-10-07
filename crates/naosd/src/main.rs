@@ -347,7 +347,6 @@ async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
     }
 }
 
-
 #[cfg(feature = "embedded-web")]
 async fn embedded_web_fallback(method: Method, uri: Uri) -> Response {
     let path = uri.path();
@@ -359,21 +358,15 @@ async fn embedded_web_fallback(method: Method, uri: Uri) -> Response {
     }
 
     match path {
-        "/" | "/index.html" => embedded_web_response(
-            &method,
-            WEB_INDEX,
-            "text/html; charset=utf-8",
-        ),
-        "/assets/app.js" => embedded_web_response(
-            &method,
-            WEB_JAVASCRIPT,
-            "text/javascript; charset=utf-8",
-        ),
-        "/assets/app.css" => embedded_web_response(
-            &method,
-            WEB_STYLESHEET,
-            "text/css; charset=utf-8",
-        ),
+        "/" | "/index.html" => {
+            embedded_web_response(&method, WEB_INDEX, "text/html; charset=utf-8")
+        }
+        "/assets/app.js" => {
+            embedded_web_response(&method, WEB_JAVASCRIPT, "text/javascript; charset=utf-8")
+        }
+        "/assets/app.css" => {
+            embedded_web_response(&method, WEB_STYLESHEET, "text/css; charset=utf-8")
+        }
         _ if path.starts_with("/assets/") || looks_like_static_asset(path) => {
             empty_web_response(StatusCode::NOT_FOUND)
         }
