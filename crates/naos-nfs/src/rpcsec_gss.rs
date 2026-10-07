@@ -75,10 +75,10 @@ impl RpcSecGssContextRegistry {
             return Err(RpcSecGssRegistryError::InvalidSequenceWindow);
         }
 
-        let size =
-            usize::try_from(sequence_window).map_err(|_| RpcSecGssRegistryError::InvalidSequenceWindow)?;
-        let sequence_window =
-            RpcSecGssSequenceWindow::new(size).ok_or(RpcSecGssRegistryError::InvalidSequenceWindow)?;
+        let size = usize::try_from(sequence_window)
+            .map_err(|_| RpcSecGssRegistryError::InvalidSequenceWindow)?;
+        let sequence_window = RpcSecGssSequenceWindow::new(size)
+            .ok_or(RpcSecGssRegistryError::InvalidSequenceWindow)?;
         let mut contexts = self.inner.lock().await;
         if contexts.contains_key(&handle) {
             return Err(RpcSecGssRegistryError::DuplicateHandle);
@@ -220,9 +220,7 @@ mod tests {
             Err(RpcSecGssRegistryError::InvalidHandle)
         ));
         assert!(matches!(
-            registry
-                .insert(b"ctx".to_vec(), 0, context("alice"))
-                .await,
+            registry.insert(b"ctx".to_vec(), 0, context("alice")).await,
             Err(RpcSecGssRegistryError::InvalidSequenceWindow)
         ));
 
@@ -231,9 +229,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(
-            registry
-                .insert(b"ctx".to_vec(), 4, context("alice"))
-                .await,
+            registry.insert(b"ctx".to_vec(), 4, context("alice")).await,
             Err(RpcSecGssRegistryError::DuplicateHandle)
         ));
         assert_eq!(
