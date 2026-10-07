@@ -18,8 +18,8 @@ use libgssapi::{
 };
 use naos_nfs::{
     rpcsec_gss::{
-        RpcSecGssAcceptRequest, RpcSecGssAcceptResult, RpcSecGssAcceptor,
-        RpcSecGssSecurityError, StatefulRpcSecGssAcceptor,
+        RpcSecGssAcceptRequest, RpcSecGssAcceptResult, RpcSecGssAcceptor, RpcSecGssSecurityError,
+        StatefulRpcSecGssAcceptor,
     },
     system_gss::SystemGssHandshakeProvider,
 };
@@ -41,10 +41,8 @@ impl TestKdc {
         let config_path = dir.join("krb5.conf");
         let keytab_path = dir.join("naos.keytab");
 
-        fs::write(&config_path, build_config(&dir, port, &realm))
-            .expect("write Kerberos config");
-        fs::write(dir.join("kadm5.acl"), "*/admin@EXAMPLE.COM\t*\n")
-            .expect("write Kerberos ACL");
+        fs::write(&config_path, build_config(&dir, port, &realm)).expect("write Kerberos config");
+        fs::write(dir.join("kadm5.acl"), "*/admin@EXAMPLE.COM\t*\n").expect("write Kerberos ACL");
 
         run_assert(
             Command::new("kdb5_util")
@@ -62,10 +60,7 @@ impl TestKdc {
         );
         run_assert(
             Command::new("kadmin.local")
-                .args([
-                    "-q",
-                    "addprinc -randkey nfs/test.example.com@EXAMPLE.COM",
-                ])
+                .args(["-q", "addprinc -randkey nfs/test.example.com@EXAMPLE.COM"])
                 .env("KRB5_CONFIG", &config_path)
                 .env("KRB5_KDC_PROFILE", &config_path),
             "create Kerberos service principal",
@@ -240,9 +235,7 @@ fn real_kerberos_context_establishes_and_round_trips_mic() {
             RpcSecGssAcceptResult::Failure {
                 gss_major,
                 gss_minor,
-            } => panic!(
-                "server GSS accept failed: major=0x{gss_major:08x} minor={gss_minor}"
-            ),
+            } => panic!("server GSS accept failed: major=0x{gss_major:08x} minor={gss_minor}"),
         }
     }
 
@@ -329,7 +322,9 @@ fn wait_for_port(port: u16) {
 }
 
 fn run_assert(command: &mut Command, what: &str) {
-    let output = command.output().unwrap_or_else(|error| panic!("{what}: {error}"));
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("{what}: {error}"));
     assert!(
         output.status.success(),
         "{what} failed:\nstdout:\n{}\nstderr:\n{}",
