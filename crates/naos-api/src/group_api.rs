@@ -1,7 +1,8 @@
 use axum::{
     Json, Router,
     extract::{Extension, Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::{get, put},
 };
 use naos_contract::{
@@ -10,14 +11,20 @@ use naos_contract::{
         GroupDetailDto, GroupMembersReplaceRequest, GroupSummaryDto, GroupWriteRequest,
         GroupsResponse,
     },
+    operation::AcceptedOperation,
 };
 use naos_core::{
     auth::{AuthService, AuthenticatedSession, UserSummary},
-    group::{GroupDetail, GroupError, GroupSummary, GroupWriteInput},
+    group::{
+        GroupDetail, GroupError, GroupMutationError, GroupMutationResult, GroupSummary,
+        GroupWriteInput,
+    },
 };
 use utoipa::OpenApi;
 
-use super::{ApiError, AppState};
+use super::{ApiError, AppState, header_text};
+
+const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
@@ -147,11 +154,12 @@ async fn update_group(
     path = "/api/v1/groups/{group_id}",
     params(("group_id" = String, Path, description = "Group ID")),
     responses(
-        (status = 204),
+        (status = 202, body = AcceptedOperation),
         (status = 401, body = ErrorResponse),
         (status = 403, body = ErrorResponse),
         (status = 404, body = ErrorResponse),
-        (status = 409, body = ErrorResponse)
+        (status = 409, body = ErrorResponse),
+        (status = 422, body = ErrorResponse)
     ),
     tag = "groups"
 )]
@@ -159,10 +167,19 @@ async fn delete_group(
     State(state): State<AppState>,
     Extension(session): Extension<AuthenticatedSession>,
     Path(group_id): Path<String>,
-) -> Result<StatusCode, ApiError> {
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
     AuthService::ensure_admin(&session)?;
-    state.groups.delete(&group_id).await?;
-    Ok(StatusCode::NO_CONTENT)
+    let mut result = state
+        .group_mutations
+        .delete(
+            &group_id,
+            session.user.id.clone(),
+            idempotency_key(&headers)?,
+        )
+        .await?;
+    launch_reconcile(&state, &mut result)?;
+    accepted(result)
 }
 
 #[utoipa::path(
@@ -171,7 +188,7 @@ async fn delete_group(
     params(("group_id" = String, Path, description = "Group ID")),
     request_body = GroupMembersReplaceRequest,
     responses(
-        (status = 200, body = GroupDetailDto),
+        (status = 202, body = AcceptedOperation),
         (status = 401, body = ErrorResponse),
         (status = 403, body = ErrorResponse),
         (status = 404, body = ErrorResponse),
@@ -184,15 +201,21 @@ async fn replace_members(
     State(state): State<AppState>,
     Extension(session): Extension<AuthenticatedSession>,
     Path(group_id): Path<String>,
+    headers: HeaderMap,
     Json(input): Json<GroupMembersReplaceRequest>,
-) -> Result<Json<GroupDetailDto>, ApiError> {
+) -> Result<Response, ApiError> {
     AuthService::ensure_admin(&session)?;
-    Ok(Json(detail_dto(
-        state
-            .groups
-            .replace_members(&group_id, input.user_ids)
-            .await?,
-    )))
+    let mut result = state
+        .group_mutations
+        .replace_members(
+            &group_id,
+            input.user_ids,
+            session.user.id.clone(),
+            idempotency_key(&headers)?,
+        )
+        .await?;
+    launch_reconcile(&state, &mut result)?;
+    accepted(result)
 }
 
 #[utoipa::path(
@@ -222,6 +245,49 @@ async fn list_user_groups(
             .map(summary_dto)
             .collect(),
     }))
+}
+
+fn launch_reconcile(
+    state: &AppState,
+    result: &mut GroupMutationResult,
+) -> Result<(), ApiError> {
+    if !result.created_operation {
+        return Ok(());
+    }
+    let target = result.target.take().ok_or_else(ApiError::internal)?;
+    let driver = state.group_reconcile_factory.driver(target);
+    let operation_id = result.operation.id.clone();
+    let reconciler = state.reconciler.clone();
+
+    tokio::spawn(async move {
+        if let Err(error) = reconciler.run(&operation_id, driver).await {
+            tracing::error!(operation_id, error = %error, "group reconcile operation failed");
+        }
+    });
+    Ok(())
+}
+
+fn accepted(result: GroupMutationResult) -> Result<Response, ApiError> {
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(AcceptedOperation {
+            operation_id: result.operation.id,
+            state: result.operation.state.as_str().to_owned(),
+        }),
+    )
+        .into_response())
+}
+
+fn idempotency_key(headers: &HeaderMap) -> Result<String, ApiError> {
+    header_text(headers, IDEMPOTENCY_KEY_HEADER)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty() && value.len() <= 200)
+        .ok_or_else(|| {
+            ApiError::validation(
+                "idempotency_key",
+                "变更用户组成员或删除用户组必须提供 Idempotency-Key",
+            )
+        })
 }
 
 fn summary_dto(group: GroupSummary) -> GroupSummaryDto {
@@ -278,6 +344,37 @@ impl From<GroupError> for ApiError {
     }
 }
 
+impl From<GroupMutationError> for ApiError {
+    fn from(error: GroupMutationError) -> Self {
+        match error {
+            GroupMutationError::NotFound => {
+                ApiError::new(StatusCode::NOT_FOUND, "GROUP_NOT_FOUND", "用户组不存在")
+            }
+            GroupMutationError::Conflict => ApiError::new(
+                StatusCode::CONFLICT,
+                "GROUP_MUTATION_CONFLICT",
+                "用户组、幂等键或成员状态发生冲突",
+            ),
+            GroupMutationError::AclReferenced => ApiError::new(
+                StatusCode::CONFLICT,
+                "GROUP_ACL_REFERENCED",
+                "用户组仍被共享 ACL 引用；请先移除相关 ACL 规则",
+            ),
+            GroupMutationError::UserNotFound => ApiError::new(
+                StatusCode::NOT_FOUND,
+                "USER_NOT_FOUND",
+                "成员列表包含不存在的用户，或用户不存在",
+            ),
+            GroupMutationError::Validation { field, message } => {
+                ApiError::validation(field, &message)
+            }
+            GroupMutationError::Repository | GroupMutationError::Operation(_) => {
+                ApiError::internal()
+            }
+        }
+    }
+}
+
 #[derive(OpenApi)]
 #[openapi(
     paths(
@@ -296,6 +393,7 @@ impl From<GroupError> for ApiError {
         GroupsResponse,
         GroupDetailDto,
         UserDto,
+        AcceptedOperation,
         ErrorResponse
     )),
     tags((name = "groups", description = "User group administration and atomic membership"))
