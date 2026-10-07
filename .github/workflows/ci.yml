@@ -40,6 +40,25 @@ jobs:
       - run: cargo run -p naosd -- export-openapi > openapi.json
 
 
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package.json
+      - name: Install web dependencies
+        working-directory: web
+        run: npm install --no-audit --no-fund
+      - name: Build SPA from generated OpenAPI types
+        working-directory: web
+        run: npm run build
+
+
   nfs-system-gss:
     strategy:
       matrix:
