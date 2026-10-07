@@ -92,6 +92,45 @@ pub mod auth {
     }
 }
 
+pub mod group {
+    use serde::{Deserialize, Serialize};
+    use utoipa::ToSchema;
+
+    use crate::auth::UserDto;
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct GroupWriteRequest {
+        pub name: String,
+        pub description: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct GroupMembersReplaceRequest {
+        pub user_ids: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct GroupSummaryDto {
+        pub id: String,
+        pub name: String,
+        pub description: Option<String>,
+        pub member_count: u64,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct GroupsResponse {
+        pub items: Vec<GroupSummaryDto>,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct GroupDetailDto {
+        pub id: String,
+        pub name: String,
+        pub description: Option<String>,
+        pub members: Vec<UserDto>,
+    }
+}
+
 pub mod health {
     use serde::Serialize;
     use utoipa::ToSchema;

@@ -3,6 +3,7 @@ pub mod audit;
 pub mod auth;
 pub mod doctor;
 pub mod files;
+pub mod group;
 pub mod nfs;
 pub mod operation;
 pub mod path;

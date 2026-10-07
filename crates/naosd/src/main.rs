@@ -12,6 +12,7 @@ use naos_core::{
     auth::{AuthConfig, AuthService},
     doctor::SmbDoctorProbe,
     files::FileService,
+    group::GroupService,
     nfs::NfsBindingService,
     operation::OperationService,
     reconcile::Reconciler,
@@ -126,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
     let acl = Arc::new(AclService::new(store.clone()));
     let audit = Arc::new(AuditService::new(store.clone()));
     let files = Arc::new(FileService::new(store.clone()));
+    let groups = Arc::new(GroupService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
     let acl_mutations = Arc::new(AclMutationService::new(store.clone(), operations.clone()));
     let acl_reconcile_factory = Arc::new(PlatformAclReconcileDriverFactory::new(store.clone()));
@@ -156,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
         acl_reconcile_factory,
         audit,
         files,
+        groups,
         operations,
         share_mutations,
         share_reconcile_factory,

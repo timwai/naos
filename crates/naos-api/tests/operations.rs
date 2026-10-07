@@ -39,6 +39,7 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
     let acl = Arc::new(naos_core::acl::AclService::new(store.clone()));
     let audit = Arc::new(naos_core::audit::AuditService::new(store.clone()));
     let files = Arc::new(naos_core::files::FileService::new(store.clone()));
+    let groups = Arc::new(naos_core::group::GroupService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
     let acl_mutations = Arc::new(naos_core::acl::AclMutationService::new(
         store.clone(),
@@ -94,6 +95,7 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
         acl_reconcile_factory,
         audit,
         files,
+        groups,
         operations,
         share_mutations,
         share_reconcile_factory,
@@ -924,6 +926,138 @@ async fn user_lifecycle_is_operation_backed_and_password_reset_revokes_old_crede
         .await
         .unwrap();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn group_crud_and_atomic_membership_are_visible_from_user_relationships() {
+    let (app, _store, _dir) = test_app().await;
+    let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 33006);
+    let (cookie, csrf) = login_admin(&app, peer).await;
+
+    let users = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/users",
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(users.status(), StatusCode::OK);
+    let users = json_body(users).await;
+    let admin_id = users["items"][0]["id"].as_str().unwrap().to_owned();
+
+    let create_group = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/groups",
+            Some(json!({
+                "name": "family",
+                "description": "Family members"
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create_group.status(), StatusCode::CREATED);
+    let group = json_body(create_group).await;
+    let group_id = group["id"].as_str().unwrap().to_owned();
+    assert_eq!(group["members"].as_array().unwrap().len(), 0);
+
+    let members = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/v1/groups/{group_id}/members"),
+            Some(json!({"user_ids": [admin_id.clone()]})),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(members.status(), StatusCode::OK);
+    let members = json_body(members).await;
+    assert_eq!(members["members"].as_array().unwrap().len(), 1);
+    assert_eq!(members["members"][0]["id"], admin_id);
+
+    let by_user = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/users/{admin_id}/groups"),
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(by_user.status(), StatusCode::OK);
+    let by_user = json_body(by_user).await;
+    assert_eq!(by_user["items"].as_array().unwrap().len(), 1);
+    assert_eq!(by_user["items"][0]["id"], group_id);
+    assert_eq!(by_user["items"][0]["member_count"], 1);
+
+    let update = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/v1/groups/{group_id}"),
+            Some(json!({
+                "name": "household",
+                "description": "Updated members"
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::OK);
+    assert_eq!(json_body(update).await["name"], "household");
+
+    let clear = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/v1/groups/{group_id}/members"),
+            Some(json!({"user_ids": []})),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(clear.status(), StatusCode::OK);
+    assert_eq!(json_body(clear).await["members"].as_array().unwrap().len(), 0);
+
+    let delete = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/v1/groups/{group_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]
