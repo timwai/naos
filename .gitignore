@@ -4,3 +4,6 @@
 *.db-wal
 .env
 /web/dist
+/web/node_modules
+/web/openapi.json
+/web/src/lib/api/generated.ts
