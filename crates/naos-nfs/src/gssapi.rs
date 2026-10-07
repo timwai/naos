@@ -189,10 +189,8 @@ impl RpcSecGssSecurityContext for GssApiSecurityContext {
 }
 
 fn map_verify_error(error: GssError) -> RpcSecGssSecurityError {
-    if error
-        .major
-        .intersects(MajorFlags::GSS_S_BAD_MIC | MajorFlags::GSS_S_BAD_SIG)
-    {
+    let major = error.major.bits();
+    if major == MajorFlags::GSS_S_BAD_MIC.bits() || major == MajorFlags::GSS_S_BAD_SIG.bits() {
         RpcSecGssSecurityError::BadMic
     } else {
         RpcSecGssSecurityError::ProviderFailure
