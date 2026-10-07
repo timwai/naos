@@ -6,6 +6,7 @@ import {
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { AclEditor } from "../features/acl/AclEditor";
 import {
   ApiError,
   createNfsBinding,
@@ -487,6 +488,8 @@ export function ShareDetailPage() {
       {share.data.comment && (
         <article className="panel detail-comment">{share.data.comment}</article>
       )}
+
+      <AclEditor shareId={id} />
 
       <div className="detail-grid">
         <article className="panel detail-panel">

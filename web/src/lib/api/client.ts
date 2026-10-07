@@ -2,6 +2,7 @@ import type { components } from "./generated";
 
 export type AcceptedOperation =
   components["schemas"]["AcceptedOperation"];
+export type AclReplaceRequest = components["schemas"]["AclReplaceRequest"];
 export type AclRulesResponse = components["schemas"]["AclRulesResponse"];
 export type AclSimulateRequest =
   components["schemas"]["AclSimulateRequest"];
@@ -216,6 +217,23 @@ export async function listShares() {
 export async function listShareAcl(shareId: string) {
   return requestJson<AclRulesResponse>(
     `/api/v1/shares/${encodeURIComponent(shareId)}/acl`,
+  );
+}
+
+export async function replaceShareAcl(
+  shareId: string,
+  input: AclReplaceRequest,
+  idempotencyKey = crypto.randomUUID(),
+) {
+  return requestJson<AcceptedOperation>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/acl`,
+    {
+      method: "PUT",
+      headers: {
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify(input),
+    },
   );
 }
 
