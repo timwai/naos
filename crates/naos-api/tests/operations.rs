@@ -990,14 +990,40 @@ async fn group_crud_and_atomic_membership_are_visible_from_user_relationships() 
             peer,
             Some(&cookie),
             Some(&csrf),
+            Some("group-members-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(members.status(), StatusCode::ACCEPTED);
+    let members = json_body(members).await;
+    assert_eq!(
+        wait_operation(
+            &app,
+            peer,
+            &cookie,
+            members["operation_id"].as_str().unwrap(),
+        )
+        .await["state"],
+        "succeeded"
+    );
+
+    let group = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/groups/{group_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            None,
             None,
         ))
         .await
         .unwrap();
-    assert_eq!(members.status(), StatusCode::OK);
-    let members = json_body(members).await;
-    assert_eq!(members["members"].as_array().unwrap().len(), 1);
-    assert_eq!(members["members"][0]["id"], admin_id);
+    assert_eq!(group.status(), StatusCode::OK);
+    let group = json_body(group).await;
+    assert_eq!(group["members"].as_array().unwrap().len(), 1);
+    assert_eq!(group["members"][0]["id"], admin_id);
 
     let by_user = app
         .clone()
@@ -1046,13 +1072,39 @@ async fn group_crud_and_atomic_membership_are_visible_from_user_relationships() 
             peer,
             Some(&cookie),
             Some(&csrf),
+            Some("group-members-clear-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(clear.status(), StatusCode::ACCEPTED);
+    let clear = json_body(clear).await;
+    assert_eq!(
+        wait_operation(
+            &app,
+            peer,
+            &cookie,
+            clear["operation_id"].as_str().unwrap(),
+        )
+        .await["state"],
+        "succeeded"
+    );
+
+    let group = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/groups/{group_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            None,
             None,
         ))
         .await
         .unwrap();
-    assert_eq!(clear.status(), StatusCode::OK);
+    assert_eq!(group.status(), StatusCode::OK);
     assert_eq!(
-        json_body(clear).await["members"].as_array().unwrap().len(),
+        json_body(group).await["members"].as_array().unwrap().len(),
         0
     );
 
@@ -1065,11 +1117,22 @@ async fn group_crud_and_atomic_membership_are_visible_from_user_relationships() 
             peer,
             Some(&cookie),
             Some(&csrf),
-            None,
+            Some("group-delete-1"),
         ))
         .await
         .unwrap();
-    assert_eq!(delete.status(), StatusCode::NO_CONTENT);
+    assert_eq!(delete.status(), StatusCode::ACCEPTED);
+    let delete = json_body(delete).await;
+    assert_eq!(
+        wait_operation(
+            &app,
+            peer,
+            &cookie,
+            delete["operation_id"].as_str().unwrap(),
+        )
+        .await["state"],
+        "succeeded"
+    );
 }
 
 #[tokio::test]
