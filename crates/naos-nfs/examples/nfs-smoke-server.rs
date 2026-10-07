@@ -93,6 +93,7 @@ impl NfsAccessRepository for SmokeRepository {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (share_path, nfs_port, mount_port) = parse_args()?;
     let nlm_port = parse_env_port("NAOS_NFS_SMOKE_NLM_PORT", 32047)?;
+    let nsm_port = parse_env_port("NAOS_NFS_SMOKE_NSM_PORT", 32046)?;
     let rpcbind_address = parse_rpcbind_address()?;
     let canonical = std::fs::canonicalize(&share_path)?;
     if !canonical.is_dir() {
@@ -132,16 +133,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             nfs_port,
             mount_port,
             nlm_port,
+            nsm_port,
             rpcbind_address,
         },
     )
     .await?;
 
     println!(
-        "NFS_SMOKE_READY export=/{EXPORT_NAME} nfs={} mount={} nlm={} rpcbind={}",
+        "NFS_SMOKE_READY export=/{EXPORT_NAME} nfs={} mount={} nlm={} nsm={} rpcbind={}",
         server.nfs_address()?,
         server.mount_address()?,
         server.nlm_address()?,
+        server.nsm_address()?,
         rpcbind_address
             .map(|address| address.to_string())
             .unwrap_or_else(|| "disabled".to_owned())

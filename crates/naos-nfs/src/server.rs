@@ -7,14 +7,18 @@ use std::{
 use naos_core::nfs::{NfsAccessRepository, NfsBindingRepository};
 use rand_core::{OsRng, RngCore};
 use thiserror::Error;
-use tokio::{net::TcpListener, sync::watch};
+use tokio::{
+    net::{TcpListener, UdpSocket},
+    sync::watch,
+};
 use tracing::warn;
 
 use crate::{
     mount::{MOUNT_PROGRAM, MOUNT_VERSION, MountService, serve_mount_stream},
     nfs3::{NFS_PROGRAM, NFS_VERSION, NfsV3Service, serve_nfs3_stream},
-    nlm4::{NLM_PROGRAM, NLM_VERSION, NlmV4Service, serve_nlm4_stream},
-    rpcbind::{RpcBindError, register_tcp, unregister_tcp},
+    nlm4::{NLM_PROGRAM, NLM_VERSION, NlmV4Service, dispatch_nlm4_rpc, serve_nlm4_stream},
+    nsm1::{NSM_PROGRAM, NSM_VERSION, NsmV1Service, dispatch_nsm1_rpc, serve_nsm1_stream},
+    rpcbind::{RpcBindError, RpcTransport, register_mapping, unregister_mapping},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -23,6 +27,7 @@ pub struct NfsServerConfig {
     pub nfs_port: u16,
     pub mount_port: u16,
     pub nlm_port: u16,
+    pub nsm_port: u16,
     pub rpcbind_address: Option<SocketAddr>,
 }
 
@@ -30,9 +35,14 @@ pub struct NfsServer {
     nfs_listener: TcpListener,
     mount_listener: TcpListener,
     nlm_listener: TcpListener,
+    nlm_udp: UdpSocket,
+    nsm_listener: TcpListener,
+    nsm_udp: UdpSocket,
     nfs_service: NfsV3Service,
     mount_service: MountService,
     nlm_service: NlmV4Service,
+    nsm_service: NsmV1Service,
+    rpc_registrations: [RpcRegistration; 6],
     rpcbind_address: Option<SocketAddr>,
 }
 
@@ -44,6 +54,14 @@ pub enum NfsServerError {
     RpcBind(#[from] RpcBindError),
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RpcRegistration {
+    program: u32,
+    version: u32,
+    transport: RpcTransport,
+    port: u16,
+}
+
 impl NfsServer {
     pub async fn bind<R>(
         repository: Arc<R>,
@@ -52,7 +70,12 @@ impl NfsServer {
     where
         R: NfsBindingRepository + NfsAccessRepository + 'static,
     {
-        let configured_ports = [config.nfs_port, config.mount_port, config.nlm_port];
+        let configured_ports = [
+            config.nfs_port,
+            config.mount_port,
+            config.nlm_port,
+            config.nsm_port,
+        ];
         for (index, left) in configured_ports.iter().enumerate() {
             if *left != 0
                 && configured_ports
@@ -62,7 +85,7 @@ impl NfsServer {
             {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "NFS, MOUNT, and NLM ports must be different",
+                    "NFS, MOUNT, NLM, and NSM ports must be different",
                 )
                 .into());
             }
@@ -71,9 +94,13 @@ impl NfsServer {
         let nfs_listener = TcpListener::bind((config.listen, config.nfs_port)).await?;
         let mount_listener = TcpListener::bind((config.listen, config.mount_port)).await?;
         let nlm_listener = TcpListener::bind((config.listen, config.nlm_port)).await?;
+        let nsm_listener = TcpListener::bind((config.listen, config.nsm_port)).await?;
         let nfs_port = nfs_listener.local_addr()?.port();
         let mount_port = mount_listener.local_addr()?.port();
         let nlm_port = nlm_listener.local_addr()?.port();
+        let nsm_port = nsm_listener.local_addr()?.port();
+        let nlm_udp = UdpSocket::bind((config.listen, nlm_port)).await?;
+        let nsm_udp = UdpSocket::bind((config.listen, nsm_port)).await?;
 
         let mut secret = [0u8; 32];
         OsRng.fill_bytes(&mut secret);
@@ -91,31 +118,62 @@ impl NfsServer {
         );
         let nlm_service =
             NlmV4Service::new(nlm_identity_repository, nlm_access_repository, handles);
+        let nsm_service = NsmV1Service::new();
+        let rpc_registrations = [
+            RpcRegistration {
+                program: NFS_PROGRAM,
+                version: NFS_VERSION,
+                transport: RpcTransport::Tcp,
+                port: nfs_port,
+            },
+            RpcRegistration {
+                program: MOUNT_PROGRAM,
+                version: MOUNT_VERSION,
+                transport: RpcTransport::Tcp,
+                port: mount_port,
+            },
+            RpcRegistration {
+                program: NLM_PROGRAM,
+                version: NLM_VERSION,
+                transport: RpcTransport::Tcp,
+                port: nlm_port,
+            },
+            RpcRegistration {
+                program: NLM_PROGRAM,
+                version: NLM_VERSION,
+                transport: RpcTransport::Udp,
+                port: nlm_port,
+            },
+            RpcRegistration {
+                program: NSM_PROGRAM,
+                version: NSM_VERSION,
+                transport: RpcTransport::Tcp,
+                port: nsm_port,
+            },
+            RpcRegistration {
+                program: NSM_PROGRAM,
+                version: NSM_VERSION,
+                transport: RpcTransport::Udp,
+                port: nsm_port,
+            },
+        ];
 
         if let Some(rpcbind_address) = config.rpcbind_address {
-            register_tcp(rpcbind_address, NFS_PROGRAM, NFS_VERSION, nfs_port).await?;
-            if let Err(error) =
-                register_tcp(rpcbind_address, MOUNT_PROGRAM, MOUNT_VERSION, mount_port).await
-            {
-                let _ = unregister_tcp(rpcbind_address, NFS_PROGRAM, NFS_VERSION).await;
-                return Err(error.into());
-            }
-            if let Err(error) =
-                register_tcp(rpcbind_address, NLM_PROGRAM, NLM_VERSION, nlm_port).await
-            {
-                let _ = unregister_tcp(rpcbind_address, MOUNT_PROGRAM, MOUNT_VERSION).await;
-                let _ = unregister_tcp(rpcbind_address, NFS_PROGRAM, NFS_VERSION).await;
-                return Err(error.into());
-            }
+            register_rpc_services(rpcbind_address, &rpc_registrations).await?;
         }
 
         Ok(Self {
             nfs_listener,
             mount_listener,
             nlm_listener,
+            nlm_udp,
+            nsm_listener,
+            nsm_udp,
             nfs_service,
             mount_service,
             nlm_service,
+            nsm_service,
+            rpc_registrations,
             rpcbind_address: config.rpcbind_address,
         })
     }
@@ -132,7 +190,13 @@ impl NfsServer {
         self.nlm_listener.local_addr()
     }
 
+    pub fn nsm_address(&self) -> io::Result<SocketAddr> {
+        self.nsm_listener.local_addr()
+    }
+
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), NfsServerError> {
+        let mut nlm_datagram = vec![0u8; 65_535];
+        let mut nsm_datagram = vec![0u8; 65_535];
         loop {
             tokio::select! {
                 changed = shutdown.changed() => {
@@ -167,24 +231,86 @@ impl NfsServer {
                         }
                     });
                 }
+                accepted = self.nsm_listener.accept() => {
+                    let (mut stream, peer) = accepted?;
+                    let service = self.nsm_service;
+                    tokio::spawn(async move {
+                        if let Err(error) = serve_nsm1_stream(&mut stream, peer.ip(), &service).await {
+                            warn!(%peer, %error, "NSMv1 connection ended with error");
+                        }
+                    });
+                }
+                received = self.nlm_udp.recv_from(&mut nlm_datagram) => {
+                    let (length, peer) = received?;
+                    let response =
+                        dispatch_nlm4_rpc(&self.nlm_service, peer.ip(), &nlm_datagram[..length]).await;
+                    if !response.is_empty() {
+                        self.nlm_udp.send_to(&response, peer).await?;
+                    }
+                }
+                received = self.nsm_udp.recv_from(&mut nsm_datagram) => {
+                    let (length, peer) = received?;
+                    let response =
+                        dispatch_nsm1_rpc(&self.nsm_service, peer.ip(), &nsm_datagram[..length]).await;
+                    if !response.is_empty() {
+                        self.nsm_udp.send_to(&response, peer).await?;
+                    }
+                }
             }
         }
 
         if let Some(rpcbind_address) = self.rpcbind_address {
-            if let Err(error) = unregister_tcp(rpcbind_address, NLM_PROGRAM, NLM_VERSION).await {
-                warn!(%error, "failed to unregister NLMv4 from rpcbind");
-            }
-            if let Err(error) = unregister_tcp(rpcbind_address, MOUNT_PROGRAM, MOUNT_VERSION).await
-            {
-                warn!(%error, "failed to unregister MOUNTv3 from rpcbind");
-            }
-            if let Err(error) = unregister_tcp(rpcbind_address, NFS_PROGRAM, NFS_VERSION).await {
-                warn!(%error, "failed to unregister NFSv3 from rpcbind");
+            for registration in self.rpc_registrations.iter().rev() {
+                if let Err(error) = unregister_mapping(
+                    rpcbind_address,
+                    registration.program,
+                    registration.version,
+                    registration.transport,
+                )
+                .await
+                {
+                    warn!(
+                        program = registration.program,
+                        version = registration.version,
+                        transport = ?registration.transport,
+                        %error,
+                        "failed to unregister RPC service from rpcbind"
+                    );
+                }
             }
         }
 
         Ok(())
     }
+}
+
+async fn register_rpc_services(
+    rpcbind_address: SocketAddr,
+    registrations: &[RpcRegistration],
+) -> Result<(), RpcBindError> {
+    for (index, registration) in registrations.iter().enumerate() {
+        if let Err(error) = register_mapping(
+            rpcbind_address,
+            registration.program,
+            registration.version,
+            registration.transport,
+            registration.port,
+        )
+        .await
+        {
+            for registered in registrations[..index].iter().rev() {
+                let _ = unregister_mapping(
+                    rpcbind_address,
+                    registered.program,
+                    registered.version,
+                    registered.transport,
+                )
+                .await;
+            }
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -325,6 +451,7 @@ mod tests {
                 nfs_port: 0,
                 mount_port: 0,
                 nlm_port: 0,
+                nsm_port: 0,
                 rpcbind_address: None,
             },
         )
@@ -333,6 +460,7 @@ mod tests {
         let nfs_address = server.nfs_address().unwrap();
         let mount_address = server.mount_address().unwrap();
         let nlm_address = server.nlm_address().unwrap();
+        let nsm_address = server.nsm_address().unwrap();
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let server_task = tokio::spawn(server.run(shutdown_rx));
@@ -357,6 +485,13 @@ mod tests {
         let nlm_reply = read_record(&mut nlm_stream).await.unwrap().unwrap();
         assert_rpc_success_prefix(&nlm_reply, 43);
         assert_eq!(nlm_reply.len(), 24);
+
+        let mut nsm_stream = TcpStream::connect(nsm_address).await.unwrap();
+        let nsm_call = rpc_call(44, NSM_PROGRAM, NSM_VERSION, 0, &[]);
+        write_record(&mut nsm_stream, &nsm_call).await.unwrap();
+        let nsm_reply = read_record(&mut nsm_stream).await.unwrap().unwrap();
+        assert_rpc_success_prefix(&nsm_reply, 44);
+        assert_eq!(nsm_reply.len(), 24);
 
         shutdown_tx.send(true).unwrap();
         server_task.await.unwrap().unwrap();

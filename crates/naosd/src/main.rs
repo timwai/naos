@@ -55,6 +55,9 @@ struct Cli {
     #[arg(long, env = "NAOS_NLM_PORT", default_value_t = 20049)]
     nlm_port: u16,
 
+    #[arg(long, env = "NAOS_NSM_PORT", default_value_t = 20050)]
+    nsm_port: u16,
+
     #[arg(long, env = "NAOS_NFS_RPCBIND", default_value_t = false)]
     nfs_rpcbind: bool,
 }
@@ -129,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
                 nfs_port: cli.nfs_port,
                 mount_port: cli.mount_port,
                 nlm_port: cli.nlm_port,
+                nsm_port: cli.nsm_port,
                 rpcbind_address,
             },
         )
@@ -138,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
             nfs = %server.nfs_address()?,
             mount = %server.mount_address()?,
             nlm = %server.nlm_address()?,
+            nsm = %server.nsm_address()?,
             rpcbind = cli.nfs_rpcbind,
             "NFS data plane started"
         );

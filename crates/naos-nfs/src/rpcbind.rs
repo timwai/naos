@@ -15,6 +15,22 @@ const PMAP_VERSION: u32 = 2;
 const PMAPPROC_SET: u32 = 1;
 const PMAPPROC_UNSET: u32 = 2;
 const IPPROTO_TCP: u32 = 6;
+const IPPROTO_UDP: u32 = 17;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RpcTransport {
+    Tcp,
+    Udp,
+}
+
+impl RpcTransport {
+    const fn protocol(self) -> u32 {
+        match self {
+            Self::Tcp => IPPROTO_TCP,
+            Self::Udp => IPPROTO_UDP,
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum RpcBindError {
@@ -30,10 +46,11 @@ pub enum RpcBindError {
     MappingRejected,
 }
 
-pub async fn register_tcp(
+pub async fn register_mapping(
     rpcbind_address: SocketAddr,
     program: u32,
     version: u32,
+    transport: RpcTransport,
     port: u16,
 ) -> Result<(), RpcBindError> {
     update_mapping(
@@ -41,9 +58,36 @@ pub async fn register_tcp(
         PMAPPROC_SET,
         program,
         version,
+        transport,
         u32::from(port),
     )
     .await
+}
+
+pub async fn unregister_mapping(
+    rpcbind_address: SocketAddr,
+    program: u32,
+    version: u32,
+    transport: RpcTransport,
+) -> Result<(), RpcBindError> {
+    update_mapping(
+        rpcbind_address,
+        PMAPPROC_UNSET,
+        program,
+        version,
+        transport,
+        0,
+    )
+    .await
+}
+
+pub async fn register_tcp(
+    rpcbind_address: SocketAddr,
+    program: u32,
+    version: u32,
+    port: u16,
+) -> Result<(), RpcBindError> {
+    register_mapping(rpcbind_address, program, version, RpcTransport::Tcp, port).await
 }
 
 pub async fn unregister_tcp(
@@ -51,7 +95,7 @@ pub async fn unregister_tcp(
     program: u32,
     version: u32,
 ) -> Result<(), RpcBindError> {
-    update_mapping(rpcbind_address, PMAPPROC_UNSET, program, version, 0).await
+    unregister_mapping(rpcbind_address, program, version, RpcTransport::Tcp).await
 }
 
 async fn update_mapping(
@@ -59,10 +103,11 @@ async fn update_mapping(
     procedure: u32,
     program: u32,
     version: u32,
+    transport: RpcTransport,
     port: u32,
 ) -> Result<(), RpcBindError> {
     let xid = random_xid();
-    let request = mapping_call(xid, procedure, program, version, port);
+    let request = mapping_call(xid, procedure, program, version, transport, port);
     let mut stream = TcpStream::connect(rpcbind_address).await?;
     write_record(&mut stream, &request).await?;
     let reply = read_record(&mut stream)
@@ -71,7 +116,14 @@ async fn update_mapping(
     parse_bool_reply(&reply, xid)
 }
 
-fn mapping_call(xid: u32, procedure: u32, program: u32, version: u32, port: u32) -> Vec<u8> {
+fn mapping_call(
+    xid: u32,
+    procedure: u32,
+    program: u32,
+    version: u32,
+    transport: RpcTransport,
+    port: u32,
+) -> Vec<u8> {
     let mut writer = XdrWriter::new();
     writer.u32(xid);
     writer.u32(0);
@@ -85,7 +137,7 @@ fn mapping_call(xid: u32, procedure: u32, program: u32, version: u32, port: u32)
     writer.u32(0);
     writer.u32(program);
     writer.u32(version);
-    writer.u32(IPPROTO_TCP);
+    writer.u32(transport.protocol());
     writer.u32(port);
     writer.into_bytes()
 }
@@ -121,7 +173,7 @@ mod tests {
 
     #[test]
     fn mapping_call_targets_portmapper_v2_tcp() {
-        let call = mapping_call(7, PMAPPROC_SET, 100003, 3, 2049);
+        let call = mapping_call(7, PMAPPROC_SET, 100003, 3, RpcTransport::Tcp, 2049);
         let mut reader = XdrReader::new(&call);
         assert_eq!(reader.u32().unwrap(), 7);
         assert_eq!(reader.u32().unwrap(), 0);
@@ -137,6 +189,18 @@ mod tests {
         assert_eq!(reader.u32().unwrap(), 3);
         assert_eq!(reader.u32().unwrap(), IPPROTO_TCP);
         assert_eq!(reader.u32().unwrap(), 2049);
+        reader.finish().unwrap();
+    }
+
+    #[test]
+    fn mapping_call_can_target_udp() {
+        let call = mapping_call(8, PMAPPROC_SET, 100024, 1, RpcTransport::Udp, 32046);
+        let mut reader = XdrReader::new(&call);
+        for _ in 0..10 {
+            reader.u32().unwrap();
+        }
+        assert_eq!(reader.u32().unwrap(), IPPROTO_UDP);
+        assert_eq!(reader.u32().unwrap(), 32046);
         reader.finish().unwrap();
     }
 
