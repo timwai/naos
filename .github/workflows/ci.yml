@@ -40,6 +40,28 @@ jobs:
       - run: cargo run -p naosd -- export-openapi > openapi.json
 
 
+  nfs-gssapi:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install MIT Kerberos development files
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libkrb5-dev pkg-config
+      - name: Check Kerberos-enabled daemon
+        run: cargo clippy -p naosd --all-targets --features kerberos-gssapi -- -D warnings
+      - name: Test GSSAPI provider
+        run: cargo test -p naos-nfs --features kerberos-gssapi
+
+
   samba-integration:
     runs-on: ubuntu-latest
     steps:
