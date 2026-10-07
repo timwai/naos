@@ -294,6 +294,10 @@ pub trait NfsBindingRepository: Send + Sync {
         let _ = (upserts, deletes);
         Ok(())
     }
+
+    async fn mark_nfs_lock_manager_started(&self) -> Result<bool, NfsRepositoryError> {
+        Ok(false)
+    }
 }
 
 #[async_trait]

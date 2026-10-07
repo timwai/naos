@@ -243,6 +243,19 @@ impl NfsBindingRepository for Store {
         tx.commit().await.map_err(store_error)?;
         Ok(())
     }
+
+    async fn mark_nfs_lock_manager_started(&self) -> Result<bool, NfsRepositoryError> {
+        let inserted = sqlx::query(
+            "INSERT INTO nfs_runtime_state (key, value)
+             VALUES ('nlm_started', X'01')
+             ON CONFLICT(key) DO NOTHING",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(store_error)?
+        .rows_affected();
+        Ok(inserted == 0)
+    }
 }
 
 #[async_trait]
@@ -392,6 +405,28 @@ mod tests {
             store.get_or_create_nfs_handle_secret([9; 32]).await,
             Err(NfsRepositoryError::Unavailable)
         ));
+    }
+
+    #[tokio::test]
+    async fn nfs_lock_manager_start_marker_detects_restart() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE nfs_runtime_state (
+                key TEXT PRIMARY KEY,
+                value BLOB NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let store = Store { pool };
+
+        assert!(!store.mark_nfs_lock_manager_started().await.unwrap());
+        assert!(store.mark_nfs_lock_manager_started().await.unwrap());
     }
 
     #[tokio::test]
