@@ -174,7 +174,6 @@ impl GroupService {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupMemberIdentity {
     pub user_id: String,
@@ -481,10 +480,7 @@ impl ReconcileDriver for DatabaseGroupReconcileDriver {
 
 fn normalize_member_ids(mut user_ids: Vec<String>) -> Result<Vec<String>, (&'static str, String)> {
     if user_ids.len() > 1000 {
-        return Err((
-            "user_ids",
-            "单个用户组最多允许 1000 个成员".to_owned(),
-        ));
+        return Err(("user_ids", "单个用户组最多允许 1000 个成员".to_owned()));
     }
     for user_id in &mut user_ids {
         *user_id = user_id.trim().to_owned();
@@ -505,9 +501,7 @@ fn mutation_validation((field, message): (&'static str, String)) -> GroupMutatio
     GroupMutationError::Validation { field, message }
 }
 
-fn map_group_mutation_repository_error(
-    error: GroupMutationRepositoryError,
-) -> GroupMutationError {
+fn map_group_mutation_repository_error(error: GroupMutationRepositoryError) -> GroupMutationError {
     match error {
         GroupMutationRepositoryError::NotFound => GroupMutationError::NotFound,
         GroupMutationRepositoryError::Conflict => GroupMutationError::Conflict,
