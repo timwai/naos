@@ -529,11 +529,7 @@ impl NlmV4Service {
         self.grant_waiters().await;
     }
 
-    pub(crate) async fn release_stale_client_state(
-        &self,
-        client_ip: IpAddr,
-        current_state: u32,
-    ) {
+    pub(crate) async fn release_stale_client_state(&self, client_ip: IpAddr, current_state: u32) {
         {
             let _state = self.state_guard.lock().await;
             self.locks.lock().await.retain(|lock| {
@@ -1761,7 +1757,7 @@ mod tests {
                         exclusive: true,
                         lock: blocked_lock,
                         reclaim: false,
-                    client_state: 1,
+                        client_state: 1,
                     },
                 )
                 .await
@@ -1851,7 +1847,7 @@ mod tests {
                         exclusive: true,
                         lock: blocked_lock.clone(),
                         reclaim: false,
-                    client_state: 1,
+                        client_state: 1,
                     },
                 )
                 .await
@@ -1928,7 +1924,7 @@ mod tests {
                         exclusive: true,
                         lock: lock(handle, "client-a", 10, 20, 10),
                         reclaim: false,
-                    client_state: 1,
+                        client_state: 1,
                     },
                 )
                 .await
@@ -2059,12 +2055,7 @@ mod tests {
         );
         assert_eq!(
             service
-                .cancel(
-                    client_ip,
-                    &credential(1000),
-                    vec![3],
-                    requested.clone(),
-                )
+                .cancel(client_ip, &credential(1000), vec![3], requested.clone(),)
                 .await
                 .status,
             NLM4_DENIED_GRACE_PERIOD
@@ -2078,14 +2069,7 @@ mod tests {
         );
         assert_eq!(
             service
-                .lock(
-                    client_ip,
-                    &credential(1000),
-                    vec![5],
-                    true,
-                    requested,
-                    true,
-                )
+                .lock(client_ip, &credential(1000), vec![5], true, requested, true,)
                 .await
                 .status,
             NLM4_GRANTED
