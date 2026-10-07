@@ -2257,7 +2257,7 @@ SMB/WebDAV/NFS 结果必须一致。
 
 ### 18.6 NFS
 
-- Linux `nfs-utils`；
+- Linux `nfs-utils`：专用 self-hosted runner 可执行本地真实 NFSv3 smoke，也可在分离 server 拓扑下执行 NLMv4 record-lock 与 restart/reclaim smoke；
 - macOS client；
 - Windows NFS client：专用 self-hosted runner 使用系统 Client for NFS，覆盖 mount/create/truncate/read/write、Unicode filename/content、2 MiB binary + forced flush/hash verify、rename/delete；另有分离 server 的远程 NLMv4 smoke，使用两个独立 PowerShell 进程做 byte-range lock 冲突，并以 direct NLM TEST 从 wire 验证服务端锁状态，可选验证 restart 后自动 reclaim；
 - `pynfs` 子集；
@@ -2324,7 +2324,7 @@ package
 
 对 NFS root/privileged 测试使用专门 runner 或能力受控的集成环境，不能假设普通 GitHub hosted runner 可完成全部 mount 场景。
 
-当前仓库的 `.github/workflows/nfs-real-smoke.yml` 在 push 上使用 macOS hosted runner 做同机 NFSv3 基础数据面 smoke，并显式保持 `nolocks`，避免把 loopback portmapper/lockd 冲突误判成服务器 NLM 缺陷；Linux/Windows 真实客户端仍通过专用 self-hosted runner 手动执行。Windows runner 脚本会先验证本机 portmapper 与完整 NFS/MOUNT/NLM/NSM 注册，再用系统 Client for NFS 做基础数据面、Unicode 名称/内容和多块 binary + forced flush/hash 校验；普通 Windows CI 只做 PowerShell syntax gate，不伪装成真实 Client for NFS 验证。远程锁互操作同时提供 macOS 的 `scripts/ci/nfs-remote-lock-smoke.sh` 与 Windows 的 `scripts/ci/windows-nfs-remote-lock-smoke.ps1`：两者都要求分离 client/server 拓扑、先确认远端 NLMv4/NSMv1 UDP 注册，再由两个独立进程制造真实锁冲突，并构建 `nfs-nlm-probe` 直接执行 `MOUNT → NFS LOOKUP → NLM TEST`，从 wire 上确认服务端 lock table 状态，避免把客户端本地锁表误当成服务端证据。Windows 远程 NLM job 默认关闭，通过 workflow_dispatch 的 `remote_windows_nlm=true` 显式启用；它使用 Windows Client for NFS 默认启用的 locking，不传 `nolock`。可选 `remote_nlm_restart_target=user@host` 会让 macOS/Windows 远程锁 smoke 进入 restart/reclaim 模式：holder 保持锁不退出，通过固定的 `ssh + sudo systemctl restart <validated-service>` 重启远端 naosd，等待 NLM/NSM RPC 注册恢复并超过 30 秒 grace 后，本地 contender 与 direct NLM TEST 仍必须证明原锁已 reclaim；holder 主动解锁后两者都必须转为 unlocked。两个远程 NLM job 使用同一 concurrency group，避免对同一 server 并发 restart。self-hosted runner 需要预先配置 Client for NFS/NFS 工具、BatchMode SSH/host key 与该 service 的免交互 restart 权限。
+当前仓库的 `.github/workflows/nfs-real-smoke.yml` 在 push 上使用 macOS hosted runner 做同机 NFSv3 基础数据面 smoke，并显式保持 `nolocks`，避免把 loopback portmapper/lockd 冲突误判成服务器 NLM 缺陷；Linux/Windows 真实客户端仍通过专用 self-hosted runner 手动执行。Windows runner 脚本会先验证本机 portmapper 与完整 NFS/MOUNT/NLM/NSM 注册，再用系统 Client for NFS 做基础数据面、Unicode 名称/内容和多块 binary + forced flush/hash 校验；普通 Windows CI 只做 PowerShell syntax gate，不伪装成真实 Client for NFS 验证。远程锁互操作对 Linux/macOS 共用 `scripts/ci/nfs-remote-lock-smoke.sh`，Windows 使用 `scripts/ci/windows-nfs-remote-lock-smoke.ps1`：三者都要求分离 client/server 拓扑、先确认远端 NLMv4/NSMv1 UDP 注册，再由两个独立进程制造真实锁冲突，并构建 `nfs-nlm-probe` 直接执行 `MOUNT → NFS LOOKUP → NLM TEST`，从 wire 上确认服务端 lock table 状态，避免把客户端本地锁表误当成服务端证据。Linux 与 Windows 远程 NLM job 默认关闭，分别通过 workflow_dispatch 的 `remote_linux_nlm=true` / `remote_windows_nlm=true` 显式启用；Windows 使用系统 Client for NFS 默认启用的 locking，不传 `nolock`。可选 `remote_nlm_restart_target=user@host` 会让 macOS/Windows 远程锁 smoke 进入 restart/reclaim 模式：holder 保持锁不退出，通过固定的 `ssh + sudo systemctl restart <validated-service>` 重启远端 naosd，等待 NLM/NSM RPC 注册恢复并超过 30 秒 grace 后，本地 contender 与 direct NLM TEST 仍必须证明原锁已 reclaim；holder 主动解锁后两者都必须转为 unlocked。两个远程 NLM job 使用同一 concurrency group，避免对同一 server 并发 restart。self-hosted runner 需要预先配置 Client for NFS/NFS 工具、BatchMode SSH/host key 与该 service 的免交互 restart 权限。
 
 ---
 
@@ -2344,7 +2344,7 @@ package
 | 8 | **SMB macOS provider adapter** | 先检测系统 File Sharing；无端口抢占；支持路径明确 |
 | 9 | SMB Doctor / conflict UX | UI 展示 provider、445 owner、冲突原因和可执行修复建议 |
 | 10 | WebDAV | ACL 一致性矩阵通过 |
-| 11 | NFS L1/L2 | 基础数据面 + in-process/真实 TCP smoke 已完成；NLMv4 同步 range-lock、异步 *_MSG/*_RES、BLOCKED→GRANTED、CANCEL、RPCBIND v4/v3 callback discovery 与 NSMv1 peer reboot cleanup 已接入；file-handle secret + nonce/path registry、NSM epoch、有效 NLM peer IP 已持久化，daemon restart grace/reclaim 与带 RPC acknowledgement 的 restart `SM_NOTIFY` 已实现，server E2E 覆盖旧 FH 跨两次 restart、reclaim 与 NSM epoch 1→3→5→7。分离主机远程 NLM smoke harness 已同时覆盖 macOS 与 Windows Client for NFS 的 record-lock，并支持可选 server restart/reclaim；剩余关键 gate 是在已配置真实分离 client/server 的 self-hosted runner 上实际跑绿 macOS/Windows 自动 `SM_NOTIFY → reclaim`；macOS 基础内核 NFS 数据面继续自动化通过 |
+| 11 | NFS L1/L2 | 基础数据面 + in-process/真实 TCP smoke 已完成；NLMv4 同步 range-lock、异步 *_MSG/*_RES、BLOCKED→GRANTED、CANCEL、RPCBIND v4/v3 callback discovery 与 NSMv1 peer reboot cleanup 已接入；file-handle secret + nonce/path registry、NSM epoch、有效 NLM peer IP 已持久化，daemon restart grace/reclaim 与带 RPC acknowledgement 的 restart `SM_NOTIFY` 已实现，server E2E 覆盖旧 FH 跨两次 restart、reclaim 与 NSM epoch 1→3→5→7。分离主机远程 NLM smoke harness 已覆盖 Linux、macOS 与 Windows Client for NFS 的 record-lock，并支持可选 server restart/reclaim；剩余关键 gate 是在已配置真实分离 client/server 的 self-hosted runner 上实际跑绿三类客户端的自动 `SM_NOTIFY → reclaim`；macOS 基础内核 NFS 数据面继续自动化通过 |
 | 12 | NFS L3（feature） | RPCSEC_GSS wire credential/verifier + MIC header preservation 已开始并保持 fail-closed；后续完成 GSS context、Kerberos principal 映射、integrity/privacy 与 Linux/macOS krb5 真机测试 |
 | 13 | React Web UI | 原型核心页面全部 API 化 |
 | 14 | 审计/Doctor/Verify | 可检索、可导出、漂移可发现 |
