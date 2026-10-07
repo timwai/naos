@@ -219,8 +219,19 @@ pub mod doctor {
 }
 
 pub mod share {
-    use serde::Serialize;
+    use serde::{Deserialize, Serialize};
     use utoipa::ToSchema;
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct ShareWriteRequest {
+        pub name: String,
+        pub path: String,
+        pub comment: Option<String>,
+        pub enabled: bool,
+        pub smb_enabled: bool,
+        pub webdav_enabled: bool,
+        pub nfs_enabled: bool,
+    }
 
     #[derive(Debug, Clone, Serialize, ToSchema)]
     pub struct ShareDto {

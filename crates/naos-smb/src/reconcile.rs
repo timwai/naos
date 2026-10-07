@@ -146,11 +146,17 @@ impl ReconcileDriver for SambaShareReconcileDriver {
         let plan = self.adapter.render(&desired).await.map_err(samba_failure)?;
         let report = self.adapter.verify(&plan).await.map_err(samba_failure)?;
 
-        let applied = self
-            .shares
-            .mark_applied_if_generation(&target.id, self.generation)
-            .await
-            .map_err(repository_failure)?;
+        let applied = if target.delete_requested {
+            self.shares
+                .finalize_delete_if_generation(&target.id, self.generation)
+                .await
+                .map_err(repository_failure)?
+        } else {
+            self.shares
+                .mark_applied_if_generation(&target.id, self.generation)
+                .await
+                .map_err(repository_failure)?
+        };
         if !applied {
             return Err(ReconcileFailure::new(
                 "SHARE_GENERATION_CONFLICT",

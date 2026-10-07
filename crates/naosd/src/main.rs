@@ -13,7 +13,7 @@ use naos_core::{
     nfs::NfsBindingService,
     operation::OperationService,
     reconcile::Reconciler,
-    share::ShareCatalogService,
+    share::{ShareCatalogService, ShareMutationService},
 };
 #[cfg(all(any(unix, windows), feature = "system-gss"))]
 use naos_nfs::rpcsec_gss::StatefulRpcSecGssAcceptor;
@@ -22,12 +22,16 @@ use naos_nfs::server::{NfsServer, NfsServerConfig};
 use naos_nfs::system_gss::SystemGssHandshakeProvider;
 #[cfg(all(windows, feature = "system-gss"))]
 use naos_nfs::windows_sspi::WindowsSspiHandshakeProvider;
-use naos_platform::SmbDoctor;
+use naos_platform::{SmbDoctor, SystemSharePathResolver};
 use naos_store::Store;
 use naos_webdav::WebDavState;
 use tokio::{net::TcpListener, sync::watch};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+
+mod share_reconcile;
+
+use share_reconcile::PlatformShareReconcileDriverFactory;
 
 #[derive(Debug, Parser)]
 #[command(name = "naosd", version, about = "naos NAS control plane")]
@@ -114,6 +118,12 @@ async fn main() -> anyhow::Result<()> {
     );
     let acl = Arc::new(AclService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
+    let share_mutations = Arc::new(ShareMutationService::new(
+        store.clone(),
+        operations.clone(),
+        Arc::new(SystemSharePathResolver),
+    ));
+    let share_reconcile_factory = Arc::new(PlatformShareReconcileDriverFactory::new(store.clone()));
     let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
     let nfs_principals = Arc::new(naos_core::nfs::NfsKrbPrincipalService::new(store.clone()));
     let shares = Arc::new(ShareCatalogService::new(store.clone()));
@@ -126,6 +136,8 @@ async fn main() -> anyhow::Result<()> {
         auth: auth.clone(),
         acl,
         operations,
+        share_mutations,
+        share_reconcile_factory,
         nfs_bindings,
         nfs_principals,
         shares,

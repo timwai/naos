@@ -20,6 +20,7 @@ utoipa.workspace = true
 [dev-dependencies]
 async-trait.workspace = true
 http-body-util.workspace = true
+naos-platform = { path = "../naos-platform" }
 naos-store = { path = "../naos-store" }
 serde_json.workspace = true
 sqlx.workspace = true

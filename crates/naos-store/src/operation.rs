@@ -198,7 +198,7 @@ impl OperationRepository for Store {
     }
 }
 
-async fn find_by_idempotency(
+pub(crate) async fn find_by_idempotency(
     tx: &mut Transaction<'_, Sqlite>,
     key: &str,
 ) -> Result<Option<Operation>, OperationRepositoryError> {
@@ -219,7 +219,7 @@ async fn find_by_idempotency(
     row.map(operation_from_row).transpose()
 }
 
-async fn get_in_tx(
+pub(crate) async fn get_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     id: &str,
 ) -> Result<Option<Operation>, OperationRepositoryError> {
@@ -238,7 +238,7 @@ async fn get_in_tx(
     row.map(operation_from_row).transpose()
 }
 
-async fn insert_event(
+pub(crate) async fn insert_event(
     tx: &mut Transaction<'_, Sqlite>,
     operation_id: &str,
     seq: u64,
@@ -270,7 +270,7 @@ async fn insert_event(
     })
 }
 
-fn operation_from_row(row: sqlx::sqlite::SqliteRow) -> Result<Operation, OperationRepositoryError> {
+pub(crate) fn operation_from_row(row: sqlx::sqlite::SqliteRow) -> Result<Operation, OperationRepositoryError> {
     let state = OperationState::from_str(&row.try_get::<String, _>("state").map_err(store_error)?)
         .map_err(|_| OperationRepositoryError::Unavailable)?;
     let progress = row.try_get::<i64, _>("progress").map_err(store_error)?;

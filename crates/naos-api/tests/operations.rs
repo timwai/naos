@@ -38,6 +38,14 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
     let acl = Arc::new(naos_core::acl::AclService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
+    let share_mutations = Arc::new(naos_core::share::ShareMutationService::new(
+        store.clone(),
+        operations.clone(),
+        Arc::new(naos_platform::SystemSharePathResolver),
+    ));
+    let share_reconcile_factory = Arc::new(
+        naos_core::share::DatabaseShareReconcileDriverFactory::new(store.clone()),
+    );
     let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
     let nfs_principals = Arc::new(naos_core::nfs::NfsKrbPrincipalService::new(store.clone()));
     let shares = Arc::new(naos_core::share::ShareCatalogService::new(store.clone()));
@@ -66,6 +74,8 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
         auth,
         acl,
         operations,
+        share_mutations,
+        share_reconcile_factory,
         nfs_bindings,
         nfs_principals,
         shares,
@@ -262,6 +272,232 @@ async fn system_verify_operation_is_persistent_idempotent_and_replayable_over_ss
     assert!(text.contains("event: queued"));
     assert!(text.contains("event: succeeded"));
     assert!(text.contains("phase"));
+}
+
+async fn wait_operation(
+    app: &Router,
+    peer: SocketAddr,
+    cookie: &str,
+    operation_id: &str,
+) -> Value {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let response = app
+                .clone()
+                .oneshot(request(
+                    Method::GET,
+                    &format!("/api/v1/operations/{operation_id}"),
+                    None,
+                    peer,
+                    Some(cookie),
+                    None,
+                    None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = json_body(response).await;
+            if matches!(
+                body["state"].as_str(),
+                Some("succeeded" | "failed" | "degraded")
+            ) {
+                break body;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("operation should reach a terminal state before timeout")
+}
+
+#[tokio::test]
+async fn share_mutations_are_idempotent_operation_backed_and_finalize_delete() {
+    let (app, _store, dir) = test_app().await;
+    let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 33001);
+    let (cookie, csrf) = login_admin(&app, peer).await;
+    let share_root = dir.path().join("share-root");
+    tokio::fs::create_dir_all(&share_root).await.unwrap();
+    let path = share_root.to_string_lossy().into_owned();
+
+    let create_body = json!({
+        "name": "docs",
+        "path": path,
+        "comment": "documents",
+        "enabled": true,
+        "smb_enabled": false,
+        "webdav_enabled": true,
+        "nfs_enabled": false
+    });
+    let first = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/shares",
+            Some(create_body.clone()),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("share-create-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::ACCEPTED);
+    let first = json_body(first).await;
+    let create_operation = first["operation_id"].as_str().unwrap().to_owned();
+
+    let replay = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/shares",
+            Some(create_body),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("share-create-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::ACCEPTED);
+    assert_eq!(json_body(replay).await["operation_id"], create_operation);
+
+    let created = wait_operation(&app, peer, &cookie, &create_operation).await;
+    assert_eq!(created["state"], "succeeded");
+    assert_eq!(created["kind"], "share.create");
+    let share_id = created["resource_id"].as_str().unwrap().to_owned();
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/shares/{share_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let share = json_body(response).await;
+    assert_eq!(share["name"], "docs");
+    assert_eq!(share["generation"], 1);
+    assert_eq!(share["applied_generation"], 1);
+    assert_eq!(share["apply_state"], "in_sync");
+
+    let update = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/v1/shares/{share_id}"),
+            Some(json!({
+                "name": "docs-renamed",
+                "path": path,
+                "comment": "updated",
+                "enabled": true,
+                "smb_enabled": false,
+                "webdav_enabled": true,
+                "nfs_enabled": true
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("share-update-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::ACCEPTED);
+    let update = json_body(update).await;
+    let update_operation = update["operation_id"].as_str().unwrap();
+    let updated = wait_operation(&app, peer, &cookie, update_operation).await;
+    assert_eq!(updated["state"], "succeeded");
+    assert_eq!(updated["kind"], "share.update");
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/shares/{share_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let share = json_body(response).await;
+    assert_eq!(share["name"], "docs-renamed");
+    assert_eq!(share["generation"], 2);
+    assert_eq!(share["applied_generation"], 2);
+    assert_eq!(share["nfs_enabled"], true);
+
+    let delete = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/v1/shares/{share_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("share-delete-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::ACCEPTED);
+    let delete = json_body(delete).await;
+    let delete_operation = delete["operation_id"].as_str().unwrap();
+    let deleted = wait_operation(&app, peer, &cookie, delete_operation).await;
+    assert_eq!(deleted["state"], "succeeded");
+    assert_eq!(deleted["kind"], "share.delete");
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/shares/{share_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn share_mutation_requires_idempotency_key() {
+    let (app, _store, dir) = test_app().await;
+    let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 33002);
+    let (cookie, csrf) = login_admin(&app, peer).await;
+    let share_root = dir.path().join("missing-key");
+    tokio::fs::create_dir_all(&share_root).await.unwrap();
+
+    let response = app
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/shares",
+            Some(json!({
+                "name": "docs",
+                "path": share_root.to_string_lossy(),
+                "comment": null,
+                "enabled": true,
+                "smb_enabled": false,
+                "webdav_enabled": true,
+                "nfs_enabled": false
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 struct VerifyFailDriver {

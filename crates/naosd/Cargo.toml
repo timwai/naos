@@ -18,6 +18,7 @@ naos-api = { path = "../naos-api" }
 naos-core = { path = "../naos-core" }
 naos-nfs = { path = "../naos-nfs" }
 naos-platform = { path = "../naos-platform" }
+naos-smb = { path = "../naos-smb" }
 naos-store = { path = "../naos-store" }
 naos-webdav = { path = "../naos-webdav" }
 serde_json.workspace = true

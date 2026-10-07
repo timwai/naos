@@ -21,6 +21,18 @@ impl OperationKind {
         Self::new("system_verify")
     }
 
+    pub fn share_create() -> Self {
+        Self::new("share.create")
+    }
+
+    pub fn share_update() -> Self {
+        Self::new("share.update")
+    }
+
+    pub fn share_delete() -> Self {
+        Self::new("share.delete")
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -136,6 +148,12 @@ pub struct NewOperationEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct PreparedOperation {
+    pub operation: NewOperation,
+    pub queued_event: NewOperationEvent,
+}
+
+#[derive(Debug, Clone)]
 pub struct OperationUpdate {
     pub state: OperationState,
     pub progress: u8,
@@ -233,30 +251,42 @@ impl OperationService {
         }
     }
 
+    pub fn prepare(&self, request: OperationRequest) -> Result<PreparedOperation, OperationError> {
+        let now = now_rfc3339()?;
+        Ok(PreparedOperation {
+            operation: NewOperation {
+                id: prefixed_id("op"),
+                kind: request.kind,
+                actor_user_id: request.actor_user_id,
+                resource_type: request.resource_type,
+                resource_id: request.resource_id,
+                request_id: request.request_id,
+                idempotency_key: request.idempotency_key,
+                created_at: now.clone(),
+            },
+            queued_event: NewOperationEvent {
+                event: "queued".to_owned(),
+                payload: json!({"state": "queued"}),
+                ts: now,
+            },
+        })
+    }
+
+    pub fn publish_persisted_event(&self, event: OperationEvent) {
+        let _ = self.event_bus.send(event);
+    }
+
     pub async fn create(
         &self,
         request: OperationRequest,
     ) -> Result<CreateOperationResult, OperationError> {
-        let now = now_rfc3339()?;
-        let operation = NewOperation {
-            id: prefixed_id("op"),
-            kind: request.kind,
-            actor_user_id: request.actor_user_id,
-            resource_type: request.resource_type,
-            resource_id: request.resource_id,
-            request_id: request.request_id,
-            idempotency_key: request.idempotency_key,
-            created_at: now.clone(),
-        };
-        let event = NewOperationEvent {
-            event: "queued".to_owned(),
-            payload: json!({"state": "queued"}),
-            ts: now,
-        };
-
-        let result = self.repository.create_or_get(&operation, &event).await?;
+        let prepared = self.prepare(request)?;
+        let result = self
+            .repository
+            .create_or_get(&prepared.operation, &prepared.queued_event)
+            .await?;
         if let Some(event) = result.event {
-            let _ = self.event_bus.send(event);
+            self.publish_persisted_event(event);
         }
 
         Ok(CreateOperationResult {

@@ -40,6 +40,8 @@ pub struct AppState {
     pub auth: Arc<AuthService>,
     pub acl: Arc<naos_core::acl::AclService>,
     pub operations: Arc<naos_core::operation::OperationService>,
+    pub share_mutations: Arc<naos_core::share::ShareMutationService>,
+    pub share_reconcile_factory: Arc<dyn naos_core::share::ShareReconcileDriverFactory>,
     pub nfs_bindings: Arc<naos_core::nfs::NfsBindingService>,
     pub nfs_principals: Arc<naos_core::nfs::NfsKrbPrincipalService>,
     pub shares: Arc<naos_core::share::ShareCatalogService>,

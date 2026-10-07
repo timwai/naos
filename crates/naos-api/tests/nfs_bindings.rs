@@ -36,6 +36,14 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
     let acl = Arc::new(naos_core::acl::AclService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
+    let share_mutations = Arc::new(naos_core::share::ShareMutationService::new(
+        store.clone(),
+        operations.clone(),
+        Arc::new(naos_platform::SystemSharePathResolver),
+    ));
+    let share_reconcile_factory = Arc::new(
+        naos_core::share::DatabaseShareReconcileDriverFactory::new(store.clone()),
+    );
     let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
     let nfs_principals = Arc::new(naos_core::nfs::NfsKrbPrincipalService::new(store.clone()));
     let shares = Arc::new(naos_core::share::ShareCatalogService::new(store.clone()));
@@ -64,6 +72,8 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
         auth,
         acl,
         operations,
+        share_mutations,
+        share_reconcile_factory,
         nfs_bindings,
         nfs_principals,
         shares,
