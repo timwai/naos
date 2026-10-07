@@ -390,7 +390,7 @@ impl FsAclManager {
             let output = self.runner.run(spec.clone()).await?;
             require_success(&spec, &output)?;
             let subject = subject.name().to_ascii_lowercase();
-            return if output.stdout.to_ascii_lowercase().contains(&account) {
+            return if output.stdout.to_ascii_lowercase().contains(&subject) {
                 Err(FsAclError::VerifyFailed)
             } else {
                 Ok(())
