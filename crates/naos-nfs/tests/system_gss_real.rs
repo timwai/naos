@@ -19,13 +19,16 @@ use libgssapi::{
 use naos_nfs::{
     rpc::{
         AUTH_NONE, GSS_S_COMPLETE, GSS_S_CONTINUE_NEEDED, MAX_AUTH_BYTES, RPCSEC_GSS,
-        RPCSEC_GSS_CONTINUE_INIT, RPCSEC_GSS_INIT, RPCSEC_GSS_VERSION_1, RpcCall, RpcCredential,
-        RpcSecGssCredential, RpcSecGssInitResult, RpcVerifier, decode_rpcsec_gss_init_result,
-        encode_rpcsec_gss_init_token, rpcsec_gss_u32_mic_input,
+        RPCSEC_GSS_CONTINUE_INIT, RPCSEC_GSS_DATA, RPCSEC_GSS_INIT, RPCSEC_GSS_SVC_INTEGRITY,
+        RPCSEC_GSS_SVC_NONE, RPCSEC_GSS_VERSION_1, RpcCall, RpcCredential, RpcSecGssCredential,
+        RpcSecGssInitResult, RpcVerifier, decode_rpcsec_gss_init_result,
+        decode_rpcsec_gss_integrity_body, encode_rpcsec_gss_init_token,
+        encode_rpcsec_gss_integrity_body, encode_rpcsec_gss_plaintext, rpcsec_gss_u32_mic_input,
     },
     rpcsec_gss::{
         RpcSecGssAcceptRequest, RpcSecGssAcceptResult, RpcSecGssAcceptor, RpcSecGssContextRegistry,
-        RpcSecGssSecurityError, StatefulRpcSecGssAcceptor, accept_context_call,
+        RpcSecGssDataError, RpcSecGssRegistryError, RpcSecGssSecurityError,
+        StatefulRpcSecGssAcceptor, accept_context_call, authenticate_data_call,
     },
     system_gss::SystemGssHandshakeProvider,
     xdr::XdrReader,
@@ -382,6 +385,97 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
     registered
         .verify_mic(b"registered context", &wire_mic)
         .expect("registered context verifies client MIC");
+
+    let none_seq = 7;
+    let none_header = b"rpcsec-gss-real-none-header";
+    let none_header_mic = wire_client
+        .get_mic(none_header)
+        .expect("client header MIC for svc_none");
+    let none_call = data_call(
+        200,
+        &wire_handle,
+        none_seq,
+        RPCSEC_GSS_SVC_NONE,
+        none_header,
+        b"real-none-arguments".to_vec(),
+        &none_header_mic,
+    );
+    let none_authenticated = authenticate_data_call(&registry, &none_call)
+        .await
+        .expect("authenticate real svc_none request");
+    assert_eq!(none_authenticated.principal(), client_principal);
+    assert_eq!(none_authenticated.arguments(), b"real-none-arguments");
+
+    let none_reply = none_authenticated
+        .protect_reply(b"real-none-reply")
+        .expect("protect real svc_none reply");
+    assert_eq!(none_reply.verifier.flavor, RPCSEC_GSS);
+    wire_client
+        .verify_mic(
+            &rpcsec_gss_u32_mic_input(none_seq),
+            &none_reply.verifier.body,
+        )
+        .expect("verify real svc_none reply verifier");
+    assert_eq!(none_reply.body, b"real-none-reply");
+
+    assert!(matches!(
+        authenticate_data_call(&registry, &none_call).await,
+        Err(RpcSecGssDataError::Registry(RpcSecGssRegistryError::Replay))
+    ));
+
+    let integrity_seq = 8;
+    let integrity_arguments = b"real-integrity-arguments";
+    let integrity_plaintext =
+        encode_rpcsec_gss_plaintext(integrity_seq, integrity_arguments);
+    let integrity_checksum = wire_client
+        .get_mic(&integrity_plaintext)
+        .expect("client integrity body MIC");
+    let integrity_body = encode_rpcsec_gss_integrity_body(
+        integrity_seq,
+        integrity_arguments,
+        &integrity_checksum,
+    )
+    .expect("encode real integrity request");
+    let integrity_header = b"rpcsec-gss-real-integrity-header";
+    let integrity_header_mic = wire_client
+        .get_mic(integrity_header)
+        .expect("client header MIC for svc_integrity");
+    let integrity_call = data_call(
+        201,
+        &wire_handle,
+        integrity_seq,
+        RPCSEC_GSS_SVC_INTEGRITY,
+        integrity_header,
+        integrity_body,
+        &integrity_header_mic,
+    );
+    let integrity_authenticated = authenticate_data_call(&registry, &integrity_call)
+        .await
+        .expect("authenticate real svc_integrity request");
+    assert_eq!(integrity_authenticated.principal(), client_principal);
+    assert_eq!(
+        integrity_authenticated.arguments(),
+        integrity_arguments
+    );
+
+    let integrity_reply = integrity_authenticated
+        .protect_reply(b"real-integrity-reply")
+        .expect("protect real svc_integrity reply");
+    wire_client
+        .verify_mic(
+            &rpcsec_gss_u32_mic_input(integrity_seq),
+            &integrity_reply.verifier.body,
+        )
+        .expect("verify real integrity reply verifier");
+    let decoded_reply =
+        decode_rpcsec_gss_integrity_body(&integrity_reply.body, integrity_seq)
+            .expect("decode real integrity reply");
+    assert_eq!(decoded_reply.arguments, b"real-integrity-reply");
+    let reply_plaintext =
+        encode_rpcsec_gss_plaintext(integrity_seq, &decoded_reply.arguments);
+    wire_client
+        .verify_mic(&reply_plaintext, &decoded_reply.checksum)
+        .expect("verify real integrity reply checksum");
 }
 
 fn context_call(xid: u32, gss_proc: u32, handle: &[u8], token: &[u8]) -> RpcCall {
@@ -403,6 +497,36 @@ fn context_call(xid: u32, gss_proc: u32, handle: &[u8], token: &[u8]) -> RpcCall
         },
         header_through_credential: Vec::new(),
         body: encode_rpcsec_gss_init_token(token).expect("encode RPCSEC_GSS init token"),
+    }
+}
+
+fn data_call(
+    xid: u32,
+    handle: &[u8],
+    seq_num: u32,
+    service: u32,
+    header_through_credential: &[u8],
+    body: Vec<u8>,
+    verifier: &[u8],
+) -> RpcCall {
+    RpcCall {
+        xid,
+        program: 100003,
+        version: 3,
+        procedure: 1,
+        credential: RpcCredential::RpcSecGss(RpcSecGssCredential {
+            version: RPCSEC_GSS_VERSION_1,
+            gss_proc: RPCSEC_GSS_DATA,
+            seq_num,
+            service,
+            handle: handle.to_vec(),
+        }),
+        verifier: RpcVerifier {
+            flavor: RPCSEC_GSS,
+            body: verifier.to_vec(),
+        },
+        header_through_credential: header_through_credential.to_vec(),
+        body,
     }
 }
 
