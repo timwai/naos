@@ -251,11 +251,11 @@ async fn dispatch_mount_call(service: &MountService, client_ip: IpAddr, call: &R
 
     match call.procedure {
         MOUNTPROC_NULL => accepted_success(call.xid, &[]),
-        MOUNTPROC_MNT => mount_reply(service, client_ip, &call).await,
+        MOUNTPROC_MNT => mount_reply(service, client_ip, call).await,
         MOUNTPROC_DUMP => accepted_success(call.xid, &encode_empty_list()),
-        MOUNTPROC_UMNT => void_path_reply(&call),
+        MOUNTPROC_UMNT => void_path_reply(call),
         MOUNTPROC_UMNTALL => accepted_success(call.xid, &[]),
-        MOUNTPROC_EXPORT => export_reply(service, client_ip, &call).await,
+        MOUNTPROC_EXPORT => export_reply(service, client_ip, call).await,
         _ => accepted_procedure_unavailable(call.xid),
     }
 }
