@@ -1,7 +1,6 @@
 #![cfg(all(target_os = "linux", feature = "system-gss"))]
 
 use std::{
-    collections::BTreeMap,
     env, fs,
     net::{SocketAddr, TcpListener},
     path::{Path, PathBuf},
