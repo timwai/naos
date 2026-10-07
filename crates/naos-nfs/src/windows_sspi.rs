@@ -38,6 +38,7 @@ const KERBEROS_PACKAGE: &[u16] = &[
     0,
 ];
 const MAX_SSPI_TOKEN_BYTES: usize = 64 * 1024;
+const GSS_S_BAD_NAME: u32 = 2 << 16;
 const GSS_S_FAILURE: u32 = 13 << 16;
 
 const SEC_E_OK: i32 = 0;
@@ -57,7 +58,7 @@ pub enum WindowsSspiProviderError {
 
 pub struct WindowsSspiHandshakeProvider {
     credential: Arc<WindowsCredential>,
-    _service_principal: String,
+    service_principal: String,
 }
 
 impl WindowsSspiHandshakeProvider {
@@ -93,7 +94,7 @@ impl WindowsSspiHandshakeProvider {
             credential: Arc::new(WindowsCredential {
                 handle: Mutex::new(handle),
             }),
-            _service_principal: service_principal.to_owned(),
+            service_principal: service_principal.to_owned(),
         })
     }
 }
@@ -102,6 +103,7 @@ impl RpcSecGssHandshakeProvider for WindowsSspiHandshakeProvider {
     fn begin(&self) -> Result<Box<dyn RpcSecGssHandshake>, RpcSecGssAcceptorError> {
         Ok(Box::new(WindowsSspiHandshake {
             credential: self.credential.clone(),
+            service_principal: self.service_principal.clone(),
             context: None,
         }))
     }
@@ -143,6 +145,7 @@ impl Drop for WindowsContextHandle {
 
 struct WindowsSspiHandshake {
     credential: Arc<WindowsCredential>,
+    service_principal: String,
     context: Option<WindowsContextHandle>,
 }
 
@@ -249,8 +252,14 @@ impl RpcSecGssHandshake for WindowsSspiHandshake {
             .context
             .take()
             .ok_or(RpcSecGssAcceptorError::ProviderFailure)?;
-        let principal = query_client_principal(&context.handle)
+        let (client_principal, server_principal) = query_native_principals(&context.handle)
             .map_err(|_| RpcSecGssAcceptorError::ProviderFailure)?;
+        if !principal_matches(&self.service_principal, &server_principal) {
+            return Ok(RpcSecGssHandshakeResult::Failure {
+                gss_major: GSS_S_BAD_NAME,
+                gss_minor: 0,
+            });
+        }
         let sizes = query_context_sizes(&context.handle)
             .map_err(|_| RpcSecGssAcceptorError::ProviderFailure)?;
 
@@ -258,7 +267,7 @@ impl RpcSecGssHandshake for WindowsSspiHandshake {
             gss_minor: 0,
             token: output,
             security: Arc::new(WindowsSspiSecurityContext {
-                principal,
+                principal: client_principal,
                 max_signature: sizes.cbMaxSignature as usize,
                 context: Mutex::new(context),
             }),
@@ -382,7 +391,7 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
     }
 }
 
-fn query_client_principal(context: &SecHandle) -> Result<String, i32> {
+fn query_native_principals(context: &SecHandle) -> Result<(String, String), i32> {
     let mut names = SecPkgContext_NativeNamesW::default();
     let status = unsafe {
         QueryContextAttributesW(
@@ -395,7 +404,8 @@ fn query_client_principal(context: &SecHandle) -> Result<String, i32> {
         return Err(status);
     }
 
-    let principal = copy_wide_string(names.sClientName);
+    let client_principal = copy_wide_string(names.sClientName);
+    let server_principal = copy_wide_string(names.sServerName);
     unsafe {
         if !names.sClientName.is_null() {
             FreeContextBuffer(names.sClientName.cast());
@@ -404,7 +414,15 @@ fn query_client_principal(context: &SecHandle) -> Result<String, i32> {
             FreeContextBuffer(names.sServerName.cast());
         }
     }
-    principal.ok_or(0x8009_0304_u32 as i32)
+
+    match (client_principal, server_principal) {
+        (Some(client), Some(server)) => Ok((client, server)),
+        _ => Err(0x8009_0304_u32 as i32),
+    }
+}
+
+fn principal_matches(expected: &str, actual: &str) -> bool {
+    expected.eq_ignore_ascii_case(actual)
 }
 
 fn query_context_sizes(context: &SecHandle) -> Result<SecPkgContext_Sizes, i32> {
@@ -455,6 +473,18 @@ mod tests {
         assert!(matches!(
             WindowsSspiHandshakeProvider::new("   "),
             Err(WindowsSspiProviderError::EmptyServicePrincipal)
+        ));
+    }
+
+    #[test]
+    fn service_principal_matching_is_case_insensitive_but_exact() {
+        assert!(principal_matches(
+            "nfs/server.example.com@EXAMPLE.COM",
+            "NFS/SERVER.EXAMPLE.COM@example.com"
+        ));
+        assert!(!principal_matches(
+            "nfs/server.example.com@EXAMPLE.COM",
+            "host/server.example.com@EXAMPLE.COM"
         ));
     }
 
