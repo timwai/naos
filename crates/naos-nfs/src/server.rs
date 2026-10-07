@@ -673,7 +673,10 @@ mod tests {
         let reclaim_lock = nlm_lock_call_with_reclaim(64, &child_handle, b"owner-a", 101, true);
         write_record(&mut nlm_stream, &reclaim_lock).await.unwrap();
         let reclaim_reply = read_record(&mut nlm_stream).await.unwrap().unwrap();
-        assert_eq!(parse_nlm_status(&reclaim_reply, 64), crate::nlm4::NLM4_GRANTED);
+        assert_eq!(
+            parse_nlm_status(&reclaim_reply, 64),
+            crate::nlm4::NLM4_GRANTED
+        );
 
         let stat_reply = rpc_round_trip(second_nsm, nsm_stat_call(65, "server.example")).await;
         assert_eq!(parse_nsm_stat_state(&stat_reply, 65), 3);
