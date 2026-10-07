@@ -20,7 +20,8 @@ use crate::{
     rpc::{
         AUTH_NONE, AUTH_SYS, RPC_VERSION, RpcCall, RpcCredential, RpcDecodeError,
         accepted_garbage_args, accepted_procedure_unavailable, accepted_program_mismatch,
-        accepted_program_unavailable, accepted_success, decode_call, denied_rpc_mismatch, rpcsec_gss_unavailable_reply,
+        accepted_program_unavailable, accepted_success, decode_call, denied_rpc_mismatch,
+        rpcsec_gss_unavailable_reply,
     },
     rpcbind::{RpcTransport, lookup_port},
     transport::{read_record, write_record},
