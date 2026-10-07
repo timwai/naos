@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{net::IpAddr, str::FromStr};
 
 use async_trait::async_trait;
 use naos_core::{
@@ -257,6 +257,40 @@ impl NfsBindingRepository for Store {
         Ok(inserted == 0)
     }
 
+    async fn remember_nfs_nsm_peer(&self, peer_ip: IpAddr) -> Result<(), NfsRepositoryError> {
+        sqlx::query(
+            "INSERT INTO nfs_nsm_peers (peer_ip)
+             VALUES (?)
+             ON CONFLICT(peer_ip) DO NOTHING",
+        )
+        .bind(peer_ip.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(store_error)?;
+        Ok(())
+    }
+
+    async fn list_nfs_nsm_peers(&self) -> Result<Vec<IpAddr>, NfsRepositoryError> {
+        let rows =
+            sqlx::query_scalar::<_, String>("SELECT peer_ip FROM nfs_nsm_peers ORDER BY peer_ip")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(store_error)?;
+
+        rows.into_iter()
+            .map(|value| value.parse().map_err(|_| NfsRepositoryError::Unavailable))
+            .collect()
+    }
+
+    async fn forget_nfs_nsm_peer(&self, peer_ip: IpAddr) -> Result<(), NfsRepositoryError> {
+        sqlx::query("DELETE FROM nfs_nsm_peers WHERE peer_ip = ?")
+            .bind(peer_ip.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(store_error)?;
+        Ok(())
+    }
+
     async fn advance_nfs_nsm_state(&self) -> Result<u32, NfsRepositoryError> {
         let mut tx = self.pool.begin().await.map_err(store_error)?;
         let previous = sqlx::query_scalar::<_, Vec<u8>>(
@@ -464,6 +498,39 @@ mod tests {
 
         assert!(!store.mark_nfs_lock_manager_started().await.unwrap());
         assert!(store.mark_nfs_lock_manager_started().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn nfs_nsm_peers_round_trip_idempotently() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE nfs_nsm_peers (
+                peer_ip TEXT PRIMARY KEY
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let store = Store { pool };
+        let first: IpAddr = "192.0.2.10".parse().unwrap();
+        let second: IpAddr = "2001:db8::10".parse().unwrap();
+
+        store.remember_nfs_nsm_peer(first).await.unwrap();
+        store.remember_nfs_nsm_peer(first).await.unwrap();
+        store.remember_nfs_nsm_peer(second).await.unwrap();
+
+        let mut peers = store.list_nfs_nsm_peers().await.unwrap();
+        peers.sort();
+        let mut expected = vec![first, second];
+        expected.sort();
+        assert_eq!(peers, expected);
+
+        store.forget_nfs_nsm_peer(first).await.unwrap();
+        assert_eq!(store.list_nfs_nsm_peers().await.unwrap(), vec![second]);
     }
 
     #[tokio::test]

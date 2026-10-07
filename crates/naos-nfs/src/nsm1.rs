@@ -1,14 +1,23 @@
-use std::{io, net::IpAddr, sync::Arc};
+use std::{
+    io,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::Arc,
+};
 
 use naos_core::nfs::{NfsBindingRepository, NfsRepositoryError};
-use tokio::sync::{Mutex, mpsc};
+use rand_core::{OsRng, RngCore};
+use tokio::{
+    net::UdpSocket,
+    sync::{Mutex, mpsc},
+};
 
 use crate::{
     rpc::{
-        RpcCall, RpcDecodeError, accepted_garbage_args, accepted_procedure_unavailable,
-        accepted_program_mismatch, accepted_program_unavailable, accepted_success,
-        accepted_system_error, decode_call, denied_rpc_mismatch,
+        AUTH_NONE, RPC_VERSION, RpcCall, RpcDecodeError, accepted_garbage_args,
+        accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
+        accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch,
     },
+    rpcbind::{RpcTransport, lookup_port},
     transport::{read_record, write_record},
     xdr::{XdrReader, XdrWriter},
 };
@@ -28,6 +37,7 @@ const SM_MAXSTRLEN: usize = 1024;
 const SM_PRIV_SIZE: usize = 16;
 const STAT_SUCC: u32 = 0;
 const INITIAL_UP_STATE: u32 = 1;
+const RPCBIND_PORT: u16 = 111;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NsmMyId {
@@ -198,6 +208,68 @@ impl NsmV1Service {
             let _ = notification_tx.send(notification);
         }
     }
+
+    pub(crate) async fn notify_reboot_peer(&self, peer_ip: IpAddr, notify_name: &str) -> bool {
+        let state = self.current_state().await;
+        if !send_reboot_notification(peer_ip, notify_name, state).await {
+            return false;
+        }
+
+        if let Some(repository) = &self.state_repository
+            && repository.forget_nfs_nsm_peer(peer_ip).await.is_err()
+        {
+            return false;
+        }
+        true
+    }
+}
+
+async fn send_reboot_notification(peer_ip: IpAddr, notify_name: &str, state: u32) -> bool {
+    let rpcbind_address = SocketAddr::new(peer_ip, RPCBIND_PORT);
+    let port = match lookup_port(rpcbind_address, NSM_PROGRAM, NSM_VERSION, RpcTransport::Udp).await
+    {
+        Ok(Some(port)) => port,
+        Ok(None) | Err(_) => return false,
+    };
+
+    let bind_ip = if peer_ip.is_ipv4() {
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+    } else {
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+    };
+    let socket = match UdpSocket::bind(SocketAddr::new(bind_ip, 0)).await {
+        Ok(socket) => socket,
+        Err(_) => return false,
+    };
+
+    let request = notify_rpc_call(random_xid(), notify_name, state);
+    let target = SocketAddr::new(peer_ip, port);
+    socket.send_to(&request, target).await.ok() == Some(request.len())
+}
+
+fn notify_rpc_call(xid: u32, notify_name: &str, state: u32) -> Vec<u8> {
+    let mut writer = XdrWriter::new();
+    writer.u32(xid);
+    writer.u32(0);
+    writer.u32(RPC_VERSION);
+    writer.u32(NSM_PROGRAM);
+    writer.u32(NSM_VERSION);
+    writer.u32(SM_NOTIFY);
+    writer.u32(AUTH_NONE);
+    writer.u32(0);
+    writer.u32(AUTH_NONE);
+    writer.u32(0);
+    writer
+        .string(notify_name)
+        .expect("validated NSM notify name");
+    writer.u32(state);
+    writer.into_bytes()
+}
+
+fn random_xid() -> u32 {
+    let mut bytes = [0u8; 4];
+    OsRng.fill_bytes(&mut bytes);
+    u32::from_be_bytes(bytes)
 }
 
 fn normalize_up_state(state: u32) -> u32 {
@@ -407,10 +479,30 @@ fn decode_my_id(reader: &mut XdrReader<'_>) -> Result<NsmMyId, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        rpc::{AUTH_NONE, RPC_VERSION},
-        xdr::XdrWriter,
-    };
+    use crate::xdr::XdrWriter;
+
+    #[tokio::test]
+    async fn reboot_notify_call_is_accepted_and_recorded() {
+        let service = NsmV1Service::new();
+        let peer_ip: IpAddr = "192.0.2.10".parse().unwrap();
+        let request = notify_rpc_call(77, "server.example", 5);
+
+        let response = dispatch_nsm1_rpc(&service, peer_ip, &request).await;
+        let mut reader = XdrReader::new(&response);
+        assert_eq!(reader.u32().unwrap(), 77);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+
+        let state = service.inner.lock().await;
+        assert_eq!(
+            state.notifications,
+            vec![NsmNotification {
+                client_ip: peer_ip,
+                mon_name: "server.example".to_owned(),
+                state: 5,
+            }]
+        );
+    }
 
     #[tokio::test]
     async fn configured_state_is_normalized_and_reported() {

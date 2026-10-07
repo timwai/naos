@@ -2,6 +2,7 @@ use std::{
     io,
     net::{IpAddr, SocketAddr},
     sync::Arc,
+    time::Duration,
 };
 
 use naos_core::nfs::{NfsAccessRepository, NfsBindingRepository, NfsRepositoryError};
@@ -50,6 +51,8 @@ pub struct NfsServer {
     nlm_service: NlmV4Service,
     nsm_service: NsmV1Service,
     nsm_notifications: mpsc::UnboundedReceiver<NsmNotification>,
+    restart_nsm_peers: Vec<IpAddr>,
+    nsm_notify_name: String,
     rpc_registrations: [RpcRegistration; 6],
     rpcbind_address: Option<SocketAddr>,
 }
@@ -120,7 +123,13 @@ impl NfsServer {
         let handle_records = repository.list_nfs_file_handles().await?;
         let handles = FileHandleTable::from_records(secret, handle_records);
         let restarted = repository.mark_nfs_lock_manager_started().await?;
+        let restart_nsm_peers = if restarted {
+            repository.list_nfs_nsm_peers().await?
+        } else {
+            Vec::new()
+        };
         let nsm_state = repository.advance_nfs_nsm_state().await?;
+        let nsm_notify_name = config.listen.to_string();
         let mount_repository: Arc<dyn NfsBindingRepository> = repository.clone();
         let nfs_access_repository: Arc<dyn NfsAccessRepository> = repository.clone();
         let nfs_identity_repository: Arc<dyn NfsBindingRepository> = repository.clone();
@@ -201,6 +210,8 @@ impl NfsServer {
             nlm_service,
             nsm_service,
             nsm_notifications,
+            restart_nsm_peers,
+            nsm_notify_name,
             rpc_registrations,
             rpcbind_address: config.rpcbind_address,
         })
@@ -223,6 +234,22 @@ impl NfsServer {
     }
 
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<(), NfsServerError> {
+        for peer_ip in std::mem::take(&mut self.restart_nsm_peers) {
+            let service = self.nsm_service.clone();
+            let notify_name = self.nsm_notify_name.clone();
+            tokio::spawn(async move {
+                for attempt in 0..5 {
+                    if service.notify_reboot_peer(peer_ip, &notify_name).await {
+                        return;
+                    }
+                    if attempt < 4 {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+                warn!(%peer_ip, "failed to notify NFS peer of NSM restart");
+            });
+        }
+
         let mut nlm_datagram = vec![0u8; 65_535];
         let mut nsm_datagram = vec![0u8; 65_535];
         loop {
