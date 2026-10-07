@@ -631,6 +631,7 @@ mod tests {
         .await
         .unwrap();
         let second_nfs = second.nfs_address().unwrap();
+        let second_nlm = second.nlm_address().unwrap();
         let (second_shutdown_tx, second_shutdown_rx) = watch::channel(false);
         let second_task = tokio::spawn(second.run(second_shutdown_rx));
 
@@ -638,6 +639,20 @@ mod tests {
         assert_rpc_success_prefix(&getattr_reply, 62);
         let mut reader = XdrReader::new(&getattr_reply[24..]);
         assert_eq!(reader.u32().unwrap(), 0);
+
+        let mut nlm_stream = TcpStream::connect(second_nlm).await.unwrap();
+        let fresh_lock = nlm_lock_call_with_reclaim(63, &child_handle, b"owner-a", 101, false);
+        write_record(&mut nlm_stream, &fresh_lock).await.unwrap();
+        let fresh_reply = read_record(&mut nlm_stream).await.unwrap().unwrap();
+        assert_eq!(
+            parse_nlm_status(&fresh_reply, 63),
+            crate::nlm4::NLM4_DENIED_GRACE_PERIOD
+        );
+
+        let reclaim_lock = nlm_lock_call_with_reclaim(64, &child_handle, b"owner-a", 101, true);
+        write_record(&mut nlm_stream, &reclaim_lock).await.unwrap();
+        let reclaim_reply = read_record(&mut nlm_stream).await.unwrap().unwrap();
+        assert_eq!(parse_nlm_status(&reclaim_reply, 64), crate::nlm4::NLM4_GRANTED);
 
         second_shutdown_tx.send(true).unwrap();
         second_task.await.unwrap().unwrap();
@@ -732,12 +747,22 @@ mod tests {
     }
 
     fn nlm_lock_call(xid: u32, file_handle: &[u8], owner: &[u8], svid: u32) -> Vec<u8> {
+        nlm_lock_call_with_reclaim(xid, file_handle, owner, svid, false)
+    }
+
+    fn nlm_lock_call_with_reclaim(
+        xid: u32,
+        file_handle: &[u8],
+        owner: &[u8],
+        svid: u32,
+        reclaim: bool,
+    ) -> Vec<u8> {
         let mut body = XdrWriter::new();
         body.opaque(&[1]).unwrap();
         body.u32(0);
         body.u32(1);
         encode_nlm_lock(&mut body, file_handle, owner, svid);
-        body.u32(0);
+        body.u32(u32::from(reclaim));
         body.u32(0);
         rpc_call(xid, NLM_PROGRAM, NLM_VERSION, 2, &body.into_bytes())
     }
