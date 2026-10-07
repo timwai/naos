@@ -295,6 +295,34 @@ pub trait NfsBindingRepository: Send + Sync {
         Ok(())
     }
 
+    async fn get_nfs_exclusive_create_verifier(
+        &self,
+        share_id: &str,
+        relative_path: &RelativePath,
+    ) -> Result<Option<[u8; 8]>, NfsRepositoryError> {
+        let _ = (share_id, relative_path);
+        Ok(None)
+    }
+
+    async fn set_nfs_exclusive_create_verifier(
+        &self,
+        share_id: &str,
+        relative_path: &RelativePath,
+        verifier: [u8; 8],
+    ) -> Result<(), NfsRepositoryError> {
+        let _ = (share_id, relative_path, verifier);
+        Ok(())
+    }
+
+    async fn clear_nfs_exclusive_create_verifier(
+        &self,
+        share_id: &str,
+        relative_path: &RelativePath,
+    ) -> Result<(), NfsRepositoryError> {
+        let _ = (share_id, relative_path);
+        Ok(())
+    }
+
     async fn mark_nfs_lock_manager_started(&self) -> Result<bool, NfsRepositoryError> {
         Ok(false)
     }
