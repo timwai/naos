@@ -14,8 +14,7 @@ use windows_sys::Win32::Security::{
         MakeSignature, QueryContextAttributesW, SECBUFFER_DATA, SECBUFFER_PADDING,
         SECBUFFER_STREAM, SECBUFFER_TOKEN, SECBUFFER_VERSION, SECPKG_ATTR_NATIVE_NAMES,
         SECPKG_ATTR_SIZES, SECPKG_CRED_INBOUND, SECQOP_WRAP_NO_ENCRYPT, SECURITY_NATIVE_DREP,
-        SecBuffer, SecBufferDesc, SecPkgContext_NativeNamesW, SecPkgContext_Sizes,
-        VerifySignature,
+        SecBuffer, SecBufferDesc, SecPkgContext_NativeNamesW, SecPkgContext_Sizes, VerifySignature,
     },
     Credentials::SecHandle,
 };
@@ -423,8 +422,7 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
             return Err(RpcSecGssSecurityError::ProtectionFailure);
         }
 
-        copy_sec_buffer_view(&stream, &buffers[1])
-            .ok_or(RpcSecGssSecurityError::ProtectionFailure)
+        copy_sec_buffer_view(&stream, &buffers[1]).ok_or(RpcSecGssSecurityError::ProtectionFailure)
     }
 
     fn wrap(&self, plaintext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
