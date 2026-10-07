@@ -65,6 +65,22 @@ impl NfsBindingRepository for Store {
         Ok(count > 0)
     }
 
+    async fn resolve_nfs_krb_principal(
+        &self,
+        principal: &str,
+    ) -> Result<Option<String>, NfsRepositoryError> {
+        sqlx::query_scalar::<_, String>(
+            "SELECT mapping.user_id
+             FROM nfs_krb_principals AS mapping
+             JOIN users AS user ON user.id = mapping.user_id
+             WHERE mapping.principal = ? AND user.enabled = 1",
+        )
+        .bind(principal)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(store_error)
+    }
+
     async fn list_nfs_bindings(
         &self,
         share_id: &str,
@@ -417,6 +433,70 @@ mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::*;
+
+    #[tokio::test]
+    async fn nfs_krb_principal_resolves_only_enabled_users() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE nfs_krb_principals (
+                id TEXT PRIMARY KEY,
+                principal TEXT NOT NULL UNIQUE,
+                user_id TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO users (id, enabled) VALUES ('usr_enabled', 1), ('usr_disabled', 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO nfs_krb_principals (id, principal, user_id)
+             VALUES
+                ('krb_enabled', 'alice@EXAMPLE.COM', 'usr_enabled'),
+                ('krb_disabled', 'bob@EXAMPLE.COM', 'usr_disabled')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let store = Store { pool };
+
+        assert_eq!(
+            store
+                .resolve_nfs_krb_principal("alice@EXAMPLE.COM")
+                .await
+                .unwrap(),
+            Some("usr_enabled".to_owned())
+        );
+        assert_eq!(
+            store
+                .resolve_nfs_krb_principal("bob@EXAMPLE.COM")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store
+                .resolve_nfs_krb_principal("missing@EXAMPLE.COM")
+                .await
+                .unwrap(),
+            None
+        );
+    }
 
     #[tokio::test]
     async fn nfs_handle_secret_is_created_once_and_reused() {

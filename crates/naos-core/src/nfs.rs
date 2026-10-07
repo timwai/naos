@@ -260,6 +260,14 @@ pub trait NfsBindingRepository: Send + Sync {
 
     async fn nfs_user_exists(&self, user_id: &str) -> Result<bool, NfsRepositoryError>;
 
+    async fn resolve_nfs_krb_principal(
+        &self,
+        principal: &str,
+    ) -> Result<Option<String>, NfsRepositoryError> {
+        let _ = principal;
+        Ok(None)
+    }
+
     async fn list_nfs_bindings(
         &self,
         share_id: &str,

@@ -5,6 +5,7 @@ pub mod nlm4;
 pub mod nsm1;
 pub mod rpc;
 pub mod rpcbind;
+pub mod rpcsec_gss;
 pub mod server;
 pub mod transport;
 pub mod xdr;
