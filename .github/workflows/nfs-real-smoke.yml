@@ -38,6 +38,11 @@ on:
         required: false
         default: "35"
         type: string
+      remote_windows_nlm:
+        description: "Also run the dedicated Windows Client for NFS remote NLM/reclaim smoke"
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths:
@@ -50,6 +55,7 @@ on:
       - "scripts/ci/nfs-real-smoke.sh"
       - "scripts/ci/nfs-remote-lock-smoke.sh"
       - "scripts/ci/windows-nfs-real-smoke.ps1"
+      - "scripts/ci/windows-nfs-remote-lock-smoke.ps1"
       - ".github/workflows/nfs-real-smoke.yml"
 
 jobs:
@@ -88,6 +94,9 @@ jobs:
 
   remote-macos-nlm-client:
     if: github.event_name == 'workflow_dispatch' && inputs.remote_nlm_host != ''
+    concurrency:
+      group: nfs-remote-lock-${{ inputs.remote_nlm_host }}
+      cancel-in-progress: false
     runs-on: [self-hosted, macos, nfs]
     steps:
       - uses: actions/checkout@v4
@@ -118,6 +127,33 @@ jobs:
             NAOS_NFS_REMOTE_RESTART_GRACE_WAIT="$NAOS_NFS_REMOTE_RESTART_GRACE_WAIT" \
             NAOS_NFS_REMOTE_NLM_PROBE="$NAOS_NFS_REMOTE_NLM_PROBE" \
             bash scripts/ci/nfs-remote-lock-smoke.sh
+
+  remote-windows-nlm-client:
+    if: github.event_name == 'workflow_dispatch' && inputs.remote_nlm_host != '' && inputs.remote_windows_nlm
+    concurrency:
+      group: nfs-remote-lock-${{ inputs.remote_nlm_host }}
+      cancel-in-progress: false
+    runs-on: [self-hosted, windows, nfs]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build direct NLM lock-state probe
+        run: cargo build -p naos-nfs --example nfs-nlm-probe
+      - name: Run remote Windows NLMv4 lock smoke test
+        env:
+          NAOS_NFS_REMOTE_HOST: ${{ inputs.remote_nlm_host }}
+          NAOS_NFS_REMOTE_EXPORT: ${{ inputs.remote_nlm_export }}
+          NAOS_NFS_REMOTE_NFS_PORT: ${{ inputs.remote_nfs_port }}
+          NAOS_NFS_REMOTE_MOUNT_PORT: ${{ inputs.remote_mount_port }}
+          NAOS_NFS_REMOTE_RESTART_TARGET: ${{ inputs.remote_nlm_restart_target }}
+          NAOS_NFS_REMOTE_RESTART_SERVICE: ${{ inputs.remote_nlm_restart_service }}
+          NAOS_NFS_REMOTE_RESTART_GRACE_WAIT: ${{ inputs.remote_nlm_restart_grace_wait }}
+          NAOS_NFS_REMOTE_NLM_PROBE: ${{ github.workspace }}\target\debug\examples\nfs-nlm-probe.exe
+        run: .\scripts\ci\windows-nfs-remote-lock-smoke.ps1
 
   windows-nfs-client:
     if: github.event_name == 'workflow_dispatch'
