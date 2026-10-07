@@ -166,8 +166,14 @@ holder = subprocess.Popen(
     text=True,
 )
 try:
-    if holder.stdout.readline().strip() != "locked":
-        raise RuntimeError("first process did not acquire the NFS record lock")
+    first_line = holder.stdout.readline().strip()
+    if first_line != "locked":
+        return_code = holder.poll()
+        stderr = holder.stderr.read() if return_code is not None else ""
+        raise RuntimeError(
+            "first process did not acquire the NFS record lock "
+            f"(returncode={return_code}, stdout={first_line!r}, stderr={stderr!r})"
+        )
 
     with open(path, "r+") as contender:
         try:
