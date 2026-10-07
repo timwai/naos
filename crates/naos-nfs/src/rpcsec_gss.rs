@@ -12,13 +12,12 @@ use crate::{
     rpc::{
         AUTH_BADCRED, AUTH_BADVERF, AUTH_NONE, AUTH_REJECTEDCRED, GSS_S_COMPLETE,
         GSS_S_CONTINUE_NEEDED, GSS_S_NO_CONTEXT, MAX_AUTH_BYTES, MAX_RPC_RECORD_BYTES,
-        MSG_ACCEPTED, PROG_MISMATCH,
-        REPLY, RPCSEC_GSS, RPCSEC_GSS_CONTINUE_INIT, RPCSEC_GSS_CREDPROBLEM, RPCSEC_GSS_CTXPROBLEM,
-        RPCSEC_GSS_DATA, RPCSEC_GSS_DESTROY, RPCSEC_GSS_INIT, RPCSEC_GSS_MAXSEQ,
-        RPCSEC_GSS_SVC_INTEGRITY, RPCSEC_GSS_SVC_NONE, RPCSEC_GSS_SVC_PRIVACY,
-        RPCSEC_GSS_VERSION_1, RpcCall, RpcCredential, RpcSecGssBodyError, RpcSecGssInitResult,
-        RpcSecGssSequenceDecision, RpcSecGssSequenceWindow, RpcVerifier, SUCCESS,
-        accepted_garbage_args, accepted_reply_with_verifier, accepted_success,
+        MSG_ACCEPTED, PROG_MISMATCH, REPLY, RPCSEC_GSS, RPCSEC_GSS_CONTINUE_INIT,
+        RPCSEC_GSS_CREDPROBLEM, RPCSEC_GSS_CTXPROBLEM, RPCSEC_GSS_DATA, RPCSEC_GSS_DESTROY,
+        RPCSEC_GSS_INIT, RPCSEC_GSS_MAXSEQ, RPCSEC_GSS_SVC_INTEGRITY, RPCSEC_GSS_SVC_NONE,
+        RPCSEC_GSS_SVC_PRIVACY, RPCSEC_GSS_VERSION_1, RpcCall, RpcCredential, RpcSecGssBodyError,
+        RpcSecGssInitResult, RpcSecGssSequenceDecision, RpcSecGssSequenceWindow, RpcVerifier,
+        SUCCESS, accepted_garbage_args, accepted_reply_with_verifier, accepted_success,
         accepted_success_with_verifier, accepted_system_error, decode_rpcsec_gss_init_token,
         decode_rpcsec_gss_integrity_body, decode_rpcsec_gss_unwrapped_body, denied_auth_error,
         encode_rpcsec_gss_init_result, encode_rpcsec_gss_integrity_body,
@@ -1014,8 +1013,7 @@ mod tests {
 
     #[test]
     fn stateful_acceptor_tracks_continue_context_and_completes_with_same_handle() {
-        let acceptor =
-            StatefulRpcSecGssAcceptor::new(Arc::new(FakeHandshakeProvider), 16).unwrap();
+        let acceptor = StatefulRpcSecGssAcceptor::new(Arc::new(FakeHandshakeProvider), 16).unwrap();
 
         let first = acceptor
             .accept(RpcSecGssAcceptRequest::Init {
@@ -1104,8 +1102,7 @@ mod tests {
             Err(StatefulRpcSecGssAcceptorConfigError::InvalidSequenceWindow)
         ));
 
-        let acceptor =
-            StatefulRpcSecGssAcceptor::new(Arc::new(FakeHandshakeProvider), 8).unwrap();
+        let acceptor = StatefulRpcSecGssAcceptor::new(Arc::new(FakeHandshakeProvider), 8).unwrap();
         let failed = acceptor
             .accept(RpcSecGssAcceptRequest::Init {
                 token: b"bad-token".to_vec(),
