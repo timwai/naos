@@ -15,9 +15,7 @@ use naos_core::{
 };
 use naos_nfs::server::{NfsServer, NfsServerConfig};
 #[cfg(all(unix, feature = "system-gss"))]
-use naos_nfs::{
-    rpcsec_gss::StatefulRpcSecGssAcceptor, system_gss::SystemGssHandshakeProvider,
-};
+use naos_nfs::{rpcsec_gss::StatefulRpcSecGssAcceptor, system_gss::SystemGssHandshakeProvider};
 use naos_platform::SmbDoctor;
 use naos_store::Store;
 use naos_webdav::WebDavState;
@@ -219,9 +217,7 @@ async fn bind_nfs_server(
         #[cfg(not(all(unix, feature = "system-gss")))]
         {
             let _ = (store, config, service_principal);
-            anyhow::bail!(
-                "NFS Kerberos requires a Unix naosd build with the system-gss feature"
-            );
+            anyhow::bail!("NFS Kerberos requires a Unix naosd build with the system-gss feature");
         }
     }
 
