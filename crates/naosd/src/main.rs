@@ -21,7 +21,7 @@ use naos_core::{
     auth::{AuthConfig, AuthService},
     doctor::SmbDoctorProbe,
     files::FileService,
-    group::GroupService,
+    group::{GroupMutationService, GroupService},
     nfs::NfsBindingService,
     operation::OperationService,
     reconcile::Reconciler,
@@ -43,6 +43,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 mod acl_reconcile;
+mod group_reconcile;
 mod share_reconcile;
 mod user_reconcile;
 
@@ -54,6 +55,7 @@ const WEB_JAVASCRIPT: &[u8] = include_bytes!("../../../web/dist/assets/app.js");
 const WEB_STYLESHEET: &[u8] = include_bytes!("../../../web/dist/assets/app.css");
 
 use acl_reconcile::PlatformAclReconcileDriverFactory;
+use group_reconcile::PlatformGroupReconcileDriverFactory;
 use share_reconcile::PlatformShareReconcileDriverFactory;
 use user_reconcile::PlatformUserReconcileDriverFactory;
 
@@ -145,6 +147,12 @@ async fn main() -> anyhow::Result<()> {
     let files = Arc::new(FileService::new(store.clone()));
     let groups = Arc::new(GroupService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
+    let group_mutations = Arc::new(GroupMutationService::new(
+        store.clone(),
+        operations.clone(),
+    ));
+    let group_reconcile_factory =
+        Arc::new(PlatformGroupReconcileDriverFactory::new(store.clone()));
     let acl_mutations = Arc::new(AclMutationService::new(store.clone(), operations.clone()));
     let acl_reconcile_factory = Arc::new(PlatformAclReconcileDriverFactory::new(store.clone()));
     let share_mutations = Arc::new(ShareMutationService::new(
@@ -175,6 +183,8 @@ async fn main() -> anyhow::Result<()> {
         audit,
         files,
         groups,
+        group_mutations,
+        group_reconcile_factory,
         operations,
         share_mutations,
         share_reconcile_factory,
