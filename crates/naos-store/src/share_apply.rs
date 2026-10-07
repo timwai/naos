@@ -145,17 +145,11 @@ fn share_summary_from_row(
         id: row.try_get("id").map_err(catalog_store_error)?,
         name: row.try_get("name").map_err(catalog_store_error)?,
         path: row.try_get("path").map_err(catalog_store_error)?,
-        canonical_path: row
-            .try_get("canonical_path")
-            .map_err(catalog_store_error)?,
+        canonical_path: row.try_get("canonical_path").map_err(catalog_store_error)?,
         comment: row.try_get("comment").map_err(catalog_store_error)?,
         enabled: row.try_get("enabled").map_err(catalog_store_error)?,
-        smb_enabled: row
-            .try_get("smb_enabled")
-            .map_err(catalog_store_error)?,
-        webdav_enabled: row
-            .try_get("webdav_enabled")
-            .map_err(catalog_store_error)?,
+        smb_enabled: row.try_get("smb_enabled").map_err(catalog_store_error)?,
+        webdav_enabled: row.try_get("webdav_enabled").map_err(catalog_store_error)?,
         nfs_enabled: row.try_get("nfs_enabled").map_err(catalog_store_error)?,
         generation: u64::try_from(generation)
             .map_err(|_| ShareCatalogRepositoryError::Unavailable)?,
