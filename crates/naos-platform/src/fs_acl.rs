@@ -590,7 +590,7 @@ fn macos_subject_indexes(output: &str, subject: &FsAclSubject) -> Vec<usize> {
 
 #[cfg(any(target_os = "windows", test))]
 fn windows_specs(target: &Path, entry: &EffectiveAclEntry) -> Vec<CommandSpec> {
-    let account = entry.account.as_str();
+    let subject = entry.subject.name();
     let path = path_text(target);
     let inheritance = if entry.inherit { "(OI)(CI)" } else { "" };
     let mut specs = vec![
@@ -602,7 +602,7 @@ fn windows_specs(target: &Path, entry: &EffectiveAclEntry) -> Vec<CommandSpec> {
         CommandSpec::new("icacls.exe").args([
             path.clone(),
             "/remove:d".to_owned(),
-            account.to_owned(),
+            subject.to_owned(),
         ]),
     ];
 
