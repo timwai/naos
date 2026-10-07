@@ -1687,7 +1687,7 @@ NFSv3 数据面当前实现约束：
 - 当前实现的 NFSv3 procedure 至少包含 `NULL/GETATTR/SETATTR/LOOKUP/ACCESS/READLINK/READ/WRITE/CREATE/MKDIR/SYMLINK/REMOVE/RMDIR/RENAME/LINK/READDIR/READDIRPLUS/FSSTAT/FSINFO/PATHCONF/COMMIT`；其中 `SYMLINK` 创建当前仅在 Unix 平台启用，Windows 返回 `NFS3ERR_NOTSUPP`，避免在 NFSv3 不提供目标类型信息时错误选择 Windows file/dir symlink API；
 - NLMv4（program `100021` / version `4`）已提供 TCP+UDP listener；同步 procedure 覆盖 `NULL/TEST/LOCK/CANCEL/UNLOCK/NM_LOCK/FREE_ALL`，并已支持 macOS/BSD 常用的 `TEST_MSG/LOCK_MSG/CANCEL_MSG/UNLOCK_MSG → *_RES` 异步结果回调；锁表为进程内状态，支持共享/排他锁、64-bit byte range、部分解锁，并在 Unix 以 filesystem identity 统一 hard-link/rename 后的同一文件锁身份；
 - NSMv1/status monitor（program `100024` / version `1`）已提供 TCP+UDP 兼容端点，覆盖 `NULL/STAT/MON/UNMON/UNMON_ALL/SIMU_CRASH/NOTIFY` 的基础 XDR/RPC 交互，返回当前进程为 up；该层首先用于满足 NFSv3 远程锁客户端的 rpc.statd 发现与 monitor 握手；
-- 当前阻塞锁冲突仍返回 `NLM4_DENIED`，尚未实现 `NLM4_BLOCKED + NLMPROC4_GRANTED` grant callback、真正的 NSM crash notification/持久 monitor state 与完整 crash-reclaim grace period，因此此阶段不声明完整远程阻塞锁/崩溃恢复语义；同机 loopback 会让 NFS server 与 macOS client lockd/statd 共用 port 111/RPC 注册空间，不能作为远程锁 E2E 的最终判定，真实锁验证必须使用分离 client/server 主机。
+- 阻塞 `LOCK(block=true)` 冲突现在返回 `NLM4_BLOCKED` 并进入等待队列；持有锁通过 `UNLOCK/FREE_ALL` 释放后，服务端按冲突顺序挑选可授予请求，预留锁后发送同步 `NLMPROC4_GRANTED` callback，只有客户端回复 `NLM4_GRANTED` 才保留锁，回调失败/拒绝则回滚预留；`CANCEL` 会删除对应等待请求。真正的 NSM crash notification/持久 monitor state 与完整 crash-reclaim grace period 仍未实现，因此此阶段仍不声明崩溃恢复语义；同机 loopback 会让 NFS server 与 macOS client lockd/statd 共用 port 111/RPC 注册空间，不能作为远程锁 E2E 的最终判定，真实锁验证必须使用分离 client/server 主机。
 - MOUNT v3 支持 `NULL/MNT/DUMP/UMNT/UMNTALL/EXPORT`；
 - MOUNT 与 NFSv3 共用同一 file-handle table，rename 后已签发 handle 保持有效，delete 后对应 handle 变为 stale；
 - 当前 file-handle path registry 为进程内状态；`naosd` 重启后旧 handle 视为 stale，v1 客户端需要重新 mount。若未来要求 daemon restart 后 handle 持久稳定，需单独设计持久 object identity/handle index，而不能把绝对路径直接暴露进 handle；
@@ -2344,7 +2344,7 @@ package
 | 8 | **SMB macOS provider adapter** | 先检测系统 File Sharing；无端口抢占；支持路径明确 |
 | 9 | SMB Doctor / conflict UX | UI 展示 provider、445 owner、冲突原因和可执行修复建议 |
 | 10 | WebDAV | ACL 一致性矩阵通过 |
-| 11 | NFS L1/L2 | 基础数据面 + in-process TCP smoke 已完成；NLMv4 同步 range-lock、异步 *_MSG/*_RES callback、RPCBIND v4/v3 回调发现与 NSMv1 兼容端点已接入；分离主机的 macOS 远程 NLM smoke harness 已加入，后续仍需 NLM4_BLOCKED/GRANTED 与 crash-reclaim；Linux 真实 mount smoke 已有，macOS 基础真实内核客户端已自动化通过，Windows smoke harness 已接入但仍需专用 runner 真机验证 |
+| 11 | NFS L1/L2 | 基础数据面 + in-process TCP smoke 已完成；NLMv4 同步 range-lock、异步 *_MSG/*_RES callback、NLM4_BLOCKED→GRANTED grant callback、CANCEL 等待锁、RPCBIND v4/v3 回调发现与 NSMv1 兼容端点已接入；分离主机的 macOS 远程 NLM smoke harness 已加入，后续重点是 NSM crash notification / grace / reclaim；Linux 真实 mount smoke 已有，macOS 基础真实内核客户端已自动化通过，Windows smoke harness 已接入但仍需专用 runner 真机验证 |
 | 12 | NFS L3（feature） | Linux/macOS krb5 测试通过 |
 | 13 | React Web UI | 原型核心页面全部 API 化 |
 | 14 | 审计/Doctor/Verify | 可检索、可导出、漂移可发现 |
