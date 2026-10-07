@@ -154,7 +154,10 @@ async fn main() -> anyhow::Result<()> {
     let group_reconcile_factory =
         Arc::new(PlatformGroupReconcileDriverFactory::new(store.clone()));
     let acl_mutations = Arc::new(AclMutationService::new(store.clone(), operations.clone()));
-    let acl_reconcile_factory = Arc::new(PlatformAclReconcileDriverFactory::new(store.clone()));
+    let acl_reconcile_factory = Arc::new(PlatformAclReconcileDriverFactory::new(
+        store.clone(),
+        store.clone(),
+    ));
     let share_mutations = Arc::new(ShareMutationService::new(
         store.clone(),
         operations.clone(),
