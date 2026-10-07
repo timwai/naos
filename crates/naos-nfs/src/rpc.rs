@@ -5,6 +5,15 @@ use crate::xdr::{XdrError, XdrReader, XdrWriter};
 pub const RPC_VERSION: u32 = 2;
 pub const AUTH_NONE: u32 = 0;
 pub const AUTH_SYS: u32 = 1;
+pub const RPCSEC_GSS: u32 = 6;
+pub const RPCSEC_GSS_VERSION_1: u32 = 1;
+pub const RPCSEC_GSS_DATA: u32 = 0;
+pub const RPCSEC_GSS_INIT: u32 = 1;
+pub const RPCSEC_GSS_CONTINUE_INIT: u32 = 2;
+pub const RPCSEC_GSS_DESTROY: u32 = 3;
+pub const RPCSEC_GSS_SVC_NONE: u32 = 1;
+pub const RPCSEC_GSS_SVC_INTEGRITY: u32 = 2;
+pub const RPCSEC_GSS_SVC_PRIVACY: u32 = 3;
 pub const MAX_AUTH_BYTES: usize = 400;
 pub const MAX_RPC_RECORD_BYTES: usize = 16 * 1024 * 1024;
 
@@ -30,17 +39,33 @@ pub struct AuthSysCredential {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpcSecGssCredential {
+    pub version: u32,
+    pub gss_proc: u32,
+    pub seq_num: u32,
+    pub service: u32,
+    pub handle: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RpcCredential {
     AuthNone,
     AuthSys(AuthSysCredential),
+    RpcSecGss(RpcSecGssCredential),
     Unsupported { flavor: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpcVerifier {
+    pub flavor: u32,
+    pub body: Vec<u8>,
 }
 
 impl RpcCredential {
     pub const fn uid(&self) -> Option<u32> {
         match self {
             Self::AuthSys(credential) => Some(credential.uid),
-            Self::AuthNone | Self::Unsupported { .. } => None,
+            Self::AuthNone | Self::RpcSecGss(_) | Self::Unsupported { .. } => None,
         }
     }
 
@@ -48,6 +73,7 @@ impl RpcCredential {
         match self {
             Self::AuthNone => AUTH_NONE,
             Self::AuthSys(_) => AUTH_SYS,
+            Self::RpcSecGss(_) => RPCSEC_GSS,
             Self::Unsupported { flavor } => *flavor,
         }
     }
@@ -60,6 +86,8 @@ pub struct RpcCall {
     pub version: u32,
     pub procedure: u32,
     pub credential: RpcCredential,
+    pub verifier: RpcVerifier,
+    pub header_through_credential: Vec<u8>,
     pub body: Vec<u8>,
 }
 
@@ -94,7 +122,8 @@ pub fn decode_call(input: &[u8]) -> Result<RpcCall, RpcDecodeError> {
     let version = reader.u32()?;
     let procedure = reader.u32()?;
     let credential = decode_credential(&mut reader, xid)?;
-    decode_opaque_auth(&mut reader)?;
+    let header_through_credential = input[..reader.position()].to_vec();
+    let verifier = decode_verifier(&mut reader)?;
     let body = reader.remaining().to_vec();
 
     Ok(RpcCall {
@@ -103,6 +132,8 @@ pub fn decode_call(input: &[u8]) -> Result<RpcCall, RpcDecodeError> {
         version,
         procedure,
         credential,
+        verifier,
+        header_through_credential,
         body,
     })
 }
@@ -120,14 +151,18 @@ fn decode_credential(
         AUTH_SYS => decode_auth_sys(&body)
             .map(RpcCredential::AuthSys)
             .map_err(|_| RpcDecodeError::MalformedCredential { xid }),
+        RPCSEC_GSS => decode_rpcsec_gss(&body)
+            .map(RpcCredential::RpcSecGss)
+            .map_err(|_| RpcDecodeError::MalformedCredential { xid }),
         _ => Ok(RpcCredential::Unsupported { flavor }),
     }
 }
 
-fn decode_opaque_auth(reader: &mut XdrReader<'_>) -> Result<(), RpcDecodeError> {
-    reader.u32()?;
-    reader.opaque(MAX_AUTH_BYTES)?;
-    Ok(())
+fn decode_verifier(reader: &mut XdrReader<'_>) -> Result<RpcVerifier, RpcDecodeError> {
+    Ok(RpcVerifier {
+        flavor: reader.u32()?,
+        body: reader.opaque(MAX_AUTH_BYTES)?,
+    })
 }
 
 fn decode_auth_sys(body: &[u8]) -> Result<AuthSysCredential, XdrError> {
@@ -138,6 +173,19 @@ fn decode_auth_sys(body: &[u8]) -> Result<AuthSysCredential, XdrError> {
         uid: reader.u32()?,
         gid: reader.u32()?,
         auxiliary_gids: reader.u32_array(16)?,
+    };
+    reader.finish()?;
+    Ok(credential)
+}
+
+fn decode_rpcsec_gss(body: &[u8]) -> Result<RpcSecGssCredential, XdrError> {
+    let mut reader = XdrReader::new(body);
+    let credential = RpcSecGssCredential {
+        version: reader.u32()?,
+        gss_proc: reader.u32()?,
+        seq_num: reader.u32()?,
+        service: reader.u32()?,
+        handle: reader.opaque(MAX_AUTH_BYTES)?,
     };
     reader.finish()?;
     Ok(credential)
@@ -283,7 +331,84 @@ mod tests {
         assert_eq!(call.version, 3);
         assert_eq!(call.procedure, 1);
         assert_eq!(call.credential.uid(), Some(1000));
+        assert_eq!(
+            call.verifier,
+            RpcVerifier {
+                flavor: AUTH_NONE,
+                body: Vec::new(),
+            }
+        );
+        assert!(!call.header_through_credential.is_empty());
         assert!(!call.body.is_empty());
+    }
+
+    #[test]
+    fn decodes_rpcsec_gss_credential_and_preserves_verifier_header() {
+        let mut gss = XdrWriter::new();
+        gss.u32(RPCSEC_GSS_VERSION_1);
+        gss.u32(RPCSEC_GSS_DATA);
+        gss.u32(17);
+        gss.u32(RPCSEC_GSS_SVC_INTEGRITY);
+        gss.opaque(b"context-handle").unwrap();
+
+        let mut header = XdrWriter::new();
+        header.u32(99);
+        header.u32(CALL);
+        header.u32(RPC_VERSION);
+        header.u32(100003);
+        header.u32(3);
+        header.u32(1);
+        header.u32(RPCSEC_GSS);
+        header.opaque(&gss.into_bytes()).unwrap();
+        let expected_header = header.into_bytes();
+
+        let mut request = expected_header.clone();
+        let mut tail = XdrWriter::new();
+        tail.u32(RPCSEC_GSS);
+        tail.opaque(b"header-mic").unwrap();
+        tail.u32(1234);
+        request.extend_from_slice(&tail.into_bytes());
+
+        let call = decode_call(&request).unwrap();
+        assert_eq!(
+            call.credential,
+            RpcCredential::RpcSecGss(RpcSecGssCredential {
+                version: RPCSEC_GSS_VERSION_1,
+                gss_proc: RPCSEC_GSS_DATA,
+                seq_num: 17,
+                service: RPCSEC_GSS_SVC_INTEGRITY,
+                handle: b"context-handle".to_vec(),
+            })
+        );
+        assert_eq!(
+            call.verifier,
+            RpcVerifier {
+                flavor: RPCSEC_GSS,
+                body: b"header-mic".to_vec(),
+            }
+        );
+        assert_eq!(call.header_through_credential, expected_header);
+        assert_eq!(call.body, 1234u32.to_be_bytes());
+    }
+
+    #[test]
+    fn rejects_malformed_rpcsec_gss_credential() {
+        let mut writer = XdrWriter::new();
+        writer.u32(100);
+        writer.u32(CALL);
+        writer.u32(RPC_VERSION);
+        writer.u32(100003);
+        writer.u32(3);
+        writer.u32(0);
+        writer.u32(RPCSEC_GSS);
+        writer.opaque(&[0, 0, 0, 1]).unwrap();
+        writer.u32(AUTH_NONE);
+        writer.opaque(&[]).unwrap();
+
+        assert_eq!(
+            decode_call(&writer.into_bytes()),
+            Err(RpcDecodeError::MalformedCredential { xid: 100 })
+        );
     }
 
     #[test]
