@@ -4,7 +4,10 @@ use std::{
 };
 
 use hmac::{Hmac, Mac};
-use naos_core::{nfs::NfsExport, path::RelativePath};
+use naos_core::{
+    nfs::{NFS_HANDLE_NONCE_BYTES, NfsExport, NfsFileHandleRecord},
+    path::RelativePath,
+};
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -12,7 +15,7 @@ use thiserror::Error;
 
 const HANDLE_VERSION: u8 = 1;
 const SHARE_HASH_BYTES: usize = 16;
-const NONCE_BYTES: usize = 8;
+const NONCE_BYTES: usize = NFS_HANDLE_NONCE_BYTES;
 const TAG_BYTES: usize = 16;
 const PAYLOAD_BYTES: usize = 1 + SHARE_HASH_BYTES + 8 + NONCE_BYTES;
 const HANDLE_BYTES: usize = PAYLOAD_BYTES + TAG_BYTES;
@@ -34,6 +37,18 @@ pub struct FileHandleTable {
 struct HandleTarget {
     share_id: String,
     relative_path: RelativePath,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileHandleChanges {
+    pub upserts: Vec<NfsFileHandleRecord>,
+    pub deletes: Vec<[u8; NFS_HANDLE_NONCE_BYTES]>,
+}
+
+impl FileHandleChanges {
+    pub fn is_empty(&self) -> bool {
+        self.upserts.is_empty() && self.deletes.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +84,10 @@ impl FileHandleCodec {
     pub fn issue(&self, export: &NfsExport) -> Vec<u8> {
         let mut nonce = [0u8; NONCE_BYTES];
         OsRng.fill_bytes(&mut nonce);
+        self.issue_with_nonce(export, nonce)
+    }
 
+    fn issue_with_nonce(&self, export: &NfsExport, nonce: [u8; NONCE_BYTES]) -> Vec<u8> {
         let mut payload = Vec::with_capacity(PAYLOAD_BYTES);
         payload.push(HANDLE_VERSION);
         payload.extend_from_slice(&share_hash(&export.id));
@@ -131,9 +149,25 @@ impl FileHandleCodec {
 
 impl FileHandleTable {
     pub fn new(secret: [u8; 32]) -> Self {
+        Self::from_records(secret, Vec::new())
+    }
+
+    pub fn from_records(secret: [u8; 32], records: Vec<NfsFileHandleRecord>) -> Self {
+        let entries = records
+            .into_iter()
+            .map(|record| {
+                (
+                    record.nonce,
+                    HandleTarget {
+                        share_id: record.share_id,
+                        relative_path: record.relative_path,
+                    },
+                )
+            })
+            .collect();
         Self {
             codec: FileHandleCodec::new(secret),
-            entries: Arc::new(RwLock::new(HashMap::new())),
+            entries: Arc::new(RwLock::new(entries)),
         }
     }
 
@@ -141,11 +175,32 @@ impl FileHandleTable {
         self.issue(export, &RelativePath::root())
     }
 
+    pub fn issue_root_with_record(
+        &self,
+        export: &NfsExport,
+    ) -> (Vec<u8>, Option<NfsFileHandleRecord>) {
+        self.issue_with_record(export, &RelativePath::root())
+    }
+
     pub fn issue(&self, export: &NfsExport, relative_path: &RelativePath) -> Vec<u8> {
+        self.issue_with_record(export, relative_path).0
+    }
+
+    pub fn issue_with_record(
+        &self,
+        export: &NfsExport,
+        relative_path: &RelativePath,
+    ) -> (Vec<u8>, Option<NfsFileHandleRecord>) {
         loop {
+            let mut entries = self.entries.write().expect("file handle table lock");
+            if let Some((&nonce, _)) = entries.iter().find(|(_, target)| {
+                target.share_id == export.id && target.relative_path == *relative_path
+            }) {
+                return (self.codec.issue_with_nonce(export, nonce), None);
+            }
+
             let handle = self.codec.issue(export);
             let parsed = parse_handle(&handle).expect("newly issued handle is valid");
-            let mut entries = self.entries.write().expect("file handle table lock");
             if entries.contains_key(&parsed.nonce) {
                 continue;
             }
@@ -156,7 +211,14 @@ impl FileHandleTable {
                     relative_path: relative_path.clone(),
                 },
             );
-            return handle;
+            return (
+                handle,
+                Some(NfsFileHandleRecord {
+                    nonce: parsed.nonce,
+                    share_id: export.id.clone(),
+                    relative_path: relative_path.clone(),
+                }),
+            );
         }
     }
 
@@ -192,41 +254,61 @@ impl FileHandleTable {
         share_id: &str,
         source: &RelativePath,
         target: &RelativePath,
-    ) -> Result<(), FileHandleError> {
+    ) -> Result<FileHandleChanges, FileHandleError> {
         if source == target {
-            return Ok(());
+            return Ok(FileHandleChanges::default());
         }
 
         let mut entries = self.entries.write().map_err(|_| FileHandleError::Invalid)?;
-        entries.retain(|_, entry| {
-            entry.share_id != share_id
-                || (entry.relative_path != *target && !target.is_ancestor_of(&entry.relative_path))
+        let mut changes = FileHandleChanges::default();
+        entries.retain(|nonce, entry| {
+            let replaced = entry.share_id == share_id
+                && (entry.relative_path == *target || target.is_ancestor_of(&entry.relative_path));
+            if replaced {
+                changes.deletes.push(*nonce);
+            }
+            !replaced
         });
 
-        for entry in entries.values_mut() {
+        for (nonce, entry) in entries.iter_mut() {
             if entry.share_id != share_id {
                 continue;
             }
-            if entry.relative_path == *source {
-                entry.relative_path = target.clone();
+            let rewritten = if entry.relative_path == *source {
+                Some(target.clone())
             } else if source.is_ancestor_of(&entry.relative_path) {
-                entry.relative_path = rewrite_descendant(source, target, &entry.relative_path)?;
+                Some(rewrite_descendant(source, target, &entry.relative_path)?)
+            } else {
+                None
+            };
+            if let Some(rewritten) = rewritten {
+                entry.relative_path = rewritten.clone();
+                changes.upserts.push(NfsFileHandleRecord {
+                    nonce: *nonce,
+                    share_id: share_id.to_owned(),
+                    relative_path: rewritten,
+                });
             }
         }
-        Ok(())
+        Ok(changes)
     }
 
     pub fn invalidate_subtree(
         &self,
         share_id: &str,
         path: &RelativePath,
-    ) -> Result<(), FileHandleError> {
+    ) -> Result<FileHandleChanges, FileHandleError> {
         let mut entries = self.entries.write().map_err(|_| FileHandleError::Invalid)?;
-        entries.retain(|_, entry| {
-            entry.share_id != share_id
-                || (entry.relative_path != *path && !path.is_ancestor_of(&entry.relative_path))
+        let mut changes = FileHandleChanges::default();
+        entries.retain(|nonce, entry| {
+            let invalidated = entry.share_id == share_id
+                && (entry.relative_path == *path || path.is_ancestor_of(&entry.relative_path));
+            if invalidated {
+                changes.deletes.push(*nonce);
+            }
+            !invalidated
         });
-        Ok(())
+        Ok(changes)
     }
 }
 
@@ -322,6 +404,27 @@ mod tests {
         assert_eq!(
             FileHandleCodec::new([8; 32]).verify_root(&handle, &export(3)),
             Err(FileHandleError::Invalid)
+        );
+    }
+
+    #[test]
+    fn restored_registry_reuses_the_same_handle() {
+        let path = RelativePath::parse("/docs/report.txt").unwrap();
+        let first = FileHandleTable::new([8; 32]);
+        let (handle, record) = first.issue_with_record(&export(2), &path);
+        let record = record.unwrap();
+
+        let restored = FileHandleTable::from_records([8; 32], vec![record]);
+        let (restored_handle, new_record) = restored.issue_with_record(&export(2), &path);
+
+        assert_eq!(restored_handle, handle);
+        assert!(new_record.is_none());
+        assert_eq!(
+            restored
+                .resolve(&restored_handle, &[export(2)])
+                .unwrap()
+                .relative_path,
+            path
         );
     }
 
