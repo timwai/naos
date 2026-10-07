@@ -173,8 +173,7 @@ struct ShareOwnerKey {
 struct ShareReservation {
     file_key: [u8; 32],
     owner: ShareOwnerKey,
-    mode: u32,
-    access: u32,
+    access_deny_pairs: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -606,15 +605,19 @@ impl NlmV4Service {
             };
         }
 
-        shares.retain(|held| {
-            held.file_key != validated.file_key || held.owner != validated.owner
-        });
-        shares.push(ShareReservation {
-            file_key: validated.file_key,
-            owner: validated.owner,
-            mode: share.mode,
-            access: share.access,
-        });
+        let pair = share_reservation_bit(share.access, share.mode);
+        if let Some(held) = shares
+            .iter_mut()
+            .find(|held| held.file_key == validated.file_key && held.owner == validated.owner)
+        {
+            held.access_deny_pairs |= pair;
+        } else {
+            shares.push(ShareReservation {
+                file_key: validated.file_key,
+                owner: validated.owner,
+                access_deny_pairs: pair,
+            });
+        }
 
         NlmShareResult {
             cookie,
@@ -652,9 +655,14 @@ impl NlmV4Service {
             }
         };
 
+        let pair = share_reservation_bit(share.access, share.mode);
         let _state = self.state_guard.lock().await;
-        self.shares.lock().await.retain(|held| {
-            held.file_key != validated.file_key || held.owner != validated.owner
+        self.shares.lock().await.retain_mut(|held| {
+            if held.file_key != validated.file_key || held.owner != validated.owner {
+                return true;
+            }
+            held.access_deny_pairs &= !pair;
+            held.access_deny_pairs != 0
         });
 
         NlmShareResult {
@@ -1028,15 +1036,33 @@ impl NlmV4Service {
     }
 }
 
+fn share_reservation_bit(access: u32, mode: u32) -> u16 {
+    1u16 << ((access << 2) | mode)
+}
+
+fn share_reservation_masks(reservation: &ShareReservation) -> (u32, u32) {
+    let mut access = 0;
+    let mut mode = 0;
+    for index in 0..16 {
+        if reservation.access_deny_pairs & (1u16 << index) != 0 {
+            access |= index >> 2;
+            mode |= index & 3;
+        }
+    }
+    (access, mode)
+}
+
 fn share_conflicts(
     held: &ShareReservation,
     requested: &ValidatedShare,
     mode: u32,
     access: u32,
 ) -> bool {
-    held.file_key == requested.file_key
-        && held.owner != requested.owner
-        && ((held.mode & access) != 0 || (mode & held.access) != 0)
+    if held.file_key != requested.file_key || held.owner == requested.owner {
+        return false;
+    }
+    let (held_access, held_mode) = share_reservation_masks(held);
+    (held_mode & access) != 0 || (mode & held_access) != 0
 }
 
 fn blocked_lock_matches(
@@ -2391,7 +2417,7 @@ mod tests {
         let shares = service.shares.lock().await;
         assert_eq!(shares.len(), 1);
         assert_eq!(shares[0].owner.caller_name, "client-b");
-        assert_eq!(shares[0].access, 2);
+        assert_eq!(share_reservation_masks(&shares[0]), (3, 0));
     }
 
     #[tokio::test]
