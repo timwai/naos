@@ -287,6 +287,28 @@ impl NlmV4Service {
         lock: NlmLock,
         reclaim: bool,
     ) -> NlmResult {
+        self.lock_with_block(
+            client_ip,
+            credential,
+            cookie,
+            false,
+            exclusive,
+            lock,
+            reclaim,
+        )
+        .await
+    }
+
+    async fn lock_with_block(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        cookie: Vec<u8>,
+        block: bool,
+        exclusive: bool,
+        lock: NlmLock,
+        reclaim: bool,
+    ) -> NlmResult {
         if reclaim {
             return NlmResult {
                 cookie,
@@ -302,14 +324,34 @@ impl NlmV4Service {
             Err(status) => return NlmResult { cookie, status },
         };
 
+        let _state = self.state_guard.lock().await;
         let mut locks = self.locks.lock().await;
         if locks
             .iter()
             .any(|held| lock_conflicts(held, &validated, exclusive, lock.offset, lock.length))
         {
+            if !block {
+                return NlmResult {
+                    cookie,
+                    status: NLM4_DENIED,
+                };
+            }
+
+            let mut waiters = self.waiters.lock().await;
+            if !waiters.iter().any(|waiter| {
+                blocked_lock_matches(waiter, &validated, exclusive, &lock, &cookie)
+            }) {
+                waiters.push(BlockedLock {
+                    client_ip,
+                    cookie: cookie.clone(),
+                    exclusive,
+                    lock,
+                    validated,
+                });
+            }
             return NlmResult {
                 cookie,
-                status: NLM4_DENIED,
+                status: NLM4_BLOCKED,
             };
         }
 
@@ -348,14 +390,18 @@ impl NlmV4Service {
             Err(status) => return NlmResult { cookie, status },
         };
 
-        let mut locks = self.locks.lock().await;
-        replace_owner_range(
-            &mut locks,
-            &validated.owner,
-            validated.file_key,
-            lock.offset,
-            lock.length,
-        );
+        {
+            let _state = self.state_guard.lock().await;
+            let mut locks = self.locks.lock().await;
+            replace_owner_range(
+                &mut locks,
+                &validated.owner,
+                validated.file_key,
+                lock.offset,
+                lock.length,
+            );
+        }
+        self.grant_waiters().await;
         NlmResult {
             cookie,
             status: NLM4_GRANTED,
@@ -369,23 +415,175 @@ impl NlmV4Service {
         cookie: Vec<u8>,
         lock: NlmLock,
     ) -> NlmResult {
-        let status = match self
+        let validated = match self
             .validate_lock(client_ip, credential, &lock, false)
             .await
         {
-            Ok(_) => NLM4_GRANTED,
-            Err(status) => status,
+            Ok(validated) => validated,
+            Err(status) => return NlmResult { cookie, status },
         };
-        NlmResult { cookie, status }
+
+        let _state = self.state_guard.lock().await;
+        self.waiters.lock().await.retain(|waiter| {
+            !blocked_lock_matches(waiter, &validated, waiter.exclusive, &lock, &cookie)
+        });
+        NlmResult {
+            cookie,
+            status: NLM4_GRANTED,
+        }
     }
 
     async fn free_all(&self, client_ip: IpAddr, credential: &RpcCredential, caller_name: &str) {
         if !matches!(credential, RpcCredential::AuthSys(_)) {
             return;
         }
-        self.locks.lock().await.retain(|lock| {
-            lock.owner.client_ip != client_ip || lock.owner.caller_name != caller_name
-        });
+        {
+            let _state = self.state_guard.lock().await;
+            self.locks.lock().await.retain(|lock| {
+                lock.owner.client_ip != client_ip || lock.owner.caller_name != caller_name
+            });
+            self.waiters.lock().await.retain(|waiter| {
+                waiter.validated.owner.client_ip != client_ip
+                    || waiter.validated.owner.caller_name != caller_name
+            });
+        }
+        self.grant_waiters().await;
+    }
+
+    async fn grant_waiters(&self) {
+        loop {
+            let waiter = {
+                let _state = self.state_guard.lock().await;
+                let mut locks = self.locks.lock().await;
+                let mut waiters = self.waiters.lock().await;
+                let grantable = waiters.iter().enumerate().find_map(|(index, waiter)| {
+                    let held_conflict = locks.iter().any(|held| {
+                        lock_conflicts(
+                            held,
+                            &waiter.validated,
+                            waiter.exclusive,
+                            waiter.lock.offset,
+                            waiter.lock.length,
+                        )
+                    });
+                    let earlier_conflict = waiters[..index]
+                        .iter()
+                        .any(|earlier| blocked_locks_conflict(earlier, waiter));
+                    (!held_conflict && !earlier_conflict).then_some(index)
+                });
+                let Some(index) = grantable else {
+                    return;
+                };
+                let waiter = waiters.remove(index);
+                replace_owner_range(
+                    &mut locks,
+                    &waiter.validated.owner,
+                    waiter.validated.file_key,
+                    waiter.lock.offset,
+                    waiter.lock.length,
+                );
+                locks.push(HeldLock {
+                    file_key: waiter.validated.file_key,
+                    owner: waiter.validated.owner.clone(),
+                    exclusive: waiter.exclusive,
+                    offset: waiter.lock.offset,
+                    length: waiter.lock.length,
+                });
+                waiter
+            };
+
+            if !self.send_granted_callback(&waiter).await {
+                let _state = self.state_guard.lock().await;
+                self.locks
+                    .lock()
+                    .await
+                    .retain(|held| !held_lock_matches_blocked(held, &waiter));
+            }
+        }
+    }
+
+    async fn send_granted_callback(&self, waiter: &BlockedLock) -> bool {
+        let rpcbind_address = SocketAddr::new(waiter.client_ip, self.callback_rpcbind_port);
+        let port = match lookup_port(
+            rpcbind_address,
+            NLM_PROGRAM,
+            NLM_VERSION,
+            RpcTransport::Udp,
+        )
+        .await
+        {
+            Ok(Some(port)) => port,
+            Ok(None) => {
+                trace_callback_failure(
+                    waiter.client_ip,
+                    NLMPROC4_GRANTED,
+                    "client NLMv4 UDP port is not registered",
+                );
+                return false;
+            }
+            Err(error) => {
+                if std::env::var_os("NAOS_NFS_TRACE_RPC").is_some() {
+                    eprintln!(
+                        "NLM4_GRANTED_CALLBACK peer={} rpcbind_error={error}",
+                        waiter.client_ip
+                    );
+                }
+                return false;
+            }
+        };
+
+        let bind_ip = if waiter.client_ip.is_ipv4() {
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        } else {
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+        };
+        let socket = match UdpSocket::bind(SocketAddr::new(bind_ip, 0)).await {
+            Ok(socket) => socket,
+            Err(error) => {
+                if std::env::var_os("NAOS_NFS_TRACE_RPC").is_some() {
+                    eprintln!(
+                        "NLM4_GRANTED_CALLBACK peer={} bind_error={error}",
+                        waiter.client_ip
+                    );
+                }
+                return false;
+            }
+        };
+
+        let mut body = XdrWriter::new();
+        body.opaque(&waiter.cookie).expect("validated NLM cookie");
+        body.u32(u32::from(waiter.exclusive));
+        encode_lock_value(&mut body, &waiter.lock);
+
+        let xid = random_callback_xid();
+        let payload = callback_rpc_call_with_xid(xid, NLMPROC4_GRANTED, &body.into_bytes());
+        let target = SocketAddr::new(waiter.client_ip, port);
+        if socket.send_to(&payload, target).await.ok() != Some(payload.len()) {
+            trace_callback_failure(
+                waiter.client_ip,
+                NLMPROC4_GRANTED,
+                "failed to send granted callback",
+            );
+            return false;
+        }
+
+        let mut reply = vec![0u8; 4096];
+        let received = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            socket.recv_from(&mut reply),
+        )
+        .await;
+        let Ok(Ok((length, peer))) = received else {
+            trace_callback_failure(
+                waiter.client_ip,
+                NLMPROC4_GRANTED,
+                "granted callback reply timed out",
+            );
+            return false;
+        };
+
+        peer.ip() == waiter.client_ip
+            && parse_granted_callback_reply(&reply[..length], xid, &waiter.cookie)
     }
 
     async fn validate_lock(
@@ -474,6 +672,40 @@ impl NlmV4Service {
             },
         })
     }
+}
+
+fn blocked_lock_matches(
+    waiter: &BlockedLock,
+    validated: &ValidatedLock,
+    exclusive: bool,
+    lock: &NlmLock,
+    cookie: &[u8],
+) -> bool {
+    &waiter.validated == validated
+        && waiter.exclusive == exclusive
+        && waiter.lock.offset == lock.offset
+        && waiter.lock.length == lock.length
+        && waiter.cookie == cookie
+}
+
+fn blocked_locks_conflict(left: &BlockedLock, right: &BlockedLock) -> bool {
+    left.validated.file_key == right.validated.file_key
+        && left.validated.owner != right.validated.owner
+        && (left.exclusive || right.exclusive)
+        && ranges_overlap(
+            left.lock.offset,
+            left.lock.length,
+            right.lock.offset,
+            right.lock.length,
+        )
+}
+
+fn held_lock_matches_blocked(held: &HeldLock, waiter: &BlockedLock) -> bool {
+    held.file_key == waiter.validated.file_key
+        && held.owner == waiter.validated.owner
+        && held.exclusive == waiter.exclusive
+        && held.offset == waiter.lock.offset
+        && held.length == waiter.lock.length
 }
 
 fn lock_conflicts(
@@ -628,12 +860,14 @@ pub async fn dispatch_nlm4_rpc(
         NLMPROC4_NULL => accepted_success(call.xid, &[]),
         NLMPROC4_TEST => test_reply(service, client_ip, &call).await,
         NLMPROC4_LOCK | NLMPROC4_NM_LOCK => lock_reply(service, client_ip, &call).await,
+        NLMPROC4_GRANTED => accepted_procedure_unavailable(call.xid),
         NLMPROC4_CANCEL => cancel_reply(service, client_ip, &call).await,
         NLMPROC4_UNLOCK => unlock_reply(service, client_ip, &call).await,
         NLMPROC4_TEST_MSG => test_msg_reply(service, client_ip, &call).await,
         NLMPROC4_LOCK_MSG => lock_msg_reply(service, client_ip, &call).await,
         NLMPROC4_CANCEL_MSG => cancel_msg_reply(service, client_ip, &call).await,
         NLMPROC4_UNLOCK_MSG => unlock_msg_reply(service, client_ip, &call).await,
+        NLMPROC4_GRANTED_MSG | NLMPROC4_GRANTED_RES => accepted_procedure_unavailable(call.xid),
         NLMPROC4_FREE_ALL => free_all_reply(service, client_ip, &call).await,
         _ => accepted_procedure_unavailable(call.xid),
     }
@@ -669,9 +903,10 @@ async fn lock_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -
         Ok(cookie) => cookie,
         Err(_) => return accepted_garbage_args(call.xid),
     };
-    if decode_bool(&mut reader).is_err() {
-        return accepted_garbage_args(call.xid);
-    }
+    let block = match decode_bool(&mut reader) {
+        Ok(value) => value,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
     let exclusive = match decode_bool(&mut reader) {
         Ok(value) => value,
         Err(_) => return accepted_garbage_args(call.xid),
@@ -689,10 +924,11 @@ async fn lock_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -
     }
 
     let result = service
-        .lock(
+        .lock_with_block(
             client_ip,
             &call.credential,
             cookie,
+            block,
             exclusive,
             lock,
             reclaim,
@@ -777,9 +1013,10 @@ async fn lock_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCal
         Ok(cookie) => cookie,
         Err(_) => return accepted_garbage_args(call.xid),
     };
-    if decode_bool(&mut reader).is_err() {
-        return accepted_garbage_args(call.xid);
-    }
+    let block = match decode_bool(&mut reader) {
+        Ok(value) => value,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
     let exclusive = match decode_bool(&mut reader) {
         Ok(value) => value,
         Err(_) => return accepted_garbage_args(call.xid),
@@ -799,10 +1036,11 @@ async fn lock_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCal
     let rollback_lock = lock.clone();
     let rollback_cookie = cookie.clone();
     let result = service
-        .lock(
+        .lock_with_block(
             client_ip,
             &call.credential,
             cookie,
+            block,
             exclusive,
             lock,
             reclaim,
@@ -811,10 +1049,20 @@ async fn lock_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCal
     let callback_sent = service
         .send_callback(client_ip, NLMPROC4_LOCK_RES, &encode_result(&result))
         .await;
-    if !callback_sent && result.status == NLM4_GRANTED {
-        let _ = service
-            .unlock(client_ip, &call.credential, rollback_cookie, rollback_lock)
-            .await;
+    if !callback_sent {
+        match result.status {
+            NLM4_GRANTED => {
+                let _ = service
+                    .unlock(client_ip, &call.credential, rollback_cookie, rollback_lock)
+                    .await;
+            }
+            NLM4_BLOCKED => {
+                let _ = service
+                    .cancel(client_ip, &call.credential, rollback_cookie, rollback_lock)
+                    .await;
+            }
+            _ => {}
+        }
     }
     accepted_success(call.xid, &[])
 }
@@ -884,23 +1132,75 @@ async fn free_all_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCal
 }
 
 fn callback_rpc_call(procedure: u32, body: &[u8]) -> Vec<u8> {
-    let mut xid = [0u8; 4];
-    OsRng.fill_bytes(&mut xid);
+    callback_rpc_call_with_xid(random_callback_xid(), procedure, body)
+}
 
+fn callback_rpc_call_with_xid(xid: u32, procedure: u32, body: &[u8]) -> Vec<u8> {
     let mut writer = XdrWriter::new();
-    writer.u32(u32::from_be_bytes(xid));
+    writer.u32(xid);
     writer.u32(0);
     writer.u32(RPC_VERSION);
     writer.u32(NLM_PROGRAM);
     writer.u32(NLM_VERSION);
     writer.u32(procedure);
-    writer.u32(AUTH_NONE);
-    writer.u32(0);
+
+    let mut credential = XdrWriter::new();
+    credential.u32(0);
+    credential.string("naos").expect("fixed callback machine name");
+    credential.u32(0);
+    credential.u32(0);
+    credential.u32_array(&[]).expect("empty callback groups");
+    writer.u32(AUTH_SYS);
+    writer
+        .opaque(&credential.into_bytes())
+        .expect("fixed callback credential");
+
     writer.u32(AUTH_NONE);
     writer.u32(0);
     let mut output = writer.into_bytes();
     output.extend_from_slice(body);
     output
+}
+
+fn random_callback_xid() -> u32 {
+    let mut xid = [0u8; 4];
+    OsRng.fill_bytes(&mut xid);
+    u32::from_be_bytes(xid)
+}
+
+fn parse_granted_callback_reply(reply: &[u8], expected_xid: u32, cookie: &[u8]) -> bool {
+    let mut reader = XdrReader::new(reply);
+    if reader.u32().ok() != Some(expected_xid)
+        || reader.u32().ok() != Some(1)
+        || reader.u32().ok() != Some(0)
+    {
+        return false;
+    }
+    if reader.u32().is_err() || reader.opaque(400).is_err() || reader.u32().ok() != Some(0) {
+        return false;
+    }
+    let Ok(returned_cookie) = reader.opaque(MAX_NETOBJ_BYTES) else {
+        return false;
+    };
+    let Ok(status) = reader.u32() else {
+        return false;
+    };
+    reader.finish().is_ok() && returned_cookie == cookie && status == NLM4_GRANTED
+}
+
+fn encode_lock_value(writer: &mut XdrWriter, lock: &NlmLock) {
+    writer
+        .string(&lock.caller_name)
+        .expect("validated NLM caller name");
+    writer
+        .opaque(&lock.file_handle)
+        .expect("validated NLM file handle");
+    writer
+        .opaque(&lock.owner_handle)
+        .expect("validated NLM owner handle");
+    writer.u32(lock.svid as u32);
+    writer.u64(lock.offset);
+    writer.u64(lock.length);
 }
 
 fn trace_callback_failure(client_ip: IpAddr, procedure: u32, reason: &str) {
