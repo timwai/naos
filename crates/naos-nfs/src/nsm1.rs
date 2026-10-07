@@ -1,4 +1,10 @@
-use std::{io, net::IpAddr};
+use std::{
+    io,
+    net::IpAddr,
+    sync::Arc,
+};
+
+use tokio::sync::Mutex;
 
 use crate::{
     rpc::{
@@ -24,18 +30,123 @@ const SM_NOTIFY: u32 = 6;
 const SM_MAXSTRLEN: usize = 1024;
 const SM_PRIV_SIZE: usize = 16;
 const STAT_SUCC: u32 = 0;
-const STATE_UP: u32 = 1;
+const INITIAL_UP_STATE: u32 = 1;
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NsmV1Service;
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NsmMyId {
+    name: String,
+    program: u32,
+    version: u32,
+    procedure: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NsmMonId {
+    mon_name: String,
+    my_id: NsmMyId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NsmMonitor {
+    client_ip: IpAddr,
+    mon_id: NsmMonId,
+    private: [u8; SM_PRIV_SIZE],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NsmNotification {
+    client_ip: IpAddr,
+    mon_name: String,
+    state: u32,
+}
+
+#[derive(Debug)]
+struct NsmState {
+    state: u32,
+    monitors: Vec<NsmMonitor>,
+    notifications: Vec<NsmNotification>,
+}
+
+impl Default for NsmState {
+    fn default() -> Self {
+        Self {
+            state: INITIAL_UP_STATE,
+            monitors: Vec::new(),
+            notifications: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NsmV1Service {
+    inner: Arc<Mutex<NsmState>>,
+}
 
 impl NsmV1Service {
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    const fn state(self) -> u32 {
-        STATE_UP
+    async fn current_state(&self) -> u32 {
+        self.inner.lock().await.state
+    }
+
+    async fn monitor(
+        &self,
+        client_ip: IpAddr,
+        mon_id: NsmMonId,
+        private: [u8; SM_PRIV_SIZE],
+    ) -> u32 {
+        let mut state = self.inner.lock().await;
+        if let Some(existing) = state
+            .monitors
+            .iter_mut()
+            .find(|monitor| monitor.client_ip == client_ip && monitor.mon_id == mon_id)
+        {
+            existing.private = private;
+        } else {
+            state.monitors.push(NsmMonitor {
+                client_ip,
+                mon_id,
+                private,
+            });
+        }
+        state.state
+    }
+
+    async fn unmonitor(&self, client_ip: IpAddr, mon_id: &NsmMonId) -> u32 {
+        let mut state = self.inner.lock().await;
+        state
+            .monitors
+            .retain(|monitor| monitor.client_ip != client_ip || &monitor.mon_id != mon_id);
+        state.state
+    }
+
+    async fn unmonitor_all(&self, client_ip: IpAddr, my_id: &NsmMyId) -> u32 {
+        let mut state = self.inner.lock().await;
+        state.monitors.retain(|monitor| {
+            monitor.client_ip != client_ip || &monitor.mon_id.my_id != my_id
+        });
+        state.state
+    }
+
+    async fn simulate_crash(&self) {
+        let mut state = self.inner.lock().await;
+        state.state = next_up_state(state.state);
+        state.monitors.clear();
+    }
+
+    async fn record_notification(&self, notification: NsmNotification) {
+        self.inner.lock().await.notifications.push(notification);
+    }
+}
+
+fn next_up_state(state: u32) -> u32 {
+    let next = state.wrapping_add(2);
+    if next == 0 {
+        INITIAL_UP_STATE
+    } else {
+        next | 1
     }
 }
 
@@ -87,12 +198,12 @@ pub async fn dispatch_nsm1_rpc(
 
     match call.procedure {
         SM_NULL => empty_reply(&call),
-        SM_STAT => stat_reply(service, &call),
-        SM_MON => mon_reply(service, &call),
-        SM_UNMON => unmon_reply(service, &call),
-        SM_UNMON_ALL => unmon_all_reply(service, &call),
-        SM_SIMU_CRASH => empty_args_reply(&call),
-        SM_NOTIFY => notify_reply(&call),
+        SM_STAT => stat_reply(service, &call).await,
+        SM_MON => mon_reply(service, client_ip, &call).await,
+        SM_UNMON => unmon_reply(service, client_ip, &call).await,
+        SM_UNMON_ALL => unmon_all_reply(service, client_ip, &call).await,
+        SM_SIMU_CRASH => simu_crash_reply(service, &call).await,
+        SM_NOTIFY => notify_reply(service, client_ip, &call).await,
         _ => accepted_procedure_unavailable(call.xid),
     }
 }
@@ -104,78 +215,128 @@ fn empty_reply(call: &RpcCall) -> Vec<u8> {
     accepted_success(call.xid, &[])
 }
 
-fn stat_reply(service: &NsmV1Service, call: &RpcCall) -> Vec<u8> {
+async fn stat_reply(service: &NsmV1Service, call: &RpcCall) -> Vec<u8> {
     let mut reader = XdrReader::new(&call.body);
     if reader.string(SM_MAXSTRLEN).is_err() || reader.finish().is_err() {
         return accepted_garbage_args(call.xid);
     }
 
-    let mut writer = XdrWriter::new();
-    writer.u32(STAT_SUCC);
-    writer.u32(service.state());
-    accepted_success(call.xid, &writer.into_bytes())
+    stat_result_reply(call.xid, service.current_state().await)
 }
 
-fn mon_reply(service: &NsmV1Service, call: &RpcCall) -> Vec<u8> {
+async fn mon_reply(service: &NsmV1Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
     let mut reader = XdrReader::new(&call.body);
-    if decode_mon_id(&mut reader).is_err()
-        || reader.fixed_opaque(SM_PRIV_SIZE).is_err()
-        || reader.finish().is_err()
-    {
+    let mon_id = match decode_mon_id(&mut reader) {
+        Ok(mon_id) => mon_id,
+        Err(()) => return accepted_garbage_args(call.xid),
+    };
+    let private = match reader.fixed_opaque(SM_PRIV_SIZE) {
+        Ok(private) => private,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+    let private: [u8; SM_PRIV_SIZE] = match private.try_into() {
+        Ok(private) => private,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+
+    let state = service.monitor(client_ip, mon_id, private).await;
+    stat_result_reply(call.xid, state)
+}
+
+async fn unmon_reply(service: &NsmV1Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let mon_id = match decode_mon_id(&mut reader) {
+        Ok(mon_id) => mon_id,
+        Err(()) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
         return accepted_garbage_args(call.xid);
     }
 
-    let mut writer = XdrWriter::new();
-    writer.u32(STAT_SUCC);
-    writer.u32(service.state());
-    accepted_success(call.xid, &writer.into_bytes())
+    let state = service.unmonitor(client_ip, &mon_id).await;
+    state_reply(call.xid, state)
 }
 
-fn unmon_reply(service: &NsmV1Service, call: &RpcCall) -> Vec<u8> {
+async fn unmon_all_reply(
+    service: &NsmV1Service,
+    client_ip: IpAddr,
+    call: &RpcCall,
+) -> Vec<u8> {
     let mut reader = XdrReader::new(&call.body);
-    if decode_mon_id(&mut reader).is_err() || reader.finish().is_err() {
+    let my_id = match decode_my_id(&mut reader) {
+        Ok(my_id) => my_id,
+        Err(()) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
         return accepted_garbage_args(call.xid);
     }
-    state_reply(service, call.xid)
+
+    let state = service.unmonitor_all(client_ip, &my_id).await;
+    state_reply(call.xid, state)
 }
 
-fn unmon_all_reply(service: &NsmV1Service, call: &RpcCall) -> Vec<u8> {
-    let mut reader = XdrReader::new(&call.body);
-    if decode_my_id(&mut reader).is_err() || reader.finish().is_err() {
+async fn simu_crash_reply(service: &NsmV1Service, call: &RpcCall) -> Vec<u8> {
+    if !call.body.is_empty() {
         return accepted_garbage_args(call.xid);
     }
-    state_reply(service, call.xid)
-}
-
-fn empty_args_reply(call: &RpcCall) -> Vec<u8> {
-    empty_reply(call)
-}
-
-fn notify_reply(call: &RpcCall) -> Vec<u8> {
-    let mut reader = XdrReader::new(&call.body);
-    if reader.string(SM_MAXSTRLEN).is_err() || reader.u32().is_err() || reader.finish().is_err() {
-        return accepted_garbage_args(call.xid);
-    }
+    service.simulate_crash().await;
     accepted_success(call.xid, &[])
 }
 
-fn state_reply(service: &NsmV1Service, xid: u32) -> Vec<u8> {
+async fn notify_reply(service: &NsmV1Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let mon_name = match reader.string(SM_MAXSTRLEN) {
+        Ok(mon_name) => mon_name,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let state = match reader.u32() {
+        Ok(state) => state,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    service
+        .record_notification(NsmNotification {
+            client_ip,
+            mon_name,
+            state,
+        })
+        .await;
+    accepted_success(call.xid, &[])
+}
+
+fn stat_result_reply(xid: u32, state: u32) -> Vec<u8> {
     let mut writer = XdrWriter::new();
-    writer.u32(service.state());
+    writer.u32(STAT_SUCC);
+    writer.u32(state);
     accepted_success(xid, &writer.into_bytes())
 }
 
-fn decode_mon_id(reader: &mut XdrReader<'_>) -> Result<(), ()> {
-    reader.string(SM_MAXSTRLEN).map_err(|_| ())?;
-    decode_my_id(reader)
+fn state_reply(xid: u32, state: u32) -> Vec<u8> {
+    let mut writer = XdrWriter::new();
+    writer.u32(state);
+    accepted_success(xid, &writer.into_bytes())
 }
 
-fn decode_my_id(reader: &mut XdrReader<'_>) -> Result<(), ()> {
-    reader.string(SM_MAXSTRLEN).map_err(|_| ())?;
-    reader.u32().map_err(|_| ())?;
-    reader.u32().map_err(|_| ())?;
-    reader.u32().map_err(|_| ())?;
-    Ok(())
+fn decode_mon_id(reader: &mut XdrReader<'_>) -> Result<NsmMonId, ()> {
+    Ok(NsmMonId {
+        mon_name: reader.string(SM_MAXSTRLEN).map_err(|_| ())?,
+        my_id: decode_my_id(reader)?,
+    })
+}
+
+fn decode_my_id(reader: &mut XdrReader<'_>) -> Result<NsmMyId, ()> {
+    Ok(NsmMyId {
+        name: reader.string(SM_MAXSTRLEN).map_err(|_| ())?,
+        program: reader.u32().map_err(|_| ())?,
+        version: reader.u32().map_err(|_| ())?,
+        procedure: reader.u32().map_err(|_| ())?,
+    })
 }
 
 #[cfg(test)]
@@ -187,7 +348,7 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn stat_returns_success_and_odd_up_state() {
+    async fn stat_returns_success_and_current_odd_state() {
         let service = NsmV1Service::new();
         let mut body = XdrWriter::new();
         body.string("client.example").unwrap();
@@ -197,28 +358,121 @@ mod tests {
         let mut reader = XdrReader::new(&reply);
         assert_rpc_success_prefix(&mut reader, 31);
         assert_eq!(reader.u32().unwrap(), STAT_SUCC);
-        assert_eq!(reader.u32().unwrap(), STATE_UP);
+        assert_eq!(reader.u32().unwrap(), INITIAL_UP_STATE);
         reader.finish().unwrap();
     }
 
     #[tokio::test]
-    async fn mon_decodes_callback_identity_and_private_cookie() {
+    async fn mon_is_idempotent_and_refreshes_private_cookie() {
         let service = NsmV1Service::new();
-        let mut body = XdrWriter::new();
-        body.string("server.example").unwrap();
-        body.string("client.example").unwrap();
-        body.u32(100021);
-        body.u32(4);
-        body.u32(16);
-        body.fixed_opaque(&[7; SM_PRIV_SIZE]);
-        let call = rpc_call(32, SM_MON, &body.into_bytes());
+        let client_ip = "192.0.2.10".parse().unwrap();
 
-        let reply = dispatch_nsm1_rpc(&service, "127.0.0.1".parse().unwrap(), &call).await;
+        for private in [[7; SM_PRIV_SIZE], [8; SM_PRIV_SIZE]] {
+            let body = mon_body("server.example", "client.example", private);
+            let call = rpc_call(32, SM_MON, &body);
+            let reply = dispatch_nsm1_rpc(&service, client_ip, &call).await;
+            let mut reader = XdrReader::new(&reply);
+            assert_rpc_success_prefix(&mut reader, 32);
+            assert_eq!(reader.u32().unwrap(), STAT_SUCC);
+            assert_eq!(reader.u32().unwrap(), INITIAL_UP_STATE);
+            reader.finish().unwrap();
+        }
+
+        let state = service.inner.lock().await;
+        assert_eq!(state.monitors.len(), 1);
+        assert_eq!(state.monitors[0].client_ip, client_ip);
+        assert_eq!(state.monitors[0].mon_id.mon_name, "server.example");
+        assert_eq!(state.monitors[0].private, [8; SM_PRIV_SIZE]);
+    }
+
+    #[tokio::test]
+    async fn unmon_and_unmon_all_remove_matching_monitors() {
+        let service = NsmV1Service::new();
+        let client_ip = "192.0.2.10".parse().unwrap();
+        let other_ip = "192.0.2.11".parse().unwrap();
+
+        for (ip, mon_name) in [
+            (client_ip, "server-a.example"),
+            (client_ip, "server-b.example"),
+            (other_ip, "server-a.example"),
+        ] {
+            let call = rpc_call(
+                40,
+                SM_MON,
+                &mon_body(mon_name, "client.example", [7; SM_PRIV_SIZE]),
+            );
+            dispatch_nsm1_rpc(&service, ip, &call).await;
+        }
+        assert_eq!(service.inner.lock().await.monitors.len(), 3);
+
+        let call = rpc_call(
+            41,
+            SM_UNMON,
+            &mon_id_body("server-a.example", "client.example"),
+        );
+        dispatch_nsm1_rpc(&service, client_ip, &call).await;
+        {
+            let state = service.inner.lock().await;
+            assert_eq!(state.monitors.len(), 2);
+            assert!(state.monitors.iter().any(|monitor| {
+                monitor.client_ip == other_ip && monitor.mon_id.mon_name == "server-a.example"
+            }));
+        }
+
+        let call = rpc_call(42, SM_UNMON_ALL, &my_id_body("client.example"));
+        dispatch_nsm1_rpc(&service, client_ip, &call).await;
+        let state = service.inner.lock().await;
+        assert_eq!(state.monitors.len(), 1);
+        assert_eq!(state.monitors[0].client_ip, other_ip);
+    }
+
+    #[tokio::test]
+    async fn simu_crash_advances_odd_state_and_clears_monitors() {
+        let service = NsmV1Service::new();
+        let client_ip = "192.0.2.10".parse().unwrap();
+        let call = rpc_call(
+            50,
+            SM_MON,
+            &mon_body("server.example", "client.example", [7; SM_PRIV_SIZE]),
+        );
+        dispatch_nsm1_rpc(&service, client_ip, &call).await;
+        assert_eq!(service.inner.lock().await.monitors.len(), 1);
+
+        let call = rpc_call(51, SM_SIMU_CRASH, &[]);
+        let reply = dispatch_nsm1_rpc(&service, client_ip, &call).await;
         let mut reader = XdrReader::new(&reply);
-        assert_rpc_success_prefix(&mut reader, 32);
-        assert_eq!(reader.u32().unwrap(), STAT_SUCC);
-        assert_eq!(reader.u32().unwrap(), STATE_UP);
+        assert_rpc_success_prefix(&mut reader, 51);
         reader.finish().unwrap();
+
+        let state = service.inner.lock().await;
+        assert_eq!(state.state, 3);
+        assert_eq!(state.state % 2, 1);
+        assert!(state.monitors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn notify_records_peer_state_change() {
+        let service = NsmV1Service::new();
+        let client_ip = "192.0.2.20".parse().unwrap();
+        let mut body = XdrWriter::new();
+        body.string("peer.example").unwrap();
+        body.u32(9);
+        let call = rpc_call(60, SM_NOTIFY, &body.into_bytes());
+
+        let reply = dispatch_nsm1_rpc(&service, client_ip, &call).await;
+        let mut reader = XdrReader::new(&reply);
+        assert_rpc_success_prefix(&mut reader, 60);
+        reader.finish().unwrap();
+
+        let state = service.inner.lock().await;
+        assert_eq!(
+            state.notifications,
+            vec![NsmNotification {
+                client_ip,
+                mon_name: "peer.example".to_owned(),
+                state: 9,
+            }]
+        );
     }
 
     #[tokio::test]
@@ -236,6 +490,34 @@ mod tests {
         assert_eq!(reader.u32().unwrap(), AUTH_NONE);
         assert!(reader.opaque(0).unwrap().is_empty());
         assert_eq!(reader.u32().unwrap(), 4);
+    }
+
+    fn mon_body(mon_name: &str, my_name: &str, private: [u8; SM_PRIV_SIZE]) -> Vec<u8> {
+        let mut writer = XdrWriter::new();
+        writer.string(mon_name).unwrap();
+        encode_my_id(&mut writer, my_name);
+        writer.fixed_opaque(&private);
+        writer.into_bytes()
+    }
+
+    fn mon_id_body(mon_name: &str, my_name: &str) -> Vec<u8> {
+        let mut writer = XdrWriter::new();
+        writer.string(mon_name).unwrap();
+        encode_my_id(&mut writer, my_name);
+        writer.into_bytes()
+    }
+
+    fn my_id_body(my_name: &str) -> Vec<u8> {
+        let mut writer = XdrWriter::new();
+        encode_my_id(&mut writer, my_name);
+        writer.into_bytes()
+    }
+
+    fn encode_my_id(writer: &mut XdrWriter, my_name: &str) {
+        writer.string(my_name).unwrap();
+        writer.u32(100021);
+        writer.u32(4);
+        writer.u32(16);
     }
 
     fn rpc_call(xid: u32, procedure: u32, body: &[u8]) -> Vec<u8> {

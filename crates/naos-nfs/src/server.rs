@@ -233,7 +233,7 @@ impl NfsServer {
                 }
                 accepted = self.nsm_listener.accept() => {
                     let (mut stream, peer) = accepted?;
-                    let service = self.nsm_service;
+                    let service = self.nsm_service.clone();
                     tokio::spawn(async move {
                         if let Err(error) = serve_nsm1_stream(&mut stream, peer.ip(), &service).await {
                             warn!(%peer, %error, "NSMv1 connection ended with error");
