@@ -202,10 +202,7 @@ pub trait ShareCatalogRepository: Send + Sync {
 
 #[async_trait]
 pub trait SharePathResolver: Send + Sync {
-    async fn canonicalize_directory(
-        &self,
-        path: &str,
-    ) -> Result<String, SharePathResolverError>;
+    async fn canonicalize_directory(&self, path: &str) -> Result<String, SharePathResolverError>;
 }
 
 #[async_trait]
@@ -303,11 +300,7 @@ impl ShareMutationService {
         };
         let commit = self
             .repository
-            .create_share_with_operation(
-                &share,
-                &prepared.operation,
-                &prepared.queued_event,
-            )
+            .create_share_with_operation(&share, &prepared.operation, &prepared.queued_event)
             .await
             .map_err(map_mutation_repository_error)?;
         Ok(self.finish_commit(commit))
@@ -344,11 +337,7 @@ impl ShareMutationService {
         };
         let commit = self
             .repository
-            .update_share_with_operation(
-                &share,
-                &prepared.operation,
-                &prepared.queued_event,
-            )
+            .update_share_with_operation(&share, &prepared.operation, &prepared.queued_event)
             .await
             .map_err(map_mutation_repository_error)?;
         Ok(self.finish_commit(commit))
@@ -568,15 +557,13 @@ impl ReconcileDriver for DatabaseShareReconcileDriver {
     }
 }
 
-fn normalize_and_validate(
-    input: ShareWriteInput,
-) -> Result<ShareWriteInput, ShareMutationError> {
+fn normalize_and_validate(input: ShareWriteInput) -> Result<ShareWriteInput, ShareMutationError> {
     let name = input.name.trim().to_owned();
     if name.is_empty()
         || name.len() > 80
-        || name
-            .chars()
-            .any(|character| character.is_control() || matches!(character, '/' | '\\' | ':' | '[' | ']'))
+        || name.chars().any(|character| {
+            character.is_control() || matches!(character, '/' | '\\' | ':' | '[' | ']')
+        })
     {
         return Err(ShareMutationError::Validation {
             field: "name",

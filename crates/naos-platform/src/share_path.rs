@@ -8,24 +8,22 @@ pub struct SystemSharePathResolver;
 
 #[async_trait]
 impl SharePathResolver for SystemSharePathResolver {
-    async fn canonicalize_directory(
-        &self,
-        path: &str,
-    ) -> Result<String, SharePathResolverError> {
+    async fn canonicalize_directory(&self, path: &str) -> Result<String, SharePathResolverError> {
         let candidate = Path::new(path);
         if !candidate.is_absolute() {
             return Err(SharePathResolverError::Invalid);
         }
 
-        let canonical = tokio::fs::canonicalize(candidate)
-            .await
-            .map_err(|error| match error.kind() {
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => {
-                    SharePathResolverError::NotDirectory
-                }
-                std::io::ErrorKind::InvalidInput => SharePathResolverError::Invalid,
-                _ => SharePathResolverError::Unavailable,
-            })?;
+        let canonical =
+            tokio::fs::canonicalize(candidate)
+                .await
+                .map_err(|error| match error.kind() {
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => {
+                        SharePathResolverError::NotDirectory
+                    }
+                    std::io::ErrorKind::InvalidInput => SharePathResolverError::Invalid,
+                    _ => SharePathResolverError::Unavailable,
+                })?;
         let metadata = tokio::fs::metadata(&canonical)
             .await
             .map_err(|_| SharePathResolverError::Unavailable)?;

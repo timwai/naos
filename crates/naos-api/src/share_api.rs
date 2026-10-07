@@ -274,10 +274,9 @@ impl From<ShareMutationError> for ApiError {
             ShareMutationError::Validation { field, message } => {
                 ApiError::validation(field, &message)
             }
-            ShareMutationError::PathNotDirectory => ApiError::validation(
-                "path",
-                "共享路径不存在或不是目录",
-            ),
+            ShareMutationError::PathNotDirectory => {
+                ApiError::validation("path", "共享路径不存在或不是目录")
+            }
             ShareMutationError::PathUnavailable => ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "SHARE_PATH_UNAVAILABLE",

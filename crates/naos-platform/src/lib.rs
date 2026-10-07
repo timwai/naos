@@ -2,8 +2,8 @@ pub mod account;
 pub mod command;
 pub mod doctor;
 pub mod fs_acl;
-pub mod smb;
 pub mod share_path;
+pub mod smb;
 
 pub use account::{AccountError, EnsureAccountResult, SystemAccountManager, SystemAccountName};
 pub use command::{CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};

@@ -274,12 +274,7 @@ async fn system_verify_operation_is_persistent_idempotent_and_replayable_over_ss
     assert!(text.contains("phase"));
 }
 
-async fn wait_operation(
-    app: &Router,
-    peer: SocketAddr,
-    cookie: &str,
-    operation_id: &str,
-) -> Value {
+async fn wait_operation(app: &Router, peer: SocketAddr, cookie: &str, operation_id: &str) -> Value {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let response = app

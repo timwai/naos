@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use naos_core::{
     reconcile::ReconcileDriver,
-    share::{
-        DatabaseShareReconcileDriver, ShareApplyRepository, ShareReconcileDriverFactory,
-    },
+    share::{DatabaseShareReconcileDriver, ShareApplyRepository, ShareReconcileDriverFactory},
 };
 
 pub struct PlatformShareReconcileDriverFactory {

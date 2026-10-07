@@ -387,8 +387,13 @@ async fn insert_queued_operation(
     tx: &mut Transaction<'_, Sqlite>,
     operation: &NewOperation,
     queued_event: &NewOperationEvent,
-) -> Result<(naos_core::operation::Operation, naos_core::operation::OperationEvent), ShareMutationRepositoryError>
-{
+) -> Result<
+    (
+        naos_core::operation::Operation,
+        naos_core::operation::OperationEvent,
+    ),
+    ShareMutationRepositoryError,
+> {
     sqlx::query(
         "INSERT INTO operations
             (id, kind, state, actor_user_id, resource_type, resource_id, request_id,
