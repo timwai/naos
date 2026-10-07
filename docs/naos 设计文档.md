@@ -2319,6 +2319,8 @@ package
 
 对 NFS root/privileged 测试使用专门 runner 或能力受控的集成环境，不能假设普通 GitHub hosted runner 可完成全部 mount 场景。
 
+当前仓库提供手动工作流 `.github/workflows/nfs-real-smoke.yml`，仅匹配 `[self-hosted, linux, nfs]` runner。该 runner 必须预装 Linux NFS client（至少提供 `mount.nfs`）、允许 passwordless `sudo` 执行测试挂载，并允许 loopback TCP。工作流先构建 `naos-nfs` 的 `nfs-smoke-server` example，再以 `scripts/ci/nfs-real-smoke.sh` 完成真实内核客户端验证。测试显式传入高位 `port/mountport`，不依赖 rpcbind，覆盖 mount、read、write、rename、directory listing、mkdir/rmdir 与 delete。
+
 ---
 
 ## 20. 交付计划
