@@ -9,7 +9,7 @@ pub mod rpcsec_gss;
 pub mod server;
 #[cfg(all(unix, feature = "system-gss"))]
 pub mod system_gss;
+pub mod transport;
 #[cfg(all(windows, feature = "windows-sspi"))]
 pub mod windows_sspi;
-pub mod transport;
 pub mod xdr;
