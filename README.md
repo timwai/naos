@@ -40,6 +40,6 @@ NAOS_NFS_KERBEROS_SERVICE_PRINCIPAL='nfs/server.example.com@EXAMPLE.COM' \
 
 Unix 使用 MIT Kerberos / Heimdal / macOS GSS.framework；服务 principal 必须能从系统 GSS acceptor 的凭据来源取得对应密钥，MIT/Heimdal 可在启动 `naosd` 前通过 `KRB5_KTNAME` 指定 keytab。Unix provider 支持 `krb5` / `krb5i` / `krb5p`，其中 privacy 仅在协商出 `GSS_C_CONF_FLAG` 且 RFC 4121 Wrap token 设置 `Sealed` 标志时启用。Linux CI 会用临时 MIT Kerberos realm/keytab 真正跑过 MOUNT → NFS 的 `krb5i` 与 `krb5p` TCP smoke。
 
-Windows 使用原生 Kerberos SSPI，从运行 `naosd` 的服务/进程安全上下文获取 inbound credential；配置的完整 NFS service principal 必须与完成握手后 SSPI 返回的 server native principal 匹配。当前 Windows provider 已实现 context establishment、client principal 提取和 `MakeSignature/VerifySignature`，因此开放 `krb5` / `krb5i`；`krb5p` 暂时 fail-closed，待 Windows `EncryptMessage/DecryptMessage` 的 confidentiality/QOP 路径完成并经过域环境互操作验证后再启用。Windows CI 会编译、Clippy 并测试该 feature，但真实 AD/Kerberos 域互操作仍是独立 gate。
+Windows 使用原生 Kerberos SSPI，从运行 `naosd` 的服务/进程安全上下文获取 inbound credential；配置的完整 NFS service principal 必须与完成握手后 SSPI 返回的 server native principal 匹配。Windows provider 支持 `krb5` / `krb5i` / `krb5p`：MIC 使用 `MakeSignature/VerifySignature`，privacy 仅在 SSPI 协商出 `ASC_RET_CONFIDENTIALITY` 后启用，并通过 `EncryptMessage` 的 TOKEN+DATA+PADDING 与 `DecryptMessage` 的 STREAM 路径生成/消费 GSS Wrap token；收发两端都要求 RFC 4121 Wrap token 设置 `Sealed` 标志，无法确认 confidentiality 时 fail-closed。Windows CI 会编译、Clippy 并测试该 feature，但 hosted runner 不具备真实 AD 域环境，因此 Windows 域内客户端的端到端 Kerberos 互操作仍是独立 gate。
 
 若配置了 Kerberos principal 但当前构建不支持对应平台的 system GSS，或 acceptor credential 无法取得，NFS 数据面会拒绝启动而不会降级认证。
