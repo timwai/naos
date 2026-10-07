@@ -40,6 +40,27 @@ jobs:
       - run: cargo run -p naosd -- export-openapi > openapi.json
 
 
+  nfs-system-gss:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install Linux GSS development libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libkrb5-dev libclang-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p naos-nfs --features system-gss --all-targets
+      - run: cargo clippy -p naos-nfs --features system-gss --all-targets -- -D warnings
+      - run: cargo test -p naos-nfs --features system-gss
+
+
   samba-integration:
     runs-on: ubuntu-latest
     steps:

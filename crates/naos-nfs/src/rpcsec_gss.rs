@@ -48,6 +48,10 @@ pub trait RpcSecGssSecurityContext: Send + Sync {
     fn unwrap(&self, ciphertext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError>;
 
     fn wrap(&self, plaintext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError>;
+
+    fn supports_privacy(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -783,6 +787,9 @@ async fn authenticate_exchange_call(
     }
 
     let security = registry.get(&credential.handle).await?;
+    if credential.service == RPCSEC_GSS_SVC_PRIVACY && !security.supports_privacy() {
+        return Err(RpcSecGssDataError::InvalidService);
+    }
     security
         .verify_mic(&call.header_through_credential, &call.verifier.body)
         .map_err(RpcSecGssDataError::HeaderSecurity)?;
@@ -1229,6 +1236,58 @@ mod tests {
         assert_eq!(
             registry.check_sequence(b"ctx", RPCSEC_GSS_MAXSEQ).await,
             Err(RpcSecGssRegistryError::SequenceOutOfRange)
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_without_privacy_capability_rejects_privacy_before_body_processing() {
+        struct NoPrivacyContext;
+
+        impl RpcSecGssSecurityContext for NoPrivacyContext {
+            fn principal(&self) -> &str {
+                "alice@EXAMPLE.COM"
+            }
+
+            fn verify_mic(
+                &self,
+                _message: &[u8],
+                _mic: &[u8],
+            ) -> Result<(), RpcSecGssSecurityError> {
+                Ok(())
+            }
+
+            fn get_mic(&self, _message: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
+                Ok(Vec::new())
+            }
+
+            fn unwrap(&self, _ciphertext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
+                panic!("privacy body must not be unwrapped when provider disables privacy");
+            }
+
+            fn wrap(&self, _plaintext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
+                panic!("privacy reply must not be wrapped when provider disables privacy");
+            }
+
+            fn supports_privacy(&self) -> bool {
+                false
+            }
+        }
+
+        let registry = RpcSecGssContextRegistry::new();
+        registry
+            .insert(b"ctx".to_vec(), 8, Arc::new(NoPrivacyContext))
+            .await
+            .unwrap();
+
+        let call = data_call(
+            RPCSEC_GSS_SVC_PRIVACY,
+            10,
+            b"not-a-wrap-token".to_vec(),
+            b"header",
+        );
+        assert_eq!(
+            authenticate_data_call(&registry, &call).await.err(),
+            Some(RpcSecGssDataError::InvalidService)
         );
     }
 

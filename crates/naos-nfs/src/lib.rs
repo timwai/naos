@@ -7,5 +7,7 @@ pub mod rpc;
 pub mod rpcbind;
 pub mod rpcsec_gss;
 pub mod server;
+#[cfg(all(unix, feature = "system-gss"))]
+pub mod system_gss;
 pub mod transport;
 pub mod xdr;
