@@ -14,8 +14,7 @@ use naos_core::{
     acl::{AclEngine, FileOperation, Permission, Principal},
     nfs::{
         NfsAccessRepository, NfsBindingLevel, NfsBindingPermission, NfsBindingRepository,
-        NfsExport, NfsIdentityError, NfsRepositoryError, ResolvedNfsIdentity,
-        resolve_nfs_identity,
+        NfsExport, NfsIdentityError, NfsRepositoryError, ResolvedNfsIdentity, resolve_nfs_identity,
     },
     path::{PathError, RelativePath, SafePathResolver},
 };
@@ -31,8 +30,8 @@ use tokio::{
 use crate::{
     handle::{FileHandleChanges, FileHandleError, FileHandleTable},
     rpc::{
-        AUTH_BADCRED, AUTH_BADVERF, RPCSEC_GSS_CREDPROBLEM, RPCSEC_GSS_CTXPROBLEM,
-        RPCSEC_GSS_DATA, RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
+        AUTH_BADCRED, AUTH_BADVERF, RPCSEC_GSS_CREDPROBLEM, RPCSEC_GSS_CTXPROBLEM, RPCSEC_GSS_DATA,
+        RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
         accepted_success, accepted_system_error, decode_call, denied_auth_error,
         denied_rpc_mismatch, rpcsec_gss_unavailable_reply,
@@ -1190,14 +1189,12 @@ impl NfsV3Service {
                 resolve_nfs_identity(&bindings, client_ip, credential.uid())?
                     .ok_or(NfsV3Error::AccessDenied)?
             }
-            RpcCredential::RpcSecGssAuthenticated { principal, user_id } => {
-                ResolvedNfsIdentity {
-                    binding_id: format!("krb:{principal}"),
-                    user_id: user_id.clone(),
-                    permission: NfsBindingPermission::ReadWrite,
-                    level: NfsBindingLevel::L3,
-                }
-            }
+            RpcCredential::RpcSecGssAuthenticated { principal, user_id } => ResolvedNfsIdentity {
+                binding_id: format!("krb:{principal}"),
+                user_id: user_id.clone(),
+                permission: NfsBindingPermission::ReadWrite,
+                level: NfsBindingLevel::L3,
+            },
             RpcCredential::RpcSecGss(_) | RpcCredential::Unsupported { .. } => {
                 return Err(NfsV3Error::AccessDenied);
             }
@@ -1210,10 +1207,7 @@ impl NfsV3Service {
         })
     }
 
-    async fn resolve_rpcsec_gss_user(
-        &self,
-        principal: &str,
-    ) -> Result<Option<String>, NfsV3Error> {
+    async fn resolve_rpcsec_gss_user(&self, principal: &str) -> Result<Option<String>, NfsV3Error> {
         Ok(self
             .identity_repository
             .resolve_nfs_krb_principal(principal)
@@ -1583,11 +1577,7 @@ pub async fn dispatch_nfs3_rpc(
     dispatch_nfs3_call(service, client_ip, &call).await
 }
 
-async fn dispatch_nfs3_call(
-    service: &NfsV3Service,
-    client_ip: IpAddr,
-    call: &RpcCall,
-) -> Vec<u8> {
+async fn dispatch_nfs3_call(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
     if call.program != NFS_PROGRAM {
         return accepted_program_unavailable(call.xid);
     }
@@ -1673,8 +1663,7 @@ fn rpcsec_gss_data_error_reply(xid: u32, error: RpcSecGssDataError) -> Vec<u8> {
             denied_auth_error(xid, AUTH_BADCRED)
         }
         RpcSecGssDataError::Registry(
-            RpcSecGssRegistryError::DuplicateHandle
-            | RpcSecGssRegistryError::InvalidSequenceWindow,
+            RpcSecGssRegistryError::DuplicateHandle | RpcSecGssRegistryError::InvalidSequenceWindow,
         )
         | RpcSecGssDataError::Security(_)
         | RpcSecGssDataError::Body(_)
@@ -2812,8 +2801,7 @@ mod tests {
             crate::rpc::RPCSEC_GSS_SVC_NONE,
             &body.into_bytes(),
         );
-        let reply =
-            dispatch_nfs3_rpc(&service, "203.0.113.77".parse().unwrap(), &request).await;
+        let reply = dispatch_nfs3_rpc(&service, "203.0.113.77".parse().unwrap(), &request).await;
 
         let mut reader = XdrReader::new(&reply);
         assert_eq!(reader.u32().unwrap(), 501);
@@ -2824,8 +2812,7 @@ mod tests {
         assert_eq!(reader.u32().unwrap(), 0);
         assert_eq!(reader.u32().unwrap(), NFS3_OK);
 
-        let replay =
-            dispatch_nfs3_rpc(&service, "203.0.113.77".parse().unwrap(), &request).await;
+        let replay = dispatch_nfs3_rpc(&service, "203.0.113.77".parse().unwrap(), &request).await;
         assert!(replay.is_empty());
     }
 

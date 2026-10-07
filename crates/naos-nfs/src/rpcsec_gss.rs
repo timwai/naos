@@ -7,8 +7,8 @@ use crate::{
     rpc::{
         MAX_AUTH_BYTES, MAX_RPC_RECORD_BYTES, MSG_ACCEPTED, PROG_MISMATCH, REPLY, RPCSEC_GSS,
         RPCSEC_GSS_DATA, RPCSEC_GSS_MAXSEQ, RPCSEC_GSS_SVC_INTEGRITY, RPCSEC_GSS_SVC_NONE,
-        RPCSEC_GSS_SVC_PRIVACY, RPCSEC_GSS_VERSION_1, SUCCESS, RpcCall, RpcCredential,
-        RpcSecGssBodyError, RpcSecGssSequenceDecision, RpcSecGssSequenceWindow, RpcVerifier,
+        RPCSEC_GSS_SVC_PRIVACY, RPCSEC_GSS_VERSION_1, RpcCall, RpcCredential, RpcSecGssBodyError,
+        RpcSecGssSequenceDecision, RpcSecGssSequenceWindow, RpcVerifier, SUCCESS,
         accepted_reply_with_verifier, decode_rpcsec_gss_integrity_body,
         decode_rpcsec_gss_unwrapped_body, encode_rpcsec_gss_integrity_body,
         encode_rpcsec_gss_plaintext, rpcsec_gss_u32_mic_input,

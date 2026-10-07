@@ -61,10 +61,7 @@ pub enum RpcCredential {
     AuthNone,
     AuthSys(AuthSysCredential),
     RpcSecGss(RpcSecGssCredential),
-    RpcSecGssAuthenticated {
-        principal: String,
-        user_id: String,
-    },
+    RpcSecGssAuthenticated { principal: String, user_id: String },
     Unsupported { flavor: u32 },
 }
 
