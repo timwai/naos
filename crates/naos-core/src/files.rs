@@ -1,8 +1,4 @@
-use std::{
-    path::PathBuf,
-    sync::Arc,
-    time::SystemTime,
-};
+use std::{path::{Path, PathBuf}, sync::Arc, time::SystemTime};
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -169,16 +165,24 @@ impl FileService {
         }
 
         let resolver = resolver(&share)?;
-        let target = resolver.resolve_existing(&relative).map_err(map_path_error)?;
+        let target = resolver
+            .resolve_existing(&relative)
+            .map_err(map_path_error)?;
         let metadata = fs::metadata(&target).await.map_err(map_io_not_found)?;
         if !metadata.is_dir() {
             return Err(FileServiceError::NotDirectory);
         }
 
-        let mut reader = fs::read_dir(&target).await.map_err(|_| FileServiceError::Io)?;
+        let mut reader = fs::read_dir(&target)
+            .await
+            .map_err(|_| FileServiceError::Io)?;
         let mut entries = Vec::new();
         loop {
-            let Some(entry) = reader.next_entry().await.map_err(|_| FileServiceError::Io)? else {
+            let Some(entry) = reader
+                .next_entry()
+                .await
+                .map_err(|_| FileServiceError::Io)?
+            else {
                 break;
             };
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -310,7 +314,9 @@ impl FileService {
         let target = resolver(&share)?
             .resolve_entry(&relative)
             .map_err(map_path_error)?;
-        let metadata = fs::symlink_metadata(&target).await.map_err(map_io_not_found)?;
+        let metadata = fs::symlink_metadata(&target)
+            .await
+            .map_err(map_io_not_found)?;
         let result = if metadata.file_type().is_symlink() || metadata.is_file() {
             fs::remove_file(&target).await
         } else if metadata.is_dir() {
@@ -377,7 +383,7 @@ impl FileService {
 }
 
 fn resolver(share: &FileShare) -> Result<SafePathResolver, FileServiceError> {
-    SafePathResolver::new(&share.canonical_path).map_err(map_path_error)
+    SafePathResolver::new(Path::new(&share.canonical_path)).map_err(map_path_error)
 }
 
 fn parse_path(value: &str) -> Result<RelativePath, FileServiceError> {

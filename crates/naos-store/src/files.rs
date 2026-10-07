@@ -64,10 +64,7 @@ impl FileRepository for Store {
             .map_err(|_| FileRepositoryError::Unavailable)
     }
 
-    async fn group_ids_for_user(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<String>, FileRepositoryError> {
+    async fn group_ids_for_user(&self, user_id: &str) -> Result<Vec<String>, FileRepositoryError> {
         <Store as WebDavRepository>::group_ids_for_user(self, user_id)
             .await
             .map_err(|_| FileRepositoryError::Unavailable)

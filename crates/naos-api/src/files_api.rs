@@ -38,10 +38,7 @@ pub(crate) fn routes() -> Router<AppState> {
             "/shares/{share_id}/files",
             get(list_directory).delete(delete_entry),
         )
-        .route(
-            "/shares/{share_id}/directories",
-            post(create_directory),
-        )
+        .route("/shares/{share_id}/directories", post(create_directory))
         .route("/shares/{share_id}/files/move", post(move_entry))
         .route("/shares/{share_id}/files/download", get(download_file))
 }
