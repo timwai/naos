@@ -1956,9 +1956,7 @@ fn mknod_reply(call: &RpcCall) -> Vec<u8> {
     };
     match file_type {
         NF3BLK | NF3CHR => {
-            if decode_sattr3(&mut reader).is_err()
-                || reader.u32().is_err()
-                || reader.u32().is_err()
+            if decode_sattr3(&mut reader).is_err() || reader.u32().is_err() || reader.u32().is_err()
             {
                 return accepted_garbage_args(call.xid);
             }
