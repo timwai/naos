@@ -501,10 +501,7 @@ impl NfsV3Service {
         }
 
         let target = fs::read_link(&path).await.map_err(io_error)?;
-        let target = target
-            .to_str()
-            .ok_or(NfsV3Error::Invalid)?
-            .to_owned();
+        let target = target.to_str().ok_or(NfsV3Error::Invalid)?.to_owned();
         if target.len() > MAX_PATH_BYTES {
             return Err(NfsV3Error::Invalid);
         }
@@ -2814,7 +2811,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(std::fs::read(temp.path().join("alias.txt")).unwrap(), b"hello");
+        assert_eq!(
+            std::fs::read(temp.path().join("alias.txt")).unwrap(),
+            b"hello"
+        );
         assert_eq!(
             service
                 .read(client_ip, &credential, &source.file_handle, 0, 5)
