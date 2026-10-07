@@ -1,3 +1,5 @@
+#[cfg(all(unix, feature = "kerberos-gssapi"))]
+pub mod gssapi;
 pub mod handle;
 pub mod mount;
 pub mod nfs3;
