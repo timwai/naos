@@ -15,7 +15,7 @@ use crate::{
     rpc::{
         AUTH_NONE, MAX_AUTH_BYTES, RPC_VERSION, RpcCall, RpcDecodeError, accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
-        accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch,
+        accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch, rpcsec_gss_unavailable_reply,
     },
     rpcbind::{RpcTransport, lookup_port},
     transport::{read_record, write_record},
@@ -357,6 +357,10 @@ pub async fn dispatch_nsm1_rpc(
         }
         Err(RpcDecodeError::Xdr(_)) => return Vec::new(),
     };
+
+    if let Some(reply) = rpcsec_gss_unavailable_reply(&call) {
+        return reply;
+    }
 
     if call.program != NSM_PROGRAM {
         return accepted_program_unavailable(call.xid);
