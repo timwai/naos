@@ -142,3 +142,236 @@ impl NfsServer {
         Ok(())
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, path::Path};
+
+    use async_trait::async_trait;
+    use naos_core::{
+        acl::{AclRule, Permission, Subject},
+        nfs::{
+            NfsBinding, NfsBindingPermission, NfsCidr, NfsExport, NfsRepositoryError,
+        },
+        path::RelativePath,
+    };
+    use tokio::net::TcpStream;
+
+    use super::*;
+    use crate::{
+        rpc::{AUTH_NONE, AUTH_SYS, RPC_VERSION},
+        transport::{read_record, write_record},
+        xdr::{XdrReader, XdrWriter},
+    };
+
+    struct FakeRepository {
+        exports: BTreeMap<String, NfsExport>,
+        bindings: BTreeMap<String, Vec<NfsBinding>>,
+        rules: BTreeMap<String, Vec<AclRule>>,
+    }
+
+    #[async_trait]
+    impl NfsBindingRepository for FakeRepository {
+        async fn find_enabled_nfs_export_by_name(
+            &self,
+            name: &str,
+        ) -> Result<Option<NfsExport>, NfsRepositoryError> {
+            Ok(self.exports.get(name).cloned())
+        }
+
+        async fn list_enabled_nfs_exports(&self) -> Result<Vec<NfsExport>, NfsRepositoryError> {
+            Ok(self.exports.values().cloned().collect())
+        }
+
+        async fn nfs_share_exists(&self, share_id: &str) -> Result<bool, NfsRepositoryError> {
+            Ok(self.exports.values().any(|export| export.id == share_id))
+        }
+
+        async fn nfs_user_exists(&self, _user_id: &str) -> Result<bool, NfsRepositoryError> {
+            Ok(true)
+        }
+
+        async fn list_nfs_bindings(
+            &self,
+            share_id: &str,
+        ) -> Result<Vec<NfsBinding>, NfsRepositoryError> {
+            Ok(self.bindings.get(share_id).cloned().unwrap_or_default())
+        }
+
+        async fn insert_nfs_binding(
+            &self,
+            _binding: &NfsBinding,
+        ) -> Result<(), NfsRepositoryError> {
+            Err(NfsRepositoryError::Unavailable)
+        }
+
+        async fn update_nfs_binding(
+            &self,
+            _binding: &NfsBinding,
+        ) -> Result<bool, NfsRepositoryError> {
+            Err(NfsRepositoryError::Unavailable)
+        }
+
+        async fn delete_nfs_binding(
+            &self,
+            _share_id: &str,
+            _binding_id: &str,
+        ) -> Result<bool, NfsRepositoryError> {
+            Err(NfsRepositoryError::Unavailable)
+        }
+    }
+
+    #[async_trait]
+    impl NfsAccessRepository for FakeRepository {
+        async fn list_nfs_acl_rules(
+            &self,
+            share_id: &str,
+        ) -> Result<Vec<AclRule>, NfsRepositoryError> {
+            Ok(self.rules.get(share_id).cloned().unwrap_or_default())
+        }
+
+        async fn nfs_group_ids_for_user(
+            &self,
+            _user_id: &str,
+        ) -> Result<Vec<String>, NfsRepositoryError> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn repository(root: &Path) -> Arc<FakeRepository> {
+        let export = NfsExport {
+            id: "shr_media".to_owned(),
+            name: "media".to_owned(),
+            canonical_path: std::fs::canonicalize(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            generation: 1,
+        };
+        Arc::new(FakeRepository {
+            exports: BTreeMap::from([(export.name.clone(), export.clone())]),
+            bindings: BTreeMap::from([(
+                export.id.clone(),
+                vec![NfsBinding {
+                    id: "bind_local".to_owned(),
+                    share_id: export.id.clone(),
+                    cidr: "127.0.0.1/32".parse::<NfsCidr>().unwrap(),
+                    uid: Some(1000),
+                    user_id: "usr_alice".to_owned(),
+                    permission: NfsBindingPermission::ReadWrite,
+                }],
+            )]),
+            rules: BTreeMap::from([(
+                export.id,
+                vec![AclRule {
+                    path: RelativePath::root(),
+                    subject: Subject::User("usr_alice".to_owned()),
+                    permission: Permission::ReadWrite,
+                    inherit: true,
+                }],
+            )]),
+        })
+    }
+
+    #[tokio::test]
+    async fn mount_handle_round_trips_over_real_tcp_into_nfs_getattr() {
+        let temp = tempfile::tempdir().unwrap();
+        let server = NfsServer::bind(
+            repository(temp.path()),
+            NfsServerConfig {
+                listen: "127.0.0.1".parse().unwrap(),
+                nfs_port: 0,
+                mount_port: 0,
+                rpcbind_address: None,
+            },
+        )
+        .await
+        .unwrap();
+        let nfs_address = server.nfs_address().unwrap();
+        let mount_address = server.mount_address().unwrap();
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let server_task = tokio::spawn(server.run(shutdown_rx));
+
+        let mut mount_stream = TcpStream::connect(mount_address).await.unwrap();
+        let mount_call = mount_call(41, "/media");
+        write_record(&mut mount_stream, &mount_call).await.unwrap();
+        let mount_reply = read_record(&mut mount_stream)
+            .await
+            .unwrap()
+            .unwrap();
+        let root_handle = parse_mount_handle(&mount_reply, 41);
+
+        let mut nfs_stream = TcpStream::connect(nfs_address).await.unwrap();
+        let getattr_call = getattr_call(42, &root_handle);
+        write_record(&mut nfs_stream, &getattr_call).await.unwrap();
+        let getattr_reply = read_record(&mut nfs_stream)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_rpc_success_prefix(&getattr_reply, 42);
+        let mut reader = XdrReader::new(&getattr_reply[24..]);
+        assert_eq!(reader.u32().unwrap(), 0);
+
+        shutdown_tx.send(true).unwrap();
+        server_task.await.unwrap().unwrap();
+    }
+
+    fn mount_call(xid: u32, export: &str) -> Vec<u8> {
+        let mut body = XdrWriter::new();
+        body.string(export).unwrap();
+        rpc_call(xid, MOUNT_PROGRAM, MOUNT_VERSION, 1, &body.into_bytes())
+    }
+
+    fn getattr_call(xid: u32, handle: &[u8]) -> Vec<u8> {
+        let mut body = XdrWriter::new();
+        body.opaque(handle).unwrap();
+        rpc_call(xid, NFS_PROGRAM, NFS_VERSION, 1, &body.into_bytes())
+    }
+
+    fn rpc_call(xid: u32, program: u32, version: u32, procedure: u32, body: &[u8]) -> Vec<u8> {
+        let mut writer = XdrWriter::new();
+        writer.u32(xid);
+        writer.u32(0);
+        writer.u32(RPC_VERSION);
+        writer.u32(program);
+        writer.u32(version);
+        writer.u32(procedure);
+
+        let mut credential = XdrWriter::new();
+        credential.u32(1);
+        credential.string("tcp-smoke").unwrap();
+        credential.u32(1000);
+        credential.u32(100);
+        credential.u32_array(&[]).unwrap();
+        writer.u32(AUTH_SYS);
+        writer.opaque(&credential.into_bytes()).unwrap();
+
+        writer.u32(AUTH_NONE);
+        writer.opaque(&[]).unwrap();
+
+        let mut output = writer.into_bytes();
+        output.extend_from_slice(body);
+        output
+    }
+
+    fn parse_mount_handle(reply: &[u8], xid: u32) -> Vec<u8> {
+        assert_rpc_success_prefix(reply, xid);
+        let mut reader = XdrReader::new(&reply[24..]);
+        assert_eq!(reader.u32().unwrap(), 0);
+        let handle = reader.opaque(64).unwrap();
+        assert!(!handle.is_empty());
+        handle
+    }
+
+    fn assert_rpc_success_prefix(reply: &[u8], xid: u32) {
+        let mut reader = XdrReader::new(reply);
+        assert_eq!(reader.u32().unwrap(), xid);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+        assert!(reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reader.u32().unwrap(), 0);
+    }
+}
