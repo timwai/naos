@@ -570,7 +570,6 @@ fn map_acl_mutation_repository_error(error: AclMutationRepositoryError) -> AclMu
     }
 }
 
-
 pub trait AclReconcileDriverFactory: Send + Sync {
     fn driver(&self, target: AclMutationTarget) -> Arc<dyn ReconcileDriver>;
 }
