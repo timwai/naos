@@ -81,7 +81,7 @@ export function UsersPage() {
   };
 
   const create = useMutation({
-    mutationFn: createUser,
+    mutationFn: (input: UserCreateRequest) => createUser(input),
     onSuccess: (accepted) => {
       setCreateDraft(emptyCreate);
       startOperation(accepted.operation_id, "创建用户");
