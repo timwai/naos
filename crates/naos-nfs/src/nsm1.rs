@@ -1,8 +1,4 @@
-use std::{
-    io,
-    net::IpAddr,
-    sync::Arc,
-};
+use std::{io, net::IpAddr, sync::Arc};
 
 use tokio::sync::Mutex;
 
@@ -124,9 +120,9 @@ impl NsmV1Service {
 
     async fn unmonitor_all(&self, client_ip: IpAddr, my_id: &NsmMyId) -> u32 {
         let mut state = self.inner.lock().await;
-        state.monitors.retain(|monitor| {
-            monitor.client_ip != client_ip || &monitor.mon_id.my_id != my_id
-        });
+        state
+            .monitors
+            .retain(|monitor| monitor.client_ip != client_ip || &monitor.mon_id.my_id != my_id);
         state.state
     }
 
@@ -260,11 +256,7 @@ async fn unmon_reply(service: &NsmV1Service, client_ip: IpAddr, call: &RpcCall) 
     state_reply(call.xid, state)
 }
 
-async fn unmon_all_reply(
-    service: &NsmV1Service,
-    client_ip: IpAddr,
-    call: &RpcCall,
-) -> Vec<u8> {
+async fn unmon_all_reply(service: &NsmV1Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
     let mut reader = XdrReader::new(&call.body);
     let my_id = match decode_my_id(&mut reader) {
         Ok(my_id) => my_id,
