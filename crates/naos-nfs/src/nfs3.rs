@@ -1159,7 +1159,10 @@ impl NfsV3Service {
         credential: &RpcCredential,
         handle: &[u8],
     ) -> Result<HandleContext, NfsV3Error> {
-        if matches!(credential, RpcCredential::Unsupported { .. }) {
+        if !matches!(
+            credential,
+            RpcCredential::AuthNone | RpcCredential::AuthSys(_)
+        ) {
             return Err(NfsV3Error::AccessDenied);
         }
 
