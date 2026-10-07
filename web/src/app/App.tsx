@@ -5,8 +5,8 @@ import { AppShell } from "./layout/AppShell";
 import { AclSimulatorPage } from "../pages/AclSimulatorPage";
 import { AuditPage } from "../pages/AuditPage";
 import { DashboardPage } from "../pages/DashboardPage";
+import { FilesPage } from "../pages/FilesPage";
 import { LoginPage } from "../pages/LoginPage";
-import { PlaceholderPage } from "../pages/PlaceholderPage";
 import { ProfilePage } from "../pages/ProfilePage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { ShareDetailPage } from "../pages/ShareDetailPage";
@@ -52,15 +52,7 @@ export function App() {
       <Route element={<RequireAuth />}>
         <Route element={<AppShell />}>
           <Route index element={<DashboardPage />} />
-          <Route
-            path="files"
-            element={
-              <PlaceholderPage
-                title="文件"
-                description="文件浏览 API 接线将在下一步落地。"
-              />
-            }
-          />
+          <Route path="files" element={<FilesPage />} />
           <Route path="profile" element={<ProfilePage />} />
 
           <Route element={<RequireAdmin />}>

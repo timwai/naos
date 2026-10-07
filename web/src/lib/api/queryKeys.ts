@@ -8,6 +8,11 @@ export const queryKeys = {
     setup: () => ["auth", "setup"] as const,
     sessions: () => ["auth", "sessions"] as const,
   },
+  files: {
+    shares: () => ["files", "shares"] as const,
+    directory: (shareId: string, path: string) =>
+      ["files", "directory", shareId, path] as const,
+  },
   health: {
     ready: () => ["health", "ready"] as const,
   },

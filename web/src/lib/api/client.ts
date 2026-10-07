@@ -11,6 +11,14 @@ export type AclSimulationResponse =
 export type ApiErrorBody = components["schemas"]["ErrorResponse"];
 export type AuditPageResponse =
   components["schemas"]["AuditPageResponse"];
+export type CreateDirectoryRequest =
+  components["schemas"]["CreateDirectoryRequest"];
+export type FileDirectoryResponse =
+  components["schemas"]["FileDirectoryResponse"];
+export type FileSharesResponse =
+  components["schemas"]["FileSharesResponse"];
+export type MoveFileRequest =
+  components["schemas"]["MoveFileRequest"];
 export type AuthSessionResponse =
   components["schemas"]["AuthSessionResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
@@ -204,6 +212,69 @@ export async function deleteNfsPrincipal(principalId: string) {
     `/api/v1/nfs/principals/${encodeURIComponent(principalId)}`,
     { method: "DELETE" },
   );
+}
+
+export async function listFileShares() {
+  return requestJson<FileSharesResponse>("/api/v1/files/shares");
+}
+
+export async function listDirectory(shareId: string, path = "/") {
+  const params = new URLSearchParams({ path });
+  return requestJson<FileDirectoryResponse>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/files?${params.toString()}`,
+  );
+}
+
+export async function createDirectory(
+  shareId: string,
+  input: CreateDirectoryRequest,
+) {
+  return requestJson<void>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/directories`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function moveFile(
+  shareId: string,
+  input: MoveFileRequest,
+) {
+  return requestJson<void>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/files/move`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function deleteFile(shareId: string, path: string) {
+  const params = new URLSearchParams({ path });
+  return requestJson<void>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/files?${params.toString()}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function downloadFile(shareId: string, path: string) {
+  const params = new URLSearchParams({ path });
+  const response = await fetch(
+    `/api/v1/shares/${encodeURIComponent(shareId)}/files/download?${params.toString()}`,
+    { credentials: "include" },
+  );
+  if (!response.ok) {
+    let body: ApiErrorBody | null = null;
+    try {
+      body = (await response.json()) as ApiErrorBody;
+    } catch {
+      body = null;
+    }
+    throw new ApiError(response.status, body);
+  }
+  return response.blob();
 }
 
 export async function listUsers() {
