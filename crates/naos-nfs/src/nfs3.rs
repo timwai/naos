@@ -2840,8 +2840,7 @@ mod tests {
         let service = service.with_rpcsec_gss(registry.clone(), Arc::new(FakeGssAcceptor));
 
         let init = rpcsec_gss_init_call(500, b"client-init");
-        let init_reply =
-            dispatch_nfs3_rpc(&service, "203.0.113.77".parse().unwrap(), &init).await;
+        let init_reply = dispatch_nfs3_rpc(&service, "203.0.113.77".parse().unwrap(), &init).await;
         let mut reader = XdrReader::new(&init_reply);
         assert_eq!(reader.u32().unwrap(), 500);
         assert_eq!(reader.u32().unwrap(), 1);
@@ -2849,8 +2848,7 @@ mod tests {
         assert_eq!(reader.u32().unwrap(), crate::rpc::RPCSEC_GSS);
         assert_eq!(reader.opaque(64).unwrap(), 8u32.to_be_bytes());
         assert_eq!(reader.u32().unwrap(), 0);
-        let init_result =
-            crate::rpc::decode_rpcsec_gss_init_result(reader.remaining()).unwrap();
+        let init_result = crate::rpc::decode_rpcsec_gss_init_result(reader.remaining()).unwrap();
         assert_eq!(init_result.handle, b"ctx");
         assert_eq!(init_result.gss_major, crate::rpc::GSS_S_COMPLETE);
         assert_eq!(init_result.seq_window, 8);
@@ -2865,8 +2863,7 @@ mod tests {
             crate::rpc::RPCSEC_GSS_SVC_NONE,
             &body.into_bytes(),
         );
-        let data_reply =
-            dispatch_nfs3_rpc(&service, "203.0.113.77".parse().unwrap(), &data).await;
+        let data_reply = dispatch_nfs3_rpc(&service, "203.0.113.77".parse().unwrap(), &data).await;
         let mut reader = XdrReader::new(&data_reply);
         assert_eq!(reader.u32().unwrap(), 501);
         assert_eq!(reader.u32().unwrap(), 1);
