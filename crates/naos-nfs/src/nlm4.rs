@@ -17,7 +17,8 @@ use tokio::{fs, net::UdpSocket, sync::Mutex};
 use crate::{
     handle::FileHandleTable,
     rpc::{
-        AUTH_NONE, RPC_VERSION, RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
+        AUTH_NONE, AUTH_SYS, RPC_VERSION, RpcCall, RpcCredential, RpcDecodeError,
+        accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
         accepted_success, decode_call, denied_rpc_mismatch,
     },
@@ -34,19 +35,23 @@ const NLMPROC4_TEST: u32 = 1;
 const NLMPROC4_LOCK: u32 = 2;
 const NLMPROC4_CANCEL: u32 = 3;
 const NLMPROC4_UNLOCK: u32 = 4;
+const NLMPROC4_GRANTED: u32 = 5;
 const NLMPROC4_TEST_MSG: u32 = 6;
 const NLMPROC4_LOCK_MSG: u32 = 7;
 const NLMPROC4_CANCEL_MSG: u32 = 8;
 const NLMPROC4_UNLOCK_MSG: u32 = 9;
+const NLMPROC4_GRANTED_MSG: u32 = 10;
 const NLMPROC4_TEST_RES: u32 = 11;
 const NLMPROC4_LOCK_RES: u32 = 12;
 const NLMPROC4_CANCEL_RES: u32 = 13;
 const NLMPROC4_UNLOCK_RES: u32 = 14;
+const NLMPROC4_GRANTED_RES: u32 = 15;
 const NLMPROC4_NM_LOCK: u32 = 22;
 const NLMPROC4_FREE_ALL: u32 = 23;
 
 pub const NLM4_GRANTED: u32 = 0;
 pub const NLM4_DENIED: u32 = 1;
+pub const NLM4_BLOCKED: u32 = 3;
 pub const NLM4_DENIED_GRACE_PERIOD: u32 = 4;
 pub const NLM4_ROFS: u32 = 6;
 pub const NLM4_STALE_FH: u32 = 7;
@@ -118,9 +123,19 @@ struct NlmResult {
     status: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ValidatedLock {
     file_key: [u8; 32],
     owner: OwnerKey,
+}
+
+#[derive(Debug, Clone)]
+struct BlockedLock {
+    client_ip: IpAddr,
+    cookie: Vec<u8>,
+    exclusive: bool,
+    lock: NlmLock,
+    validated: ValidatedLock,
 }
 
 #[derive(Clone)]
@@ -129,6 +144,8 @@ pub struct NlmV4Service {
     access_repository: Arc<dyn NfsAccessRepository>,
     handles: FileHandleTable,
     locks: Arc<Mutex<Vec<HeldLock>>>,
+    waiters: Arc<Mutex<Vec<BlockedLock>>>,
+    state_guard: Arc<Mutex<()>>,
     callback_rpcbind_port: u16,
 }
 
@@ -143,6 +160,8 @@ impl NlmV4Service {
             access_repository,
             handles,
             locks: Arc::new(Mutex::new(Vec::new())),
+            waiters: Arc::new(Mutex::new(Vec::new())),
+            state_guard: Arc::new(Mutex::new(())),
             callback_rpcbind_port: 111,
         }
     }
