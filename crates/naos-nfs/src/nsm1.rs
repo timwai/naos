@@ -1,6 +1,6 @@
 use std::{io, net::IpAddr, sync::Arc};
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 
 use crate::{
     rpc::{
@@ -50,10 +50,10 @@ struct NsmMonitor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct NsmNotification {
-    client_ip: IpAddr,
-    mon_name: String,
-    state: u32,
+pub struct NsmNotification {
+    pub client_ip: IpAddr,
+    pub mon_name: String,
+    pub state: u32,
 }
 
 #[derive(Debug)]
@@ -73,14 +73,33 @@ impl Default for NsmState {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct NsmV1Service {
     inner: Arc<Mutex<NsmState>>,
+    notification_tx: Option<mpsc::UnboundedSender<NsmNotification>>,
+}
+
+impl Default for NsmV1Service {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(NsmState::default())),
+            notification_tx: None,
+        }
+    }
 }
 
 impl NsmV1Service {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_notification_sender(
+        notification_tx: mpsc::UnboundedSender<NsmNotification>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(NsmState::default())),
+            notification_tx: Some(notification_tx),
+        }
     }
 
     async fn current_state(&self) -> u32 {
@@ -133,7 +152,14 @@ impl NsmV1Service {
     }
 
     async fn record_notification(&self, notification: NsmNotification) {
-        self.inner.lock().await.notifications.push(notification);
+        self.inner
+            .lock()
+            .await
+            .notifications
+            .push(notification.clone());
+        if let Some(notification_tx) = &self.notification_tx {
+            let _ = notification_tx.send(notification);
+        }
     }
 }
 
@@ -444,7 +470,8 @@ mod tests {
 
     #[tokio::test]
     async fn notify_records_peer_state_change() {
-        let service = NsmV1Service::new();
+        let (notification_tx, mut notification_rx) = mpsc::unbounded_channel();
+        let service = NsmV1Service::with_notification_sender(notification_tx);
         let client_ip = "192.0.2.20".parse().unwrap();
         let mut body = XdrWriter::new();
         body.string("peer.example").unwrap();
@@ -456,15 +483,15 @@ mod tests {
         assert_rpc_success_prefix(&mut reader, 60);
         reader.finish().unwrap();
 
+        let expected = NsmNotification {
+            client_ip,
+            mon_name: "peer.example".to_owned(),
+            state: 9,
+        };
         let state = service.inner.lock().await;
-        assert_eq!(
-            state.notifications,
-            vec![NsmNotification {
-                client_ip,
-                mon_name: "peer.example".to_owned(),
-                state: 9,
-            }]
-        );
+        assert_eq!(state.notifications, vec![expected.clone()]);
+        drop(state);
+        assert_eq!(notification_rx.recv().await, Some(expected));
     }
 
     #[tokio::test]

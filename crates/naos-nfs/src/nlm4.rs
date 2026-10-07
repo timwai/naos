@@ -465,6 +465,21 @@ impl NlmV4Service {
         self.grant_waiters().await;
     }
 
+    pub(crate) async fn release_client(&self, client_ip: IpAddr) {
+        {
+            let _state = self.state_guard.lock().await;
+            self.locks
+                .lock()
+                .await
+                .retain(|lock| lock.owner.client_ip != client_ip);
+            self.waiters
+                .lock()
+                .await
+                .retain(|waiter| waiter.validated.owner.client_ip != client_ip);
+        }
+        self.grant_waiters().await;
+    }
+
     async fn grant_waiters(&self) {
         loop {
             let waiter = {
@@ -1765,6 +1780,73 @@ mod tests {
             NLM4_GRANTED
         );
         assert!(service.locks.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn release_client_drops_held_and_blocked_locks_for_that_peer() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let first_ip = "192.168.1.10".parse().unwrap();
+        let second_ip = "192.168.1.11".parse().unwrap();
+
+        assert_eq!(
+            service
+                .lock(
+                    first_ip,
+                    &credential(1000),
+                    vec![1],
+                    true,
+                    lock(handle.clone(), "client-a", 10, 0, 10),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+        assert_eq!(
+            service
+                .lock(
+                    second_ip,
+                    &credential(1000),
+                    vec![2],
+                    true,
+                    lock(handle.clone(), "client-b", 20, 20, 10),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+
+        assert_eq!(
+            service
+                .lock_request(
+                    first_ip,
+                    &credential(1000),
+                    LockRequest {
+                        cookie: vec![3],
+                        block: true,
+                        exclusive: true,
+                        lock: lock(handle, "client-a", 10, 20, 10),
+                        reclaim: false,
+                    },
+                )
+                .await
+                .status,
+            NLM4_BLOCKED
+        );
+        assert_eq!(service.locks.lock().await.len(), 2);
+        assert_eq!(service.waiters.lock().await.len(), 1);
+
+        service.release_client(first_ip).await;
+
+        let locks = service.locks.lock().await;
+        assert_eq!(locks.len(), 1);
+        assert_eq!(locks[0].owner.client_ip, second_ip);
+        drop(locks);
+        assert!(service.waiters.lock().await.is_empty());
     }
 
     #[tokio::test]

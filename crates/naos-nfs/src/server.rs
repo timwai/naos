@@ -9,7 +9,7 @@ use rand_core::{OsRng, RngCore};
 use thiserror::Error;
 use tokio::{
     net::{TcpListener, UdpSocket},
-    sync::watch,
+    sync::{mpsc, watch},
 };
 use tracing::warn;
 
@@ -17,7 +17,10 @@ use crate::{
     mount::{MOUNT_PROGRAM, MOUNT_VERSION, MountService, serve_mount_stream},
     nfs3::{NFS_PROGRAM, NFS_VERSION, NfsV3Service, serve_nfs3_stream},
     nlm4::{NLM_PROGRAM, NLM_VERSION, NlmV4Service, dispatch_nlm4_rpc, serve_nlm4_stream},
-    nsm1::{NSM_PROGRAM, NSM_VERSION, NsmV1Service, dispatch_nsm1_rpc, serve_nsm1_stream},
+    nsm1::{
+        NSM_PROGRAM, NSM_VERSION, NsmNotification, NsmV1Service, dispatch_nsm1_rpc,
+        serve_nsm1_stream,
+    },
     rpcbind::{RpcBindError, RpcTransport, register_mapping, unregister_mapping},
 };
 
@@ -42,6 +45,7 @@ pub struct NfsServer {
     mount_service: MountService,
     nlm_service: NlmV4Service,
     nsm_service: NsmV1Service,
+    nsm_notifications: mpsc::UnboundedReceiver<NsmNotification>,
     rpc_registrations: [RpcRegistration; 6],
     rpcbind_address: Option<SocketAddr>,
 }
@@ -118,7 +122,8 @@ impl NfsServer {
         );
         let nlm_service =
             NlmV4Service::new(nlm_identity_repository, nlm_access_repository, handles);
-        let nsm_service = NsmV1Service::new();
+        let (nsm_notification_tx, nsm_notifications) = mpsc::unbounded_channel();
+        let nsm_service = NsmV1Service::with_notification_sender(nsm_notification_tx);
         let rpc_registrations = [
             RpcRegistration {
                 program: NFS_PROGRAM,
@@ -173,6 +178,7 @@ impl NfsServer {
             mount_service,
             nlm_service,
             nsm_service,
+            nsm_notifications,
             rpc_registrations,
             rpcbind_address: config.rpcbind_address,
         })
@@ -194,7 +200,7 @@ impl NfsServer {
         self.nsm_listener.local_addr()
     }
 
-    pub async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), NfsServerError> {
+    pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<(), NfsServerError> {
         let mut nlm_datagram = vec![0u8; 65_535];
         let mut nsm_datagram = vec![0u8; 65_535];
         loop {
@@ -239,6 +245,11 @@ impl NfsServer {
                             warn!(%peer, %error, "NSMv1 connection ended with error");
                         }
                     });
+                }
+                notification = self.nsm_notifications.recv() => {
+                    if let Some(notification) = notification {
+                        self.nlm_service.release_client(notification.client_ip).await;
+                    }
                 }
                 received = self.nlm_udp.recv_from(&mut nlm_datagram) => {
                     let (length, peer) = received?;
