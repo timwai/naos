@@ -333,11 +333,7 @@ async fn register_rpc_services(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeMap,
-        path::Path,
-        sync::Mutex,
-    };
+    use std::{collections::BTreeMap, path::Path, sync::Mutex};
 
     use async_trait::async_trait;
     use naos_core::{
