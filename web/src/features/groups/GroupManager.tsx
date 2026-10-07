@@ -10,12 +10,17 @@ import {
   createGroup,
   deleteGroup,
   getGroup,
+  getOperation,
   listGroups,
   listUsers,
   replaceGroupMembers,
   updateGroup,
 } from "../../lib/api/client";
 import { queryKeys } from "../../lib/api/queryKeys";
+
+function isTerminal(state: string | undefined) {
+  return state === "succeeded" || state === "failed" || state === "degraded";
+}
 
 function errorMessage(error: unknown) {
   if (error instanceof ApiError) {
@@ -45,6 +50,11 @@ export function GroupManager() {
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [memberDraft, setMemberDraft] = useState<string[]>([]);
   const [success, setSuccess] = useState<string | null>(null);
+  const [operationContext, setOperationContext] = useState<{
+    id: string;
+    action: "members" | "delete";
+    groupId: string;
+  } | null>(null);
 
   useEffect(() => {
     if (
@@ -125,27 +135,63 @@ export function GroupManager() {
         user_ids: memberDraft,
       });
     },
-    onSuccess: async (group) => {
-      setSuccess("成员已原子替换");
-      await refreshGroup(group.id);
+    onSuccess: (accepted) => {
+      if (!selectedId) {
+        return;
+      }
+      setOperationContext({
+        id: accepted.operation_id,
+        action: "members",
+        groupId: selectedId,
+      });
     },
   });
 
   const remove = useMutation({
     mutationFn: (groupId: string) => deleteGroup(groupId),
-    onSuccess: async () => {
-      const deletedId = selectedId;
-      setSelectedId(null);
-      setSuccess("用户组已删除");
-      await refreshGroup(deletedId);
+    onSuccess: (accepted, groupId) => {
+      setOperationContext({
+        id: accepted.operation_id,
+        action: "delete",
+        groupId,
+      });
     },
   });
 
+  const operation = useQuery({
+    queryKey: queryKeys.operations.detail(operationContext?.id ?? ""),
+    queryFn: () => getOperation(operationContext?.id ?? ""),
+    enabled: Boolean(operationContext),
+    refetchInterval: (query) =>
+      isTerminal(query.state.data?.state) ? false : 750,
+  });
+
+  useEffect(() => {
+    if (!operationContext || operation.data?.state !== "succeeded") {
+      return;
+    }
+
+    const completed = operationContext;
+    setOperationContext(null);
+    if (completed.action === "delete") {
+      setSelectedId(null);
+      setSuccess("用户组已删除，系统组也已验证移除");
+      void refreshGroup(completed.groupId);
+      return;
+    }
+
+    setSuccess("成员已同步到系统组并完成数据库提交");
+    void refreshGroup(completed.groupId);
+  }, [operation.data?.state, operationContext]);
+
+  const operationBusy =
+    Boolean(operationContext) && !isTerminal(operation.data?.state);
   const busy =
     create.isPending ||
     update.isPending ||
     members.isPending ||
-    remove.isPending;
+    remove.isPending ||
+    operationBusy;
 
   const memberSet = useMemo(() => new Set(memberDraft), [memberDraft]);
 
@@ -164,8 +210,8 @@ export function GroupManager() {
         <div>
           <h2>用户组</h2>
           <p>
-            成员替换是数据库原子操作，并立即参与 ACL engine 的 group membership
-            计算。系统组映射尚未启用，因此 group filesystem ACL 仍保持 fail-closed。
+            成员替换和删除通过 Operation 同步数据库与系统组，并在 verify 后提交。
+            系统组身份由不可变 group ID 映射，组改名不会改变 filesystem ACL 身份。
           </p>
         </div>
       </div>
@@ -203,6 +249,31 @@ export function GroupManager() {
       {update.isError && <div className="error-box">{errorMessage(update.error)}</div>}
       {members.isError && <div className="error-box">{errorMessage(members.error)}</div>}
       {remove.isError && <div className="error-box">{errorMessage(remove.error)}</div>}
+
+      {operation.isError && (
+        <div className="error-box">{errorMessage(operation.error)}</div>
+      )}
+      {operation.data &&
+        (operation.data.state === "failed" ||
+          operation.data.state === "degraded") && (
+          <div className="error-box">
+            {operation.data.error_code ?? "GROUP_APPLY_FAILED"}
+          </div>
+        )}
+      {operationContext && operation.data && (
+        <div className="share-operation-state group-operation-state">
+          <div>
+            <strong>
+              {operationContext.action === "delete"
+                ? "用户组删除"
+                : "系统组成员同步"}{" "}
+              · {operation.data.state}
+            </strong>
+            <span>{operation.data.phase ?? "queued"}</span>
+          </div>
+          <span>{operation.data.progress}%</span>
+        </div>
+      )}
 
       {groups.isPending ? (
         <div className="inline-state settings-state">正在加载用户组…</div>
@@ -288,6 +359,7 @@ export function GroupManager() {
                         )
                       ) {
                         setSuccess(null);
+                        setOperationContext(null);
                         remove.mutate(detail.data.id);
                       }
                     }}
@@ -307,6 +379,7 @@ export function GroupManager() {
                     disabled={busy || users.isPending || users.isError}
                     onClick={() => {
                       setSuccess(null);
+                      setOperationContext(null);
                       members.mutate();
                     }}
                   >
