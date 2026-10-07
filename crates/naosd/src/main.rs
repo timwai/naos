@@ -17,10 +17,7 @@ use naos_nfs::server::{NfsServer, NfsServerConfig};
 use naos_platform::SmbDoctor;
 use naos_store::Store;
 use naos_webdav::WebDavState;
-use tokio::{
-    net::TcpListener,
-    sync::watch,
-};
+use tokio::{net::TcpListener, sync::watch};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
