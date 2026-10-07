@@ -1249,6 +1249,8 @@ pub async fn dispatch_nlm4_rpc(
         NLMPROC4_CANCEL_MSG => cancel_msg_reply(service, client_ip, &call).await,
         NLMPROC4_UNLOCK_MSG => unlock_msg_reply(service, client_ip, &call).await,
         NLMPROC4_GRANTED_MSG | NLMPROC4_GRANTED_RES => accepted_procedure_unavailable(call.xid),
+        NLMPROC4_SHARE => share_reply(service, client_ip, &call).await,
+        NLMPROC4_UNSHARE => unshare_reply(service, client_ip, &call).await,
         NLMPROC4_FREE_ALL => free_all_reply(service, client_ip, &call).await,
         _ => accepted_procedure_unavailable(call.xid),
     }
@@ -1366,6 +1368,54 @@ async fn unlock_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall)
         .unlock(client_ip, &call.credential, cookie, lock)
         .await;
     accepted_success(call.xid, &encode_result(&result))
+}
+
+async fn share_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let cookie = match reader.opaque(MAX_NETOBJ_BYTES) {
+        Ok(cookie) => cookie,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let share = match decode_share(&mut reader) {
+        Ok(share) => share,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let reclaim = match decode_bool(&mut reader) {
+        Ok(reclaim) => reclaim,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let result = service
+        .share(client_ip, &call.credential, cookie, share, reclaim)
+        .await;
+    accepted_success(call.xid, &encode_share_result(&result))
+}
+
+async fn unshare_reply(
+    service: &NlmV4Service,
+    client_ip: IpAddr,
+    call: &RpcCall,
+) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let cookie = match reader.opaque(MAX_NETOBJ_BYTES) {
+        Ok(cookie) => cookie,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let share = match decode_share(&mut reader) {
+        Ok(share) => share,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if decode_bool(&mut reader).is_err() || reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let result = service
+        .unshare(client_ip, &call.credential, cookie, share)
+        .await;
+    accepted_success(call.xid, &encode_share_result(&result))
 }
 
 async fn test_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
@@ -1614,6 +1664,25 @@ fn decode_bool(reader: &mut XdrReader<'_>) -> Result<bool, ()> {
     }
 }
 
+fn decode_share(reader: &mut XdrReader<'_>) -> Result<NlmShare, ()> {
+    let caller_name = reader.string(MAX_CALLER_NAME_BYTES).map_err(|_| ())?;
+    let file_handle = reader.opaque(MAX_HANDLE_BYTES).map_err(|_| ())?;
+    let owner_handle = reader.opaque(MAX_NETOBJ_BYTES).map_err(|_| ())?;
+    let mode = reader.u32().map_err(|_| ())?;
+    let access = reader.u32().map_err(|_| ())?;
+    if mode > 3 || access > 3 {
+        return Err(());
+    }
+
+    Ok(NlmShare {
+        caller_name,
+        file_handle,
+        owner_handle,
+        mode,
+        access,
+    })
+}
+
 fn decode_lock(reader: &mut XdrReader<'_>) -> Result<NlmLock, ()> {
     Ok(NlmLock {
         caller_name: reader.string(MAX_CALLER_NAME_BYTES).map_err(|_| ())?,
@@ -1629,6 +1698,14 @@ fn encode_result(result: &NlmResult) -> Vec<u8> {
     let mut writer = XdrWriter::new();
     writer.opaque(&result.cookie).expect("validated NLM cookie");
     writer.u32(result.status);
+    writer.into_bytes()
+}
+
+fn encode_share_result(result: &NlmShareResult) -> Vec<u8> {
+    let mut writer = XdrWriter::new();
+    writer.opaque(&result.cookie).expect("validated NLM cookie");
+    writer.u32(result.status);
+    writer.u32(result.sequence as u32);
     writer.into_bytes()
 }
 
