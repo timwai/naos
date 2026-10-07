@@ -226,13 +226,7 @@ impl NsmV1Service {
 
 async fn send_reboot_notification(peer_ip: IpAddr, notify_name: &str, state: u32) -> bool {
     let rpcbind_address = SocketAddr::new(peer_ip, RPCBIND_PORT);
-    let port = match lookup_port(
-        rpcbind_address,
-        NSM_PROGRAM,
-        NSM_VERSION,
-        RpcTransport::Udp,
-    )
-    .await
+    let port = match lookup_port(rpcbind_address, NSM_PROGRAM, NSM_VERSION, RpcTransport::Udp).await
     {
         Ok(Some(port)) => port,
         Ok(None) | Err(_) => return false,
@@ -265,7 +259,9 @@ fn notify_rpc_call(xid: u32, notify_name: &str, state: u32) -> Vec<u8> {
     writer.u32(0);
     writer.u32(AUTH_NONE);
     writer.u32(0);
-    writer.string(notify_name).expect("validated NSM notify name");
+    writer
+        .string(notify_name)
+        .expect("validated NSM notify name");
     writer.u32(state);
     writer.into_bytes()
 }
