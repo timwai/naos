@@ -508,6 +508,138 @@ mod tests {
         server_task.await.unwrap().unwrap();
     }
 
+    #[tokio::test]
+    async fn nsm_notify_releases_nlm_lock_over_real_tcp() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let server = NfsServer::bind(
+            repository(temp.path()),
+            NfsServerConfig {
+                listen: "127.0.0.1".parse().unwrap(),
+                nfs_port: 0,
+                mount_port: 0,
+                nlm_port: 0,
+                nsm_port: 0,
+                rpcbind_address: None,
+            },
+        )
+        .await
+        .unwrap();
+        let nfs_address = server.nfs_address().unwrap();
+        let mount_address = server.mount_address().unwrap();
+        let nlm_address = server.nlm_address().unwrap();
+        let nsm_address = server.nsm_address().unwrap();
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let server_task = tokio::spawn(server.run(shutdown_rx));
+
+        let mount_reply = rpc_round_trip(mount_address, mount_call(100, "/media")).await;
+        let root_handle = parse_mount_handle(&mount_reply, 100);
+
+        let lookup_reply =
+            rpc_round_trip(nfs_address, lookup_call(101, &root_handle, "data.bin")).await;
+        let file_handle = parse_lookup_handle(&lookup_reply, 101);
+
+        let mut nlm_stream = TcpStream::connect(nlm_address).await.unwrap();
+        let lock_call = nlm_lock_call(102, &file_handle, b"owner-a", 101);
+        write_record(&mut nlm_stream, &lock_call).await.unwrap();
+        let lock_reply = read_record(&mut nlm_stream).await.unwrap().unwrap();
+        assert_eq!(parse_nlm_status(&lock_reply, 102), 0);
+
+        let test_call = nlm_test_call(103, &file_handle, b"owner-b", 102);
+        write_record(&mut nlm_stream, &test_call).await.unwrap();
+        let test_reply = read_record(&mut nlm_stream).await.unwrap().unwrap();
+        assert_eq!(parse_nlm_status(&test_reply, 103), 1);
+
+        let notify_reply =
+            rpc_round_trip(nsm_address, nsm_notify_call(104, "client.example", 3)).await;
+        assert_rpc_success_prefix(&notify_reply, 104);
+
+        let mut released = false;
+        for attempt in 0..50u32 {
+            let xid = 105 + attempt;
+            let test_call = nlm_test_call(xid, &file_handle, b"owner-b", 102);
+            write_record(&mut nlm_stream, &test_call).await.unwrap();
+            let test_reply = read_record(&mut nlm_stream).await.unwrap().unwrap();
+            if parse_nlm_status(&test_reply, xid) == 0 {
+                released = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(released, "NSM reboot notification did not release the NLM lock");
+
+        shutdown_tx.send(true).unwrap();
+        server_task.await.unwrap().unwrap();
+    }
+
+    async fn rpc_round_trip(address: SocketAddr, request: Vec<u8>) -> Vec<u8> {
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        write_record(&mut stream, &request).await.unwrap();
+        read_record(&mut stream).await.unwrap().unwrap()
+    }
+
+    fn lookup_call(xid: u32, directory_handle: &[u8], name: &str) -> Vec<u8> {
+        let mut body = XdrWriter::new();
+        body.opaque(directory_handle).unwrap();
+        body.string(name).unwrap();
+        rpc_call(xid, NFS_PROGRAM, NFS_VERSION, 3, &body.into_bytes())
+    }
+
+    fn parse_lookup_handle(reply: &[u8], xid: u32) -> Vec<u8> {
+        assert_rpc_success_prefix(reply, xid);
+        let mut reader = XdrReader::new(&reply[24..]);
+        assert_eq!(reader.u32().unwrap(), 0);
+        reader.opaque(64).unwrap()
+    }
+
+    fn nlm_lock_call(xid: u32, file_handle: &[u8], owner: &[u8], svid: u32) -> Vec<u8> {
+        let mut body = XdrWriter::new();
+        body.opaque(&[1]).unwrap();
+        body.u32(0);
+        body.u32(1);
+        encode_nlm_lock(&mut body, file_handle, owner, svid);
+        body.u32(0);
+        body.u32(0);
+        rpc_call(xid, NLM_PROGRAM, NLM_VERSION, 2, &body.into_bytes())
+    }
+
+    fn nlm_test_call(xid: u32, file_handle: &[u8], owner: &[u8], svid: u32) -> Vec<u8> {
+        let mut body = XdrWriter::new();
+        body.opaque(&[2]).unwrap();
+        body.u32(1);
+        encode_nlm_lock(&mut body, file_handle, owner, svid);
+        rpc_call(xid, NLM_PROGRAM, NLM_VERSION, 1, &body.into_bytes())
+    }
+
+    fn encode_nlm_lock(
+        writer: &mut XdrWriter,
+        file_handle: &[u8],
+        owner: &[u8],
+        svid: u32,
+    ) {
+        writer.string("loopback-client").unwrap();
+        writer.opaque(file_handle).unwrap();
+        writer.opaque(owner).unwrap();
+        writer.u32(svid);
+        writer.u64(0);
+        writer.u64(0);
+    }
+
+    fn parse_nlm_status(reply: &[u8], xid: u32) -> u32 {
+        assert_rpc_success_prefix(reply, xid);
+        let mut reader = XdrReader::new(&reply[24..]);
+        reader.opaque(16).unwrap();
+        reader.u32().unwrap()
+    }
+
+    fn nsm_notify_call(xid: u32, mon_name: &str, state: u32) -> Vec<u8> {
+        let mut body = XdrWriter::new();
+        body.string(mon_name).unwrap();
+        body.u32(state);
+        rpc_call(xid, NSM_PROGRAM, NSM_VERSION, 6, &body.into_bytes())
+    }
+
     fn mount_call(xid: u32, export: &str) -> Vec<u8> {
         let mut body = XdrWriter::new();
         body.string(export).unwrap();
