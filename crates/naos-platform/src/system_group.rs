@@ -12,7 +12,7 @@ use crate::{
     command::{CommandError, CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner},
 };
 
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(any(target_os = "macos", test))]
 const GROUP_MARKER: &str = "Managed by naos";
 #[cfg(target_os = "windows")]
 const WINDOWS_GROUP_ENV: &str = "NAOS_GROUP";
@@ -688,10 +688,7 @@ mod tests {
         let group = group();
         let managed_guard =
             "naos_group_guard:x:900:900:Managed by naos:/nonexistent:/usr/sbin/nologin";
-        let existing = format!(
-            "{}:x:998:naos_group_guard,naos_alice",
-            group.as_str()
-        );
+        let existing = format!("{}:x:998:naos_group_guard,naos_alice", group.as_str());
         let runner = Arc::new(FakeRunner::new(vec![
             output(0, managed_guard),
             output(0, &existing),
@@ -703,10 +700,7 @@ mod tests {
         let commands = runner.commands();
         assert_eq!(commands[2].program, "gpasswd");
         assert_eq!(commands[2].args[0], "-M");
-        assert_eq!(
-            commands[2].args[1],
-            "naos_alice,naos_bob,naos_group_guard"
-        );
+        assert_eq!(commands[2].args[1], "naos_alice,naos_bob,naos_group_guard");
     }
 
     #[cfg(target_os = "macos")]
