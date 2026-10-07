@@ -47,13 +47,16 @@ const NFSPROC3_GETATTR: u32 = 1;
 const NFSPROC3_SETATTR: u32 = 2;
 const NFSPROC3_LOOKUP: u32 = 3;
 const NFSPROC3_ACCESS: u32 = 4;
+const NFSPROC3_READLINK: u32 = 5;
 const NFSPROC3_READ: u32 = 6;
 const NFSPROC3_WRITE: u32 = 7;
 const NFSPROC3_CREATE: u32 = 8;
 const NFSPROC3_MKDIR: u32 = 9;
+const NFSPROC3_SYMLINK: u32 = 10;
 const NFSPROC3_REMOVE: u32 = 12;
 const NFSPROC3_RMDIR: u32 = 13;
 const NFSPROC3_RENAME: u32 = 14;
+const NFSPROC3_LINK: u32 = 15;
 const NFSPROC3_READDIR: u32 = 16;
 const NFSPROC3_READDIRPLUS: u32 = 17;
 const NFSPROC3_FSSTAT: u32 = 18;
@@ -81,6 +84,7 @@ const NFS3ERR_SERVERFAULT: u32 = 10006;
 
 const NF3REG: u32 = 1;
 const NF3DIR: u32 = 2;
+const NF3LNK: u32 = 5;
 
 const ACCESS3_READ: u32 = 0x0001;
 const ACCESS3_LOOKUP: u32 = 0x0002;
@@ -91,6 +95,7 @@ const ACCESS3_DELETE: u32 = 0x0010;
 const FILE_SYNC: u32 = 2;
 const FSF3_HOMOGENEOUS: u32 = 0x0008;
 const MAX_NAME_BYTES: usize = 255;
+const MAX_PATH_BYTES: usize = 1024;
 const MAX_HANDLE_BYTES: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +123,10 @@ pub struct NfsAttributes {
 impl NfsAttributes {
     pub const fn is_directory(&self) -> bool {
         self.file_type == NF3DIR
+    }
+
+    pub const fn is_symlink(&self) -> bool {
+        self.file_type == NF3LNK
     }
 }
 
@@ -176,6 +185,18 @@ pub struct WriteResult {
     pub attributes: NfsAttributes,
     pub count: u32,
     pub verifier: [u8; 8],
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadLinkResult {
+    pub attributes: NfsAttributes,
+    pub target: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct LinkResult {
+    pub file_attributes: NfsAttributes,
+    pub directory_attributes: NfsAttributes,
 }
 
 #[derive(Debug, Clone)]
@@ -353,7 +374,7 @@ impl NfsV3Service {
         let context = self.resolve_handle(client_ip, credential, handle).await?;
         self.authorize(&context, &context.relative_path, FileOperation::Stat)
             .await?;
-        let path = resolve_existing(&context)?;
+        let path = resolve_entry(&context)?;
         attributes(&path).await
     }
 
@@ -368,8 +389,12 @@ impl NfsV3Service {
         let context = self.resolve_handle(client_ip, credential, handle).await?;
         self.authorize(&context, &context.relative_path, FileOperation::Write)
             .await?;
+        let entry = resolve_entry(&context)?;
+        let before = attributes(&entry).await?;
+        if before.is_symlink() {
+            return Err(NfsV3Error::NotSupported);
+        }
         let path = resolve_existing(&context)?;
-        let before = attributes(&path).await?;
 
         if guard.is_some_and(|expected| expected != before.ctime) {
             return Err(NfsV3Error::NotSynchronized);
@@ -431,7 +456,7 @@ impl NfsV3Service {
         self.authorize(&context, &child, FileOperation::Stat)
             .await?;
         let resolver = resolver(&context.export)?;
-        let child_path = resolver.resolve_existing(&child).map_err(path_error)?;
+        let child_path = resolver.resolve_entry(&child).map_err(path_error)?;
         let object_attributes = attributes(&child_path).await?;
         let file_handle = self.handles.issue(&context.export, &child);
 
@@ -450,7 +475,7 @@ impl NfsV3Service {
         requested: u32,
     ) -> Result<AccessResult, NfsV3Error> {
         let context = self.resolve_handle(client_ip, credential, handle).await?;
-        let path = resolve_existing(&context)?;
+        let path = resolve_entry(&context)?;
         let attributes = attributes(&path).await?;
         let permission = self.permission(&context, &context.relative_path).await?;
         let allowed = requested & allowed_access(permission, attributes.is_directory());
@@ -458,6 +483,32 @@ impl NfsV3Service {
             attributes,
             allowed,
         })
+    }
+
+    pub async fn readlink(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        handle: &[u8],
+    ) -> Result<ReadLinkResult, NfsV3Error> {
+        let context = self.resolve_handle(client_ip, credential, handle).await?;
+        self.authorize(&context, &context.relative_path, FileOperation::Read)
+            .await?;
+        let path = resolve_entry(&context)?;
+        let attributes = attributes(&path).await?;
+        if !attributes.is_symlink() {
+            return Err(NfsV3Error::Invalid);
+        }
+
+        let target = fs::read_link(&path).await.map_err(io_error)?;
+        let target = target
+            .to_str()
+            .ok_or(NfsV3Error::Invalid)?
+            .to_owned();
+        if target.len() > MAX_PATH_BYTES {
+            return Err(NfsV3Error::Invalid);
+        }
+        Ok(ReadLinkResult { attributes, target })
     }
 
     pub async fn read(
@@ -471,11 +522,16 @@ impl NfsV3Service {
         let context = self.resolve_handle(client_ip, credential, handle).await?;
         self.authorize(&context, &context.relative_path, FileOperation::Read)
             .await?;
-        let path = resolve_existing(&context)?;
-        let before = attributes(&path).await?;
-        if before.is_directory() {
+        let entry = resolve_entry(&context)?;
+        let entry_attributes = attributes(&entry).await?;
+        if entry_attributes.is_directory() {
             return Err(NfsV3Error::IsDirectory);
         }
+        if entry_attributes.is_symlink() {
+            return Err(NfsV3Error::Invalid);
+        }
+        let path = resolve_existing(&context)?;
+        let before = attributes(&path).await?;
 
         let requested = cmp::min(count as usize, MAX_NFS_TRANSFER);
         let mut file = fs::File::open(&path).await.map_err(io_error)?;
@@ -508,11 +564,15 @@ impl NfsV3Service {
         let context = self.resolve_handle(client_ip, credential, handle).await?;
         self.authorize(&context, &context.relative_path, FileOperation::Write)
             .await?;
-        let path = resolve_existing(&context)?;
-        let before = attributes(&path).await?;
-        if before.is_directory() {
+        let entry = resolve_entry(&context)?;
+        let entry_attributes = attributes(&entry).await?;
+        if entry_attributes.is_directory() {
             return Err(NfsV3Error::IsDirectory);
         }
+        if entry_attributes.is_symlink() {
+            return Err(NfsV3Error::Invalid);
+        }
+        let path = resolve_existing(&context)?;
 
         let mut file = OpenOptions::new()
             .write(true)
@@ -540,6 +600,14 @@ impl NfsV3Service {
         let context = self.resolve_handle(client_ip, credential, handle).await?;
         self.authorize(&context, &context.relative_path, FileOperation::Write)
             .await?;
+        let entry = resolve_entry(&context)?;
+        let entry_attributes = attributes(&entry).await?;
+        if entry_attributes.is_directory() {
+            return Err(NfsV3Error::IsDirectory);
+        }
+        if entry_attributes.is_symlink() {
+            return Err(NfsV3Error::Invalid);
+        }
         let path = resolve_existing(&context)?;
         let file = OpenOptions::new()
             .write(true)
@@ -639,6 +707,42 @@ impl NfsV3Service {
         })
     }
 
+    pub async fn symlink(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        directory_handle: &[u8],
+        name: &str,
+        target: &str,
+    ) -> Result<LookupResult, NfsV3Error> {
+        if target.is_empty() || target.len() > MAX_PATH_BYTES || target.as_bytes().contains(&0) {
+            return Err(NfsV3Error::Invalid);
+        }
+
+        let context = self
+            .resolve_handle(client_ip, credential, directory_handle)
+            .await?;
+        let directory = resolve_entry(&context)?;
+        let directory_attributes = attributes(&directory).await?;
+        if !directory_attributes.is_directory() {
+            return Err(NfsV3Error::NotDirectory);
+        }
+
+        let child = child_path(&context.relative_path, name)?;
+        self.authorize(&context, &child, FileOperation::Create)
+            .await?;
+        let link_path = resolver(&context.export)?
+            .resolve_for_create(&child)
+            .map_err(path_error)?;
+        create_symlink(target.to_owned(), link_path.clone()).await?;
+
+        Ok(LookupResult {
+            file_handle: self.handles.issue(&context.export, &child),
+            object_attributes: attributes(&link_path).await?,
+            directory_attributes: attributes(&directory).await?,
+        })
+    }
+
     pub async fn remove(
         &self,
         client_ip: IpAddr,
@@ -657,7 +761,7 @@ impl NfsV3Service {
 
         let child = child_path(&context.relative_path, name)?;
         let target = resolver(&context.export)?
-            .resolve_existing(&child)
+            .resolve_entry(&child)
             .map_err(path_error)?;
         if attributes(&target).await?.is_directory() {
             return Err(NfsV3Error::IsDirectory);
@@ -686,7 +790,7 @@ impl NfsV3Service {
 
         let child = child_path(&context.relative_path, name)?;
         let target = resolver(&context.export)?
-            .resolve_existing(&child)
+            .resolve_entry(&child)
             .map_err(path_error)?;
         if !attributes(&target).await?.is_directory() {
             return Err(NfsV3Error::NotDirectory);
@@ -733,7 +837,7 @@ impl NfsV3Service {
         let source = child_path(&source_context.relative_path, source_name)?;
         let target = child_path(&target_context.relative_path, target_name)?;
         let resolver = resolver(&source_context.export)?;
-        let source_path = resolver.resolve_existing(&source).map_err(path_error)?;
+        let source_path = resolver.resolve_entry(&source).map_err(path_error)?;
         let target_path = resolver.resolve_for_create(&target).map_err(path_error)?;
         fs::rename(&source_path, &target_path)
             .await
@@ -744,6 +848,59 @@ impl NfsV3Service {
         Ok(RenameResult {
             source_directory_attributes: attributes(&source_directory).await?,
             target_directory_attributes: attributes(&target_directory).await?,
+        })
+    }
+
+    pub async fn link(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        source_handle: &[u8],
+        target_directory_handle: &[u8],
+        target_name: &str,
+    ) -> Result<LinkResult, NfsV3Error> {
+        let source_context = self
+            .resolve_handle(client_ip, credential, source_handle)
+            .await?;
+        let target_context = self
+            .resolve_handle(client_ip, credential, target_directory_handle)
+            .await?;
+        if source_context.export.id != target_context.export.id {
+            return Err(NfsV3Error::CrossDevice);
+        }
+
+        self.authorize(
+            &source_context,
+            &source_context.relative_path,
+            FileOperation::Read,
+        )
+        .await?;
+        let source_path = resolve_entry(&source_context)?;
+        let source_attributes = attributes(&source_path).await?;
+        if source_attributes.is_directory() {
+            return Err(NfsV3Error::IsDirectory);
+        }
+        if source_attributes.is_symlink() {
+            return Err(NfsV3Error::NotSupported);
+        }
+
+        let target_directory = resolve_entry(&target_context)?;
+        if !attributes(&target_directory).await?.is_directory() {
+            return Err(NfsV3Error::NotDirectory);
+        }
+        let target = child_path(&target_context.relative_path, target_name)?;
+        self.authorize(&target_context, &target, FileOperation::Create)
+            .await?;
+        let target_path = resolver(&target_context.export)?
+            .resolve_for_create(&target)
+            .map_err(path_error)?;
+        fs::hard_link(&source_path, &target_path)
+            .await
+            .map_err(io_error)?;
+
+        Ok(LinkResult {
+            file_attributes: attributes(&source_path).await?,
+            directory_attributes: attributes(&target_directory).await?,
         })
     }
 
@@ -798,7 +955,7 @@ impl NfsV3Service {
                 continue;
             }
             let child_path = resolver(&context.export)?
-                .resolve_existing(&child)
+                .resolve_entry(&child)
                 .map_err(path_error)?;
             let child_attributes = attributes(&child_path).await?;
             let entry_bytes = 20usize.saturating_add(xdr_padded_len(name.len()));
@@ -908,7 +1065,7 @@ impl NfsV3Service {
                 continue;
             }
             let child_path = resolver(&context.export)?
-                .resolve_existing(&child)
+                .resolve_entry(&child)
                 .map_err(path_error)?;
             let child_attributes = attributes(&child_path).await?;
             let file_handle = self.handles.issue(&context.export, &child);
@@ -1038,6 +1195,25 @@ fn resolve_existing(context: &HandleContext) -> Result<PathBuf, NfsV3Error> {
         .map_err(path_error)
 }
 
+fn resolve_entry(context: &HandleContext) -> Result<PathBuf, NfsV3Error> {
+    resolver(&context.export)?
+        .resolve_entry(&context.relative_path)
+        .map_err(path_error)
+}
+
+#[cfg(unix)]
+async fn create_symlink(target: String, link_path: PathBuf) -> Result<(), NfsV3Error> {
+    tokio::task::spawn_blocking(move || std::os::unix::fs::symlink(target, link_path))
+        .await
+        .map_err(|_| NfsV3Error::Io)?
+        .map_err(io_error)
+}
+
+#[cfg(not(unix))]
+async fn create_symlink(_: String, _: PathBuf) -> Result<(), NfsV3Error> {
+    Err(NfsV3Error::NotSupported)
+}
+
 fn nfs_time_to_filetime(time: NfsTime) -> FileTime {
     FileTime::from_unix_time(i64::from(time.seconds), time.nseconds)
 }
@@ -1113,11 +1289,13 @@ fn allowed_access(permission: Permission, directory: bool) -> u32 {
 }
 
 async fn attributes(path: &Path) -> Result<NfsAttributes, NfsV3Error> {
-    let metadata = fs::metadata(path).await.map_err(io_error)?;
+    let metadata = fs::symlink_metadata(path).await.map_err(io_error)?;
     let file_type = if metadata.is_dir() {
         NF3DIR
     } else if metadata.is_file() {
         NF3REG
+    } else if metadata.file_type().is_symlink() {
+        NF3LNK
     } else {
         return Err(NfsV3Error::Invalid);
     };
@@ -1324,13 +1502,16 @@ pub async fn dispatch_nfs3_rpc(
         NFSPROC3_SETATTR => setattr_reply(service, client_ip, &call).await,
         NFSPROC3_LOOKUP => lookup_reply(service, client_ip, &call).await,
         NFSPROC3_ACCESS => access_reply(service, client_ip, &call).await,
+        NFSPROC3_READLINK => readlink_reply(service, client_ip, &call).await,
         NFSPROC3_READ => read_reply(service, client_ip, &call).await,
         NFSPROC3_WRITE => write_reply(service, client_ip, &call).await,
         NFSPROC3_CREATE => create_reply(service, client_ip, &call).await,
         NFSPROC3_MKDIR => mkdir_reply(service, client_ip, &call).await,
+        NFSPROC3_SYMLINK => symlink_reply(service, client_ip, &call).await,
         NFSPROC3_REMOVE => remove_reply(service, client_ip, &call).await,
         NFSPROC3_RMDIR => rmdir_reply(service, client_ip, &call).await,
         NFSPROC3_RENAME => rename_reply(service, client_ip, &call).await,
+        NFSPROC3_LINK => link_reply(service, client_ip, &call).await,
         NFSPROC3_READDIR => readdir_reply(service, client_ip, &call).await,
         NFSPROC3_READDIRPLUS => readdirplus_reply(service, client_ip, &call).await,
         NFSPROC3_FSSTAT => fsstat_reply(service, client_ip, &call).await,
@@ -1461,6 +1642,29 @@ async fn access_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall)
             writer.u32(NFS3_OK);
             encode_post_attr(&mut writer, Some(&result.attributes));
             writer.u32(result.allowed);
+        }
+        Err(error) => {
+            writer.u32(nfs_status(error));
+            encode_post_attr(&mut writer, None);
+        }
+    }
+    accepted_success(call.xid, &writer.into_bytes())
+}
+
+async fn readlink_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let handle = match decode_single_handle(&call.body) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+
+    let mut writer = XdrWriter::new();
+    match service.readlink(client_ip, &call.credential, &handle).await {
+        Ok(result) => {
+            writer.u32(NFS3_OK);
+            encode_post_attr(&mut writer, Some(&result.attributes));
+            if writer.string(&result.target).is_err() {
+                return accepted_system_error(call.xid);
+            }
         }
         Err(error) => {
             writer.u32(nfs_status(error));
@@ -1652,6 +1856,48 @@ async fn mkdir_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) 
     accepted_success(call.xid, &writer.into_bytes())
 }
 
+async fn symlink_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let directory = match reader.opaque(MAX_HANDLE_BYTES) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let name = match reader.string(MAX_NAME_BYTES) {
+        Ok(name) => name,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if decode_sattr3(&mut reader).is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+    let target = match reader.string(MAX_PATH_BYTES) {
+        Ok(target) => target,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let mut writer = XdrWriter::new();
+    match service
+        .symlink(client_ip, &call.credential, &directory, &name, &target)
+        .await
+    {
+        Ok(result) => {
+            writer.u32(NFS3_OK);
+            if encode_post_fh(&mut writer, Some(&result.file_handle)).is_err() {
+                return accepted_system_error(call.xid);
+            }
+            encode_post_attr(&mut writer, Some(&result.object_attributes));
+            encode_wcc_after(&mut writer, Some(&result.directory_attributes));
+        }
+        Err(error) => {
+            writer.u32(nfs_status(error));
+            encode_wcc_after(&mut writer, None);
+        }
+    }
+    accepted_success(call.xid, &writer.into_bytes())
+}
+
 async fn remove_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
     directory_name_mutation_reply(service, client_ip, call, false).await
 }
@@ -1745,6 +1991,43 @@ async fn rename_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall)
         Err(error) => {
             writer.u32(nfs_status(error));
             encode_wcc_after(&mut writer, None);
+            encode_wcc_after(&mut writer, None);
+        }
+    }
+    accepted_success(call.xid, &writer.into_bytes())
+}
+
+async fn link_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let source = match reader.opaque(MAX_HANDLE_BYTES) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let directory = match reader.opaque(MAX_HANDLE_BYTES) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let name = match reader.string(MAX_NAME_BYTES) {
+        Ok(name) => name,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let mut writer = XdrWriter::new();
+    match service
+        .link(client_ip, &call.credential, &source, &directory, &name)
+        .await
+    {
+        Ok(result) => {
+            writer.u32(NFS3_OK);
+            encode_post_attr(&mut writer, Some(&result.file_attributes));
+            encode_wcc_after(&mut writer, Some(&result.directory_attributes));
+        }
+        Err(error) => {
+            writer.u32(nfs_status(error));
+            encode_post_attr(&mut writer, None);
             encode_wcc_after(&mut writer, None);
         }
     }
@@ -2439,6 +2722,99 @@ mod tests {
             .rmdir(client_ip, &credential, &root_handle, "archive")
             .await
             .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlink_readlink_and_remove_do_not_follow_escape() {
+        let temp = tempfile::tempdir().unwrap();
+        let share = temp.path().join("share");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&share).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), b"secret").unwrap();
+
+        let (service, handles, export) = service(&share, NfsBindingPermission::ReadWrite);
+        let root_handle = handles.issue_root(&export);
+        let client_ip = "192.168.1.10".parse().unwrap();
+        let credential = auth_sys(1000);
+
+        let created = service
+            .symlink(
+                client_ip,
+                &credential,
+                &root_handle,
+                "escape",
+                "../outside/secret.txt",
+            )
+            .await
+            .unwrap();
+        assert!(created.object_attributes.is_symlink());
+
+        let looked_up = service
+            .lookup(client_ip, &credential, &root_handle, "escape")
+            .await
+            .unwrap();
+        assert!(looked_up.object_attributes.is_symlink());
+
+        let link = service
+            .readlink(client_ip, &credential, &looked_up.file_handle)
+            .await
+            .unwrap();
+        assert_eq!(link.target, "../outside/secret.txt");
+        assert!(matches!(
+            service
+                .read(client_ip, &credential, &looked_up.file_handle, 0, 6)
+                .await,
+            Err(NfsV3Error::Invalid)
+        ));
+
+        service
+            .remove(client_ip, &credential, &root_handle, "escape")
+            .await
+            .unwrap();
+        assert!(outside.join("secret.txt").exists());
+        assert!(!share.join("escape").exists());
+    }
+
+    #[tokio::test]
+    async fn hard_link_creates_an_alias_without_invalidating_source_handle() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("report.txt"), b"hello").unwrap();
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadWrite);
+        let root_handle = handles.issue_root(&export);
+        let client_ip = "192.168.1.10".parse().unwrap();
+        let credential = auth_sys(1000);
+
+        let source = service
+            .lookup(client_ip, &credential, &root_handle, "report.txt")
+            .await
+            .unwrap();
+        service
+            .link(
+                client_ip,
+                &credential,
+                &source.file_handle,
+                &root_handle,
+                "alias.txt",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(temp.path().join("alias.txt")).unwrap(), b"hello");
+        assert_eq!(
+            service
+                .read(client_ip, &credential, &source.file_handle, 0, 5)
+                .await
+                .unwrap()
+                .data,
+            b"hello"
+        );
+        service
+            .remove(client_ip, &credential, &root_handle, "alias.txt")
+            .await
+            .unwrap();
+        assert!(temp.path().join("report.txt").exists());
     }
 
     #[tokio::test]

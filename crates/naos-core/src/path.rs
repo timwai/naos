@@ -233,6 +233,34 @@ impl SafePathResolver {
         self.ensure_contained(canonical)
     }
 
+    pub fn resolve_entry(&self, relative: &RelativePath) -> Result<PathBuf, PathError> {
+        if relative.is_root() {
+            return Ok(self.canonical_root.clone());
+        }
+
+        let file_name = relative.file_name().ok_or(PathError::InvalidRelativePath)?;
+        let parent = relative.parent().ok_or(PathError::InvalidRelativePath)?;
+        let parent_path = self.canonical_root.join(parent.to_path_buf());
+        let canonical_parent = fs::canonicalize(parent_path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                PathError::ParentNotFound
+            } else {
+                PathError::Io
+            }
+        })?;
+        let canonical_parent = self.ensure_contained(canonical_parent)?;
+        let entry = canonical_parent.join(file_name);
+
+        fs::symlink_metadata(&entry).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                PathError::TargetNotFound
+            } else {
+                PathError::Io
+            }
+        })?;
+        Ok(entry)
+    }
+
     pub fn resolve_for_create(&self, relative: &RelativePath) -> Result<PathBuf, PathError> {
         let file_name = relative.file_name().ok_or(PathError::InvalidRelativePath)?;
         let parent = relative.parent().ok_or(PathError::InvalidRelativePath)?;
@@ -405,6 +433,12 @@ mod tests {
         symlink(&outside, root.join("escape")).unwrap();
 
         let resolver = SafePathResolver::new(&root).unwrap();
+        assert_eq!(
+            resolver
+                .resolve_entry(&RelativePath::parse("/escape").unwrap())
+                .unwrap(),
+            fs::canonicalize(&root).unwrap().join("escape")
+        );
         assert_eq!(
             resolver.resolve_existing(&RelativePath::parse("/escape/secret.txt").unwrap()),
             Err(PathError::EscapesShareRoot)
