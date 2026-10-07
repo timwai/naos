@@ -15,4 +15,17 @@ jobs:
       - name: Run real Linux NFSv3 mount/read/write smoke test
         env:
           NAOS_NFS_SMOKE_SERVER: ${{ github.workspace }}/target/debug/examples/nfs-smoke-server
-        run: sudo --preserve-env=NAOS_NFS_SMOKE_SERVER bash scripts/ci/nfs-real-smoke.sh
+        run: sudo env NAOS_NFS_SMOKE_SERVER="$NAOS_NFS_SMOKE_SERVER" bash scripts/ci/nfs-real-smoke.sh
+
+  macos-nfs-client:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build NFS smoke server
+        run: cargo build -p naos-nfs --example nfs-smoke-server
+      - name: Run real macOS NFSv3 mount/read/write smoke test
+        env:
+          NAOS_NFS_SMOKE_SERVER: ${{ github.workspace }}/target/debug/examples/nfs-smoke-server
+        run: sudo env NAOS_NFS_SMOKE_SERVER="$NAOS_NFS_SMOKE_SERVER" bash scripts/ci/nfs-real-smoke.sh

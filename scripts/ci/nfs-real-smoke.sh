@@ -6,12 +6,29 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 2
 fi
 
-for command in mount umount mount.nfs grep cmp mv rm mkdir rmdir sync; do
-  command -v "$command" >/dev/null || {
-    echo "missing required command: $command" >&2
+OS="$(uname -s)"
+case "$OS" in
+  Linux)
+    for command in mount umount mount.nfs grep cmp mv rm mkdir rmdir sync; do
+      command -v "$command" >/dev/null || {
+        echo "missing required command: $command" >&2
+        exit 3
+      }
+    done
+    ;;
+  Darwin)
+    for command in mount_nfs umount grep cmp mv rm mkdir rmdir sync; do
+      command -v "$command" >/dev/null || {
+        echo "missing required command: $command" >&2
+        exit 3
+      }
+    done
+    ;;
+  *)
+    echo "unsupported NFS smoke-test host: $OS" >&2
     exit 3
-  }
-done
+    ;;
+esac
 
 SERVER="${NAOS_NFS_SMOKE_SERVER:-}"
 if [[ -z "$SERVER" || ! -x "$SERVER" ]]; then
@@ -52,34 +69,48 @@ mkdir -p "$SHARE" "$MOUNTPOINT"
 "$SERVER" "$SHARE" "$NFS_PORT" "$MOUNT_PORT" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 
-MOUNT_OPTIONS="vers=3,proto=tcp,mountproto=tcp,port=$NFS_PORT,mountport=$MOUNT_PORT,nolock,soft,timeo=10,retrans=2"
+mount_export() {
+  case "$OS" in
+    Linux)
+      local options="vers=3,proto=tcp,mountproto=tcp,port=$NFS_PORT,mountport=$MOUNT_PORT,nolock,soft,timeo=10,retrans=2"
+      mount -t nfs -o "$options" "127.0.0.1:/ci-share" "$MOUNTPOINT"
+      ;;
+    Darwin)
+      local options="vers=3,tcp,port=$NFS_PORT,mountport=$MOUNT_PORT,nolocks,soft,timeo=10,retrans=2"
+      mount_nfs -o "$options" "127.0.0.1:/ci-share" "$MOUNTPOINT"
+      ;;
+  esac
+}
+
 READY=0
-for _ in $(seq 1 80); do
+attempt=0
+while [[ "$attempt" -lt 80 ]]; do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "NFS smoke server exited before the client could mount" >&2
     exit 5
   fi
-  if mount -t nfs -o "$MOUNT_OPTIONS" "127.0.0.1:/ci-share" "$MOUNTPOINT" >/dev/null 2>&1; then
+  if mount_export >/dev/null 2>&1; then
     READY=1
     MOUNTED=1
     break
   fi
+  attempt=$((attempt + 1))
   sleep 0.1
 done
 
 if [[ "$READY" -ne 1 ]]; then
-  echo "kernel NFSv3 client could not mount the naos export" >&2
+  echo "$OS kernel NFSv3 client could not mount the naos export" >&2
   exit 6
 fi
 
 printf 'created\n' >"$MOUNTPOINT/roundtrip.txt"
-sync "$MOUNTPOINT/roundtrip.txt"
+sync
 printf 'created\n' >"$ROOT/expected-created.txt"
 cmp "$ROOT/expected-created.txt" "$MOUNTPOINT/roundtrip.txt"
 cmp "$ROOT/expected-created.txt" "$SHARE/roundtrip.txt"
 
 printf 'truncated\n' >"$MOUNTPOINT/roundtrip.txt"
-sync "$MOUNTPOINT/roundtrip.txt"
+sync
 printf 'truncated\n' >"$ROOT/expected-truncated.txt"
 cmp "$ROOT/expected-truncated.txt" "$MOUNTPOINT/roundtrip.txt"
 cmp "$ROOT/expected-truncated.txt" "$SHARE/roundtrip.txt"
@@ -95,4 +126,4 @@ rm "$MOUNTPOINT/renamed.txt"
 
 [[ ! -e "$SHARE/dir" && ! -e "$SHARE/renamed.txt" ]]
 
-echo "real NFSv3 mount/create/truncate/read/write/rename/delete smoke test passed"
+echo "real $OS NFSv3 mount/create/truncate/read/write/rename/delete smoke test passed"
