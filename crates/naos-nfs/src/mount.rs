@@ -101,7 +101,10 @@ impl MountService {
         credential: &RpcCredential,
         export_path: &str,
     ) -> Result<MountGrant, MountError> {
-        if matches!(credential, RpcCredential::Unsupported { .. }) {
+        if !matches!(
+            credential,
+            RpcCredential::AuthNone | RpcCredential::AuthSys(_)
+        ) {
             return Err(MountError::AccessDenied);
         }
 
@@ -139,7 +142,10 @@ impl MountService {
         client_ip: IpAddr,
         credential: &RpcCredential,
     ) -> Result<Vec<NfsExport>, MountError> {
-        if matches!(credential, RpcCredential::Unsupported { .. }) {
+        if !matches!(
+            credential,
+            RpcCredential::AuthNone | RpcCredential::AuthSys(_)
+        ) {
             return Ok(Vec::new());
         }
 
