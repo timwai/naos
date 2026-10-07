@@ -199,6 +199,8 @@ mod tests {
         for _ in 0..10 {
             reader.u32().unwrap();
         }
+        assert_eq!(reader.u32().unwrap(), 100024);
+        assert_eq!(reader.u32().unwrap(), 1);
         assert_eq!(reader.u32().unwrap(), IPPROTO_UDP);
         assert_eq!(reader.u32().unwrap(), 32046);
         reader.finish().unwrap();
