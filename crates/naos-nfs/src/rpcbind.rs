@@ -14,6 +14,7 @@ const PMAP_PROGRAM: u32 = 100000;
 const PMAP_VERSION: u32 = 2;
 const PMAPPROC_SET: u32 = 1;
 const PMAPPROC_UNSET: u32 = 2;
+const PMAPPROC_GETPORT: u32 = 3;
 const IPPROTO_TCP: u32 = 6;
 const IPPROTO_UDP: u32 = 17;
 
@@ -44,6 +45,8 @@ pub enum RpcBindError {
     RpcRejected,
     #[error("rpcbind refused the requested mapping")]
     MappingRejected,
+    #[error("rpcbind returned invalid port {0}")]
+    InvalidPort(u32),
 }
 
 pub async fn register_mapping(
@@ -79,6 +82,29 @@ pub async fn unregister_mapping(
         0,
     )
     .await
+}
+
+pub async fn lookup_port(
+    rpcbind_address: SocketAddr,
+    program: u32,
+    version: u32,
+    transport: RpcTransport,
+) -> Result<Option<u16>, RpcBindError> {
+    let xid = random_xid();
+    let request = mapping_call(
+        xid,
+        PMAPPROC_GETPORT,
+        program,
+        version,
+        transport,
+        0,
+    );
+    let mut stream = TcpStream::connect(rpcbind_address).await?;
+    write_record(&mut stream, &request).await?;
+    let reply = read_record(&mut stream)
+        .await?
+        .ok_or(RpcBindError::MissingReply)?;
+    parse_port_reply(&reply, xid)
 }
 
 pub async fn register_tcp(
@@ -161,6 +187,27 @@ fn parse_bool_reply(reply: &[u8], expected_xid: u32) -> Result<(), RpcBindError>
     }
 }
 
+fn parse_port_reply(reply: &[u8], expected_xid: u32) -> Result<Option<u16>, RpcBindError> {
+    let mut reader = XdrReader::new(reply);
+    if reader.u32()? != expected_xid || reader.u32()? != 1 || reader.u32()? != 0 {
+        return Err(RpcBindError::RpcRejected);
+    }
+    reader.u32()?;
+    reader.opaque(400)?;
+    if reader.u32()? != 0 {
+        return Err(RpcBindError::RpcRejected);
+    }
+    let port = reader.u32()?;
+    reader.finish()?;
+    if port == 0 {
+        Ok(None)
+    } else {
+        u16::try_from(port)
+            .map(Some)
+            .map_err(|_| RpcBindError::InvalidPort(port))
+    }
+}
+
 fn random_xid() -> u32 {
     let mut bytes = [0u8; 4];
     OsRng.fill_bytes(&mut bytes);
@@ -217,6 +264,54 @@ mod tests {
         writer.u32(0);
         writer.u32(1);
         assert!(parse_bool_reply(&writer.into_bytes(), 9).is_ok());
+    }
+
+    #[tokio::test]
+    async fn lookup_port_round_trips_against_fake_portmapper() {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_record(&mut stream).await.unwrap().unwrap();
+            let mut reader = XdrReader::new(&request);
+            let xid = reader.u32().unwrap();
+            assert_eq!(reader.u32().unwrap(), 0);
+            assert_eq!(reader.u32().unwrap(), RPC_VERSION);
+            assert_eq!(reader.u32().unwrap(), PMAP_PROGRAM);
+            assert_eq!(reader.u32().unwrap(), PMAP_VERSION);
+            assert_eq!(reader.u32().unwrap(), PMAPPROC_GETPORT);
+            assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+            assert!(reader.opaque(0).unwrap().is_empty());
+            assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+            assert!(reader.opaque(0).unwrap().is_empty());
+            assert_eq!(reader.u32().unwrap(), 100021);
+            assert_eq!(reader.u32().unwrap(), 4);
+            assert_eq!(reader.u32().unwrap(), IPPROTO_UDP);
+            assert_eq!(reader.u32().unwrap(), 0);
+            reader.finish().unwrap();
+
+            let mut reply = XdrWriter::new();
+            reply.u32(xid);
+            reply.u32(1);
+            reply.u32(0);
+            reply.u32(AUTH_NONE);
+            reply.u32(0);
+            reply.u32(0);
+            reply.u32(32047);
+            write_record(&mut stream, &reply.into_bytes())
+                .await
+                .unwrap();
+        });
+
+        assert_eq!(
+            lookup_port(address, 100021, 4, RpcTransport::Udp)
+                .await
+                .unwrap(),
+            Some(32047)
+        );
+        server.await.unwrap();
     }
 
     #[tokio::test]
