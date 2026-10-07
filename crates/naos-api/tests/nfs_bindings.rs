@@ -17,7 +17,7 @@ use naos_api::{AppState, router};
 use naos_core::{
     auth::{AuthConfig, AuthService},
     doctor::{SmbDoctorCapabilities, SmbDoctorReport, StaticSmbDoctorProbe},
-    nfs::NfsBindingService,
+    nfs::{NfsBindingService, NfsKrbPrincipalService},
     operation::OperationService,
     reconcile::Reconciler,
 };
@@ -36,6 +36,7 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
     let operations = Arc::new(OperationService::new(store.clone()));
     let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
+    let nfs_principals = Arc::new(NfsKrbPrincipalService::new(store.clone()));
     let reconciler = Arc::new(Reconciler::new(operations.clone()));
     let smb_doctor = Arc::new(StaticSmbDoctorProbe::new(SmbDoctorReport {
         status: "ready".to_owned(),
@@ -61,6 +62,7 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
         auth,
         operations,
         nfs_bindings,
+        nfs_principals,
         reconciler,
         smb_doctor,
     });
