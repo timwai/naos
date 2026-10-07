@@ -2310,7 +2310,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(after.size, 2);
-        assert_eq!(std::fs::read(temp.path().join("report.txt")).unwrap(), b"he");
+        assert_eq!(
+            std::fs::read(temp.path().join("report.txt")).unwrap(),
+            b"he"
+        );
 
         assert!(matches!(
             service
@@ -2334,10 +2337,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("report.txt"), b"hello").unwrap();
         let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadWrite);
-        let handle = handles.issue(
-            &export,
-            &RelativePath::parse("/report.txt").unwrap(),
-        );
+        let handle = handles.issue(&export, &RelativePath::parse("/report.txt").unwrap());
         let changes = SetAttributes {
             mode: Some(0o600),
             uid: None,
