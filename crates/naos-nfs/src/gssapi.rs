@@ -47,23 +47,16 @@ impl GssApiHandshakeProvider {
             return Err(GssApiHandshakeProviderError::EmptyServicePrincipal);
         }
 
-        let imported = Name::new(
-            service_principal.as_bytes(),
-            Some(GSS_NT_KRB5_PRINCIPAL),
-        )
-        .map_err(GssApiHandshakeProviderError::ImportServicePrincipal)?;
+        let imported = Name::new(service_principal.as_bytes(), Some(GSS_NT_KRB5_PRINCIPAL))
+            .map_err(GssApiHandshakeProviderError::ImportServicePrincipal)?;
         let canonical = imported
             .canonicalize(Some(GSS_MECH_KRB5))
             .map_err(GssApiHandshakeProviderError::CanonicalizeServicePrincipal)?;
         let mechanisms = OidSet::singleton(GSS_MECH_KRB5)
             .map_err(GssApiHandshakeProviderError::ConfigureMechanism)?;
-        let credential = Cred::acquire(
-            Some(&canonical),
-            None,
-            CredUsage::Accept,
-            Some(&mechanisms),
-        )
-        .map_err(GssApiHandshakeProviderError::AcquireCredential)?;
+        let credential =
+            Cred::acquire(Some(&canonical), None, CredUsage::Accept, Some(&mechanisms))
+                .map_err(GssApiHandshakeProviderError::AcquireCredential)?;
 
         Ok(Self { credential })
     }
@@ -116,8 +109,7 @@ impl RpcSecGssHandshake for GssApiHandshake {
         let flags = context
             .flags()
             .map_err(|_| RpcSecGssAcceptorError::ProviderFailure)?;
-        if !flags.contains(CtxFlags::GSS_C_INTEG_FLAG)
-            || !flags.contains(CtxFlags::GSS_C_CONF_FLAG)
+        if !flags.contains(CtxFlags::GSS_C_INTEG_FLAG) || !flags.contains(CtxFlags::GSS_C_CONF_FLAG)
         {
             self.context.take();
             return Ok(RpcSecGssHandshakeResult::Failure {
@@ -156,9 +148,7 @@ struct GssApiSecurityContext {
 }
 
 impl GssApiSecurityContext {
-    fn lock(
-        &self,
-    ) -> Result<std::sync::MutexGuard<'_, ServerCtx>, RpcSecGssSecurityError> {
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, ServerCtx>, RpcSecGssSecurityError> {
         self.context
             .lock()
             .map_err(|_| RpcSecGssSecurityError::ProviderFailure)
@@ -170,11 +160,7 @@ impl RpcSecGssSecurityContext for GssApiSecurityContext {
         &self.principal
     }
 
-    fn verify_mic(
-        &self,
-        message: &[u8],
-        mic: &[u8],
-    ) -> Result<(), RpcSecGssSecurityError> {
+    fn verify_mic(&self, message: &[u8], mic: &[u8]) -> Result<(), RpcSecGssSecurityError> {
         self.lock()?
             .verify_mic(message, mic)
             .map_err(map_verify_error)
