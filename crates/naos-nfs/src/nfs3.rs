@@ -3029,6 +3029,16 @@ mod tests {
                 writer.u32(crate::rpc::AUTH_NONE);
                 writer.opaque(&[]).unwrap();
             }
+            RpcCredential::RpcSecGss(credential) => {
+                let mut body = XdrWriter::new();
+                body.u32(credential.version);
+                body.u32(credential.gss_proc);
+                body.u32(credential.seq_num);
+                body.u32(credential.service);
+                body.opaque(&credential.handle).unwrap();
+                writer.u32(crate::rpc::RPCSEC_GSS);
+                writer.opaque(&body.into_bytes()).unwrap();
+            }
             RpcCredential::Unsupported { flavor } => {
                 writer.u32(flavor);
                 writer.opaque(&[]).unwrap();
