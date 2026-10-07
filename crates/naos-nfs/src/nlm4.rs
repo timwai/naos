@@ -2414,10 +2414,35 @@ mod tests {
                 .status,
             NLM4_GRANTED
         );
-        let shares = service.shares.lock().await;
-        assert_eq!(shares.len(), 1);
-        assert_eq!(shares[0].owner.caller_name, "client-b");
-        assert_eq!(share_reservation_masks(&shares[0]), (3, 0));
+        {
+            let shares = service.shares.lock().await;
+            assert_eq!(shares.len(), 1);
+            assert_eq!(shares[0].owner.caller_name, "client-b");
+            assert_eq!(share_reservation_masks(&shares[0]), (3, 0));
+        }
+
+        assert_eq!(
+            service
+                .unshare(
+                    second_ip,
+                    &credential(1000),
+                    vec![6],
+                    share(
+                        handles.issue(&export, &RelativePath::parse("/data.bin").unwrap()),
+                        "client-b",
+                        0,
+                        1,
+                    ),
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+        {
+            let shares = service.shares.lock().await;
+            assert_eq!(shares.len(), 1);
+            assert_eq!(share_reservation_masks(&shares[0]), (2, 0));
+        }
     }
 
     #[tokio::test]
