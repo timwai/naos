@@ -31,6 +31,8 @@ pub enum SystemGroupError {
     OwnershipConflict,
     #[error("managed system group was not found")]
     NotFound,
+    #[error("managed system group still exists")]
+    StillPresent,
     #[error("system group membership does not match desired state")]
     MembershipMismatch,
     #[error("no free gid is available in the naos reserved range")]
@@ -140,6 +142,41 @@ impl SystemGroupManager {
         #[cfg(target_os = "windows")]
         {
             return self.delete_windows(group).await;
+        }
+
+        #[allow(unreachable_code)]
+        Err(SystemGroupError::OwnershipConflict)
+    }
+
+    pub async fn verify_absent(&self, group: &SystemGroupName) -> Result<(), SystemGroupError> {
+        #[cfg(target_os = "linux")]
+        {
+            return if self.probe_linux(group).await?.success() {
+                Err(SystemGroupError::StillPresent)
+            } else {
+                Ok(())
+            };
+        }
+        #[cfg(target_os = "macos")]
+        {
+            return if self.probe_macos(group).await?.success() {
+                Err(SystemGroupError::StillPresent)
+            } else {
+                Ok(())
+            };
+        }
+        #[cfg(target_os = "windows")]
+        {
+            const SCRIPT: &str = "$g=Get-LocalGroup -Name $env:NAOS_GROUP -ErrorAction SilentlyContinue; if ($null -eq $g) { exit 0 }; exit 5";
+            let spec = CommandSpec::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+                .env(WINDOWS_GROUP_ENV, group.as_str());
+            let output = self.runner.run(spec.clone()).await?;
+            return match output.status {
+                0 => Ok(()),
+                5 => Err(SystemGroupError::StillPresent),
+                _ => Err(command_failure(&spec, &output)),
+            };
         }
 
         #[allow(unreachable_code)]
