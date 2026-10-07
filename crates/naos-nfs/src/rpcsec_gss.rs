@@ -5,13 +5,15 @@ use tokio::sync::Mutex;
 
 use crate::{
     rpc::{
-        MAX_AUTH_BYTES, MAX_RPC_RECORD_BYTES, MSG_ACCEPTED, PROG_MISMATCH, REPLY, RPCSEC_GSS,
-        RPCSEC_GSS_DATA, RPCSEC_GSS_MAXSEQ, RPCSEC_GSS_SVC_INTEGRITY, RPCSEC_GSS_SVC_NONE,
+        AUTH_NONE, GSS_S_COMPLETE, GSS_S_CONTINUE_NEEDED, MAX_AUTH_BYTES, MAX_RPC_RECORD_BYTES,
+        MSG_ACCEPTED, PROG_MISMATCH, REPLY, RPCSEC_GSS, RPCSEC_GSS_CONTINUE_INIT, RPCSEC_GSS_DATA,
+        RPCSEC_GSS_INIT, RPCSEC_GSS_MAXSEQ, RPCSEC_GSS_SVC_INTEGRITY, RPCSEC_GSS_SVC_NONE,
         RPCSEC_GSS_SVC_PRIVACY, RPCSEC_GSS_VERSION_1, RpcCall, RpcCredential, RpcSecGssBodyError,
-        RpcSecGssSequenceDecision, RpcSecGssSequenceWindow, RpcVerifier, SUCCESS,
-        accepted_reply_with_verifier, decode_rpcsec_gss_integrity_body,
-        decode_rpcsec_gss_unwrapped_body, encode_rpcsec_gss_integrity_body,
-        encode_rpcsec_gss_plaintext, rpcsec_gss_u32_mic_input,
+        RpcSecGssInitResult, RpcSecGssSequenceDecision, RpcSecGssSequenceWindow, RpcVerifier,
+        SUCCESS, accepted_reply_with_verifier, accepted_success_with_verifier,
+        decode_rpcsec_gss_init_token, decode_rpcsec_gss_integrity_body,
+        decode_rpcsec_gss_unwrapped_body, encode_rpcsec_gss_init_result,
+        encode_rpcsec_gss_integrity_body, encode_rpcsec_gss_plaintext, rpcsec_gss_u32_mic_input,
     },
     xdr::{XdrError, XdrReader, XdrWriter},
 };
@@ -38,6 +40,45 @@ pub trait RpcSecGssSecurityContext: Send + Sync {
     fn unwrap(&self, ciphertext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError>;
 
     fn wrap(&self, plaintext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RpcSecGssAcceptRequest {
+    Init { token: Vec<u8> },
+    Continue { handle: Vec<u8>, token: Vec<u8> },
+}
+
+pub enum RpcSecGssAcceptResult {
+    Continue {
+        handle: Vec<u8>,
+        gss_minor: u32,
+        seq_window: u32,
+        token: Vec<u8>,
+    },
+    Complete {
+        handle: Vec<u8>,
+        gss_minor: u32,
+        seq_window: u32,
+        token: Vec<u8>,
+        security: Arc<dyn RpcSecGssSecurityContext>,
+    },
+    Failure {
+        gss_major: u32,
+        gss_minor: u32,
+    },
+}
+
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum RpcSecGssAcceptorError {
+    #[error("RPCSEC_GSS acceptor provider failed")]
+    ProviderFailure,
+}
+
+pub trait RpcSecGssAcceptor: Send + Sync {
+    fn accept(
+        &self,
+        request: RpcSecGssAcceptRequest,
+    ) -> Result<RpcSecGssAcceptResult, RpcSecGssAcceptorError>;
 }
 
 struct RegisteredContext {
@@ -162,6 +203,174 @@ impl RpcSecGssContextRegistry {
     pub async fn contains(&self, handle: &[u8]) -> bool {
         self.inner.lock().await.contains_key(handle)
     }
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum RpcSecGssContextError {
+    #[error("RPC call is not an RPCSEC_GSS context creation call")]
+    NotContextCall,
+    #[error("RPCSEC_GSS context creation credential is invalid")]
+    InvalidCredential,
+    #[error("RPCSEC_GSS context creation verifier is invalid")]
+    InvalidVerifier,
+    #[error("RPCSEC_GSS acceptor returned an invalid result")]
+    InvalidAcceptorResult,
+    #[error(transparent)]
+    Acceptor(#[from] RpcSecGssAcceptorError),
+    #[error(transparent)]
+    Registry(#[from] RpcSecGssRegistryError),
+    #[error(transparent)]
+    Security(#[from] RpcSecGssSecurityError),
+    #[error(transparent)]
+    Xdr(#[from] XdrError),
+}
+
+pub async fn accept_context_call(
+    registry: &RpcSecGssContextRegistry,
+    acceptor: &dyn RpcSecGssAcceptor,
+    call: &RpcCall,
+) -> Result<Vec<u8>, RpcSecGssContextError> {
+    let RpcCredential::RpcSecGss(credential) = &call.credential else {
+        return Err(RpcSecGssContextError::NotContextCall);
+    };
+    if credential.version != RPCSEC_GSS_VERSION_1
+        || call.procedure != 0
+        || !matches!(
+            credential.gss_proc,
+            RPCSEC_GSS_INIT | RPCSEC_GSS_CONTINUE_INIT
+        )
+    {
+        return Err(RpcSecGssContextError::InvalidCredential);
+    }
+    if call.verifier.flavor != AUTH_NONE || !call.verifier.body.is_empty() {
+        return Err(RpcSecGssContextError::InvalidVerifier);
+    }
+
+    let token = decode_rpcsec_gss_init_token(&call.body)?;
+    let expected_handle = if credential.gss_proc == RPCSEC_GSS_INIT {
+        if !credential.handle.is_empty() {
+            return Err(RpcSecGssContextError::InvalidCredential);
+        }
+        None
+    } else {
+        if credential.handle.is_empty() {
+            return Err(RpcSecGssContextError::InvalidCredential);
+        }
+        Some(credential.handle.as_slice())
+    };
+
+    let request = match expected_handle {
+        None => RpcSecGssAcceptRequest::Init { token },
+        Some(handle) => RpcSecGssAcceptRequest::Continue {
+            handle: handle.to_vec(),
+            token,
+        },
+    };
+    let result = acceptor.accept(request)?;
+
+    match result {
+        RpcSecGssAcceptResult::Continue {
+            handle,
+            gss_minor,
+            seq_window,
+            token,
+        } => {
+            validate_context_success_result(expected_handle, &handle, seq_window, &token)?;
+            context_creation_reply(
+                call.xid,
+                RpcSecGssInitResult {
+                    handle,
+                    gss_major: GSS_S_CONTINUE_NEEDED,
+                    gss_minor,
+                    seq_window,
+                    token,
+                },
+                RpcVerifier {
+                    flavor: AUTH_NONE,
+                    body: Vec::new(),
+                },
+            )
+        }
+        RpcSecGssAcceptResult::Complete {
+            handle,
+            gss_minor,
+            seq_window,
+            token,
+            security,
+        } => {
+            validate_context_success_result(expected_handle, &handle, seq_window, &token)?;
+            let verifier_body = security.get_mic(&rpcsec_gss_u32_mic_input(seq_window))?;
+            if verifier_body.len() > MAX_AUTH_BYTES {
+                return Err(XdrError::LimitExceeded.into());
+            }
+            registry
+                .insert(handle.clone(), seq_window, security)
+                .await?;
+            context_creation_reply(
+                call.xid,
+                RpcSecGssInitResult {
+                    handle,
+                    gss_major: GSS_S_COMPLETE,
+                    gss_minor,
+                    seq_window,
+                    token,
+                },
+                RpcVerifier {
+                    flavor: RPCSEC_GSS,
+                    body: verifier_body,
+                },
+            )
+        }
+        RpcSecGssAcceptResult::Failure {
+            gss_major,
+            gss_minor,
+        } => {
+            if matches!(gss_major, GSS_S_COMPLETE | GSS_S_CONTINUE_NEEDED) {
+                return Err(RpcSecGssContextError::InvalidAcceptorResult);
+            }
+            context_creation_reply(
+                call.xid,
+                RpcSecGssInitResult {
+                    handle: Vec::new(),
+                    gss_major,
+                    gss_minor,
+                    seq_window: 0,
+                    token: Vec::new(),
+                },
+                RpcVerifier {
+                    flavor: AUTH_NONE,
+                    body: Vec::new(),
+                },
+            )
+        }
+    }
+}
+
+fn validate_context_success_result(
+    expected_handle: Option<&[u8]>,
+    handle: &[u8],
+    seq_window: u32,
+    token: &[u8],
+) -> Result<(), RpcSecGssContextError> {
+    if handle.is_empty()
+        || handle.len() > MAX_AUTH_BYTES
+        || seq_window == 0
+        || seq_window > MAX_RPCSEC_GSS_SEQUENCE_WINDOW
+        || token.len() > MAX_RPC_RECORD_BYTES
+        || expected_handle.is_some_and(|expected| expected != handle)
+    {
+        return Err(RpcSecGssContextError::InvalidAcceptorResult);
+    }
+    Ok(())
+}
+
+fn context_creation_reply(
+    xid: u32,
+    result: RpcSecGssInitResult,
+    verifier: RpcVerifier,
+) -> Result<Vec<u8>, RpcSecGssContextError> {
+    let body = encode_rpcsec_gss_init_result(&result)?;
+    Ok(accepted_success_with_verifier(xid, &verifier, &body)?)
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -404,6 +613,77 @@ mod tests {
         })
     }
 
+    struct FakeAcceptor;
+
+    impl RpcSecGssAcceptor for FakeAcceptor {
+        fn accept(
+            &self,
+            request: RpcSecGssAcceptRequest,
+        ) -> Result<RpcSecGssAcceptResult, RpcSecGssAcceptorError> {
+            Ok(match request {
+                RpcSecGssAcceptRequest::Init { token } if token == b"client-init" => {
+                    RpcSecGssAcceptResult::Continue {
+                        handle: b"ctx".to_vec(),
+                        gss_minor: 0,
+                        seq_window: 8,
+                        token: b"server-continue".to_vec(),
+                    }
+                }
+                RpcSecGssAcceptRequest::Continue { handle, token }
+                    if handle == b"ctx" && token == b"client-continue" =>
+                {
+                    RpcSecGssAcceptResult::Complete {
+                        handle,
+                        gss_minor: 0,
+                        seq_window: 8,
+                        token: b"server-complete".to_vec(),
+                        security: context("alice@EXAMPLE.COM"),
+                    }
+                }
+                _ => RpcSecGssAcceptResult::Failure {
+                    gss_major: 0x000d_0000,
+                    gss_minor: 7,
+                },
+            })
+        }
+    }
+
+    fn context_call(gss_proc: u32, handle: &[u8], token: &[u8]) -> RpcCall {
+        RpcCall {
+            xid: 66,
+            program: 100003,
+            version: 3,
+            procedure: 0,
+            credential: RpcCredential::RpcSecGss(RpcSecGssCredential {
+                version: RPCSEC_GSS_VERSION_1,
+                gss_proc,
+                seq_num: 99,
+                service: 99,
+                handle: handle.to_vec(),
+            }),
+            verifier: RpcVerifier {
+                flavor: AUTH_NONE,
+                body: Vec::new(),
+            },
+            header_through_credential: Vec::new(),
+            body: crate::rpc::encode_rpcsec_gss_init_token(token).unwrap(),
+        }
+    }
+
+    fn decode_context_reply(reply: &[u8]) -> (RpcVerifier, RpcSecGssInitResult) {
+        let mut reader = XdrReader::new(reply);
+        assert_eq!(reader.u32().unwrap(), 66);
+        assert_eq!(reader.u32().unwrap(), REPLY);
+        assert_eq!(reader.u32().unwrap(), MSG_ACCEPTED);
+        let verifier = RpcVerifier {
+            flavor: reader.u32().unwrap(),
+            body: reader.opaque(MAX_AUTH_BYTES).unwrap(),
+        };
+        assert_eq!(reader.u32().unwrap(), SUCCESS);
+        let result = crate::rpc::decode_rpcsec_gss_init_result(reader.remaining()).unwrap();
+        (verifier, result)
+    }
+
     fn data_call(service: u32, seq_num: u32, body: Vec<u8>, verifier: &[u8]) -> RpcCall {
         RpcCall {
             xid: 77,
@@ -424,6 +704,61 @@ mod tests {
             header_through_credential: b"header".to_vec(),
             body,
         }
+    }
+
+    #[tokio::test]
+    async fn context_creation_continue_then_complete_registers_security_context() {
+        let registry = RpcSecGssContextRegistry::new();
+        let first = context_call(RPCSEC_GSS_INIT, &[], b"client-init");
+        let first_reply = accept_context_call(&registry, &FakeAcceptor, &first)
+            .await
+            .unwrap();
+        let (verifier, result) = decode_context_reply(&first_reply);
+        assert_eq!(verifier.flavor, AUTH_NONE);
+        assert!(verifier.body.is_empty());
+        assert_eq!(result.handle, b"ctx");
+        assert_eq!(result.gss_major, GSS_S_CONTINUE_NEEDED);
+        assert_eq!(result.seq_window, 8);
+        assert_eq!(result.token, b"server-continue");
+        assert!(!registry.contains(b"ctx").await);
+
+        let second = context_call(
+            RPCSEC_GSS_CONTINUE_INIT,
+            b"ctx",
+            b"client-continue",
+        );
+        let second_reply = accept_context_call(&registry, &FakeAcceptor, &second)
+            .await
+            .unwrap();
+        let (verifier, result) = decode_context_reply(&second_reply);
+        assert_eq!(verifier.flavor, RPCSEC_GSS);
+        assert_eq!(verifier.body, 8u32.to_be_bytes());
+        assert_eq!(result.handle, b"ctx");
+        assert_eq!(result.gss_major, GSS_S_COMPLETE);
+        assert_eq!(result.seq_window, 8);
+        assert_eq!(result.token, b"server-complete");
+        assert_eq!(
+            registry.get(b"ctx").await.unwrap().principal(),
+            "alice@EXAMPLE.COM"
+        );
+    }
+
+    #[tokio::test]
+    async fn context_creation_failure_returns_null_handle_token_and_verifier() {
+        let registry = RpcSecGssContextRegistry::new();
+        let call = context_call(RPCSEC_GSS_INIT, &[], b"bad-token");
+        let reply = accept_context_call(&registry, &FakeAcceptor, &call)
+            .await
+            .unwrap();
+        let (verifier, result) = decode_context_reply(&reply);
+
+        assert_eq!(verifier.flavor, AUTH_NONE);
+        assert!(verifier.body.is_empty());
+        assert!(result.handle.is_empty());
+        assert_eq!(result.gss_major, 0x000d_0000);
+        assert_eq!(result.gss_minor, 7);
+        assert_eq!(result.seq_window, 0);
+        assert!(result.token.is_empty());
     }
 
     #[tokio::test]
