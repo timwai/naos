@@ -2324,7 +2324,7 @@ package
 
 对 NFS root/privileged 测试使用专门 runner 或能力受控的集成环境，不能假设普通 GitHub hosted runner 可完成全部 mount 场景。
 
-当前仓库的 `.github/workflows/nfs-real-smoke.yml` 在 push 上使用 macOS hosted runner 做同机 NFSv3 基础数据面 smoke，并显式保持 `nolocks`，避免把 loopback portmapper/lockd 冲突误判成服务器 NLM 缺陷；Linux/Windows 真实客户端仍通过专用 self-hosted runner 手动执行。另提供 `scripts/ci/nfs-remote-lock-smoke.sh` 与 workflow_dispatch 的 `remote_nlm_host` 输入，用分离的 macOS client/server 主机验证 NLMv4：先确认远端 NLMv4/NSMv1 UDP 注册，再 mount，并执行两个独立进程的排他 record-lock 冲突/释放测试。可选 `remote_nlm_restart_target=user@host` 会启用 restart/reclaim 模式：holder 保持锁不退出，通过固定的 `ssh + sudo systemctl restart <validated-service>` 重启远端 naosd，等待 NLM/NSM RPC 注册恢复，再等待超过 30 秒 grace；此后第二进程仍必须因已 reclaim 的 holder lock 被拒，holder 主动解锁后第二进程才必须成功。self-hosted runner 的 sudo 执行环境需要预先配置 BatchMode SSH/host key 与该 service 的免交互 restart 权限。
+当前仓库的 `.github/workflows/nfs-real-smoke.yml` 在 push 上使用 macOS hosted runner 做同机 NFSv3 基础数据面 smoke，并显式保持 `nolocks`，避免把 loopback portmapper/lockd 冲突误判成服务器 NLM 缺陷；Linux/Windows 真实客户端仍通过专用 self-hosted runner 手动执行。另提供 `scripts/ci/nfs-remote-lock-smoke.sh` 与 workflow_dispatch 的 `remote_nlm_host` 输入，用分离的 macOS client/server 主机验证 NLMv4：先确认远端 NLMv4/NSMv1 UDP 注册，再 mount，并执行两个独立进程的排他 record-lock 冲突/释放测试。workflow 会构建 `nfs-nlm-probe`，由该 probe 直接执行 `MOUNT → NFS LOOKUP → NLM TEST`，从 wire 上确认服务端 lock table 的冲突状态，避免把同一客户端本地 `fcntl` 锁表误当成服务端证据。可选 `remote_nlm_restart_target=user@host` 会启用 restart/reclaim 模式：holder 保持锁不退出，通过固定的 `ssh + sudo systemctl restart <validated-service>` 重启远端 naosd，等待 NLM/NSM RPC 注册恢复，再等待超过 30 秒 grace；此时本地第二进程仍应冲突，同时 direct NLM TEST 必须由服务端返回 locked；holder 主动解锁后，本地第二进程与 direct NLM TEST 都必须转为 unlocked。self-hosted runner 的 sudo 执行环境需要预先配置 BatchMode SSH/host key 与该 service 的免交互 restart 权限。
 
 ---
 
