@@ -34,6 +34,7 @@ impl FsAclSubject {
         }
     }
 
+    #[cfg(any(target_os = "linux", test))]
     fn posix_tag(&self) -> &'static str {
         match self {
             Self::User(_) => "u",
@@ -41,6 +42,7 @@ impl FsAclSubject {
         }
     }
 
+    #[cfg(any(target_os = "linux", test))]
     fn posix_long_tag(&self) -> &'static str {
         match self {
             Self::User(_) => "user",
@@ -48,6 +50,7 @@ impl FsAclSubject {
         }
     }
 
+    #[cfg(any(target_os = "macos", test))]
     fn macos_tag(&self) -> &'static str {
         match self {
             Self::User(_) => "user",
@@ -229,11 +232,7 @@ impl FsAclManager {
         ))
     }
 
-    pub async fn remove(
-        &self,
-        target: &Path,
-        subject: &FsAclSubject,
-    ) -> Result<(), FsAclError> {
+    pub async fn remove(&self, target: &Path, subject: &FsAclSubject) -> Result<(), FsAclError> {
         let canonical = canonical_target(target)?;
         let path = path_text(&canonical);
 
@@ -433,12 +432,20 @@ fn linux_entry_matches(output: &str, entry: &EffectiveAclEntry, is_dir: bool) ->
         FsAclPermission::ReadOnly => "r-x",
         FsAclPermission::ReadWrite => "rwx",
     };
-    let current = format!("{}:{}:{permission}", entry.subject.posix_long_tag(), entry.subject.name());
+    let current = format!(
+        "{}:{}:{permission}",
+        entry.subject.posix_long_tag(),
+        entry.subject.name()
+    );
     if !output.lines().any(|line| line.trim() == current) {
         return false;
     }
 
-    let default = format!("default:{}:{}:{permission}", entry.subject.posix_long_tag(), entry.subject.name());
+    let default = format!(
+        "default:{}:{}:{permission}",
+        entry.subject.posix_long_tag(),
+        entry.subject.name()
+    );
     let has_default = output.lines().any(|line| line.trim() == default);
     if is_dir {
         has_default == entry.inherit
@@ -538,7 +545,10 @@ fn macos_specs(target: &Path, entry: &EffectiveAclEntry, current_acl: &str) -> V
             let rights = "read,write,execute,delete,append,list,search,add_file,add_subdirectory,delete_child,readattr,writeattr,readextattr,writeextattr,readsecurity";
             specs.push(CommandSpec::new("/bin/chmod").args([
                 "+a".to_owned(),
-                format!("{}:{subject} deny {rights}{inheritance}", entry.subject.macos_tag()),
+                format!(
+                    "{}:{subject} deny {rights}{inheritance}",
+                    entry.subject.macos_tag()
+                ),
                 path,
             ]));
         }
@@ -548,12 +558,18 @@ fn macos_specs(target: &Path, entry: &EffectiveAclEntry, current_acl: &str) -> V
             let allowed = "read,execute,list,search,readattr,readextattr,readsecurity";
             specs.push(CommandSpec::new("/bin/chmod").args([
                 "+a".to_owned(),
-                format!("{}:{subject} deny {denied}{inheritance}", entry.subject.macos_tag()),
+                format!(
+                    "{}:{subject} deny {denied}{inheritance}",
+                    entry.subject.macos_tag()
+                ),
                 path.clone(),
             ]));
             specs.push(CommandSpec::new("/bin/chmod").args([
                 "+a".to_owned(),
-                format!("{}:{subject} allow {allowed}{inheritance}", entry.subject.macos_tag()),
+                format!(
+                    "{}:{subject} allow {allowed}{inheritance}",
+                    entry.subject.macos_tag()
+                ),
                 path,
             ]));
         }
@@ -561,7 +577,10 @@ fn macos_specs(target: &Path, entry: &EffectiveAclEntry, current_acl: &str) -> V
             let rights = "read,write,execute,delete,append,list,search,add_file,add_subdirectory,delete_child,readattr,writeattr,readextattr,writeextattr,readsecurity";
             specs.push(CommandSpec::new("/bin/chmod").args([
                 "+a".to_owned(),
-                format!("{}:{subject} allow {rights}{inheritance}", entry.subject.macos_tag()),
+                format!(
+                    "{}:{subject} allow {rights}{inheritance}",
+                    entry.subject.macos_tag()
+                ),
                 path,
             ]));
         }
