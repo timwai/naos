@@ -13,12 +13,12 @@ use naos_core::{
     operation::OperationService,
     reconcile::Reconciler,
 };
-use naos_nfs::server::{NfsServer, NfsServerConfig};
 #[cfg(any(
     all(unix, feature = "system-gss"),
     all(windows, feature = "windows-sspi")
 ))]
 use naos_nfs::rpcsec_gss::StatefulRpcSecGssAcceptor;
+use naos_nfs::server::{NfsServer, NfsServerConfig};
 #[cfg(all(unix, feature = "system-gss"))]
 use naos_nfs::system_gss::SystemGssHandshakeProvider;
 #[cfg(all(windows, feature = "windows-sspi"))]
@@ -242,9 +242,7 @@ async fn bind_nfs_server(
         )))]
         {
             let _ = (store, config, service_principal);
-            anyhow::bail!(
-                "NFS Kerberos requires system-gss on Unix or windows-sspi on Windows"
-            );
+            anyhow::bail!("NFS Kerberos requires system-gss on Unix or windows-sspi on Windows");
         }
     }
 
