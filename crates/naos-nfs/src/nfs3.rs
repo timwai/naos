@@ -50,7 +50,9 @@ const NFSPROC3_MKDIR: u32 = 9;
 const NFSPROC3_REMOVE: u32 = 12;
 const NFSPROC3_RMDIR: u32 = 13;
 const NFSPROC3_RENAME: u32 = 14;
+const NFSPROC3_READDIR: u32 = 16;
 const NFSPROC3_READDIRPLUS: u32 = 17;
+const NFSPROC3_FSSTAT: u32 = 18;
 const NFSPROC3_FSINFO: u32 = 19;
 const NFSPROC3_PATHCONF: u32 = 20;
 const NFSPROC3_COMMIT: u32 = 21;
@@ -147,6 +149,40 @@ pub struct DirectoryEntryPlus {
     pub cookie: u64,
     pub attributes: NfsAttributes,
     pub file_handle: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DirectoryEntry {
+    pub fileid: u64,
+    pub name: String,
+    pub cookie: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReadDirArgs {
+    pub cookie: u64,
+    pub cookie_verifier: [u8; 8],
+    pub count: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadDirResult {
+    pub directory_attributes: NfsAttributes,
+    pub cookie_verifier: [u8; 8],
+    pub entries: Vec<DirectoryEntry>,
+    pub eof: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct FsStatResult {
+    pub attributes: NfsAttributes,
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub available_bytes: u64,
+    pub total_files: u64,
+    pub free_files: u64,
+    pub available_files: u64,
+    pub invariant_seconds: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -620,6 +656,110 @@ impl NfsV3Service {
         })
     }
 
+    pub async fn readdir(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        directory_handle: &[u8],
+        args: ReadDirArgs,
+    ) -> Result<ReadDirResult, NfsV3Error> {
+        if args.count < 128 {
+            return Err(NfsV3Error::TooSmall);
+        }
+
+        let context = self
+            .resolve_handle(client_ip, credential, directory_handle)
+            .await?;
+        self.authorize(&context, &context.relative_path, FileOperation::List)
+            .await?;
+        let directory = resolve_existing(&context)?;
+        let directory_attributes = attributes(&directory).await?;
+        if !directory_attributes.is_directory() {
+            return Err(NfsV3Error::NotDirectory);
+        }
+
+        let current_verifier = directory_cookie_verifier(&context.export, &directory_attributes);
+        if args.cookie != 0 && args.cookie_verifier != current_verifier {
+            return Err(NfsV3Error::BadCookie);
+        }
+
+        let mut reader = fs::read_dir(&directory).await.map_err(io_error)?;
+        let mut names = Vec::new();
+        while let Some(entry) = reader.next_entry().await.map_err(io_error)? {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            names.push(name);
+        }
+        names.sort();
+
+        let start = usize::try_from(args.cookie).map_err(|_| NfsV3Error::BadCookie)?;
+        if start > names.len() {
+            return Err(NfsV3Error::BadCookie);
+        }
+
+        let mut entries = Vec::new();
+        let mut total_bytes = 128usize;
+        let mut eof = true;
+        for (index, name) in names.iter().enumerate().skip(start) {
+            let child = child_path(&context.relative_path, name)?;
+            if self.permission(&context, &child).await? == Permission::None {
+                continue;
+            }
+            let child_path = resolver(&context.export)?
+                .resolve_existing(&child)
+                .map_err(path_error)?;
+            let child_attributes = attributes(&child_path).await?;
+            let entry_bytes = 20usize.saturating_add(xdr_padded_len(name.len()));
+            if total_bytes.saturating_add(entry_bytes) > args.count as usize {
+                eof = false;
+                break;
+            }
+            total_bytes += entry_bytes;
+            entries.push(DirectoryEntry {
+                fileid: child_attributes.fileid.max(1),
+                name: name.clone(),
+                cookie: (index + 1) as u64,
+            });
+        }
+
+        if entries.is_empty() && !eof {
+            return Err(NfsV3Error::TooSmall);
+        }
+
+        Ok(ReadDirResult {
+            directory_attributes,
+            cookie_verifier: current_verifier,
+            entries,
+            eof,
+        })
+    }
+
+    pub async fn fsstat(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        handle: &[u8],
+    ) -> Result<FsStatResult, NfsV3Error> {
+        let context = self.resolve_handle(client_ip, credential, handle).await?;
+        self.authorize(&context, &context.relative_path, FileOperation::Stat)
+            .await?;
+        let path = resolve_existing(&context)?;
+        let attributes = attributes(&path).await?;
+        let stats = fs2::statvfs(&path).map_err(io_error)?;
+
+        Ok(FsStatResult {
+            attributes,
+            total_bytes: stats.total_space(),
+            free_bytes: stats.free_space(),
+            available_bytes: stats.available_space(),
+            total_files: 0,
+            free_files: 0,
+            available_files: 0,
+            invariant_seconds: 0,
+        })
+    }
+
     pub async fn readdirplus(
         &self,
         client_ip: IpAddr,
@@ -1069,7 +1209,9 @@ pub async fn dispatch_nfs3_rpc(
         NFSPROC3_REMOVE => remove_reply(service, client_ip, &call).await,
         NFSPROC3_RMDIR => rmdir_reply(service, client_ip, &call).await,
         NFSPROC3_RENAME => rename_reply(service, client_ip, &call).await,
+        NFSPROC3_READDIR => readdir_reply(service, client_ip, &call).await,
         NFSPROC3_READDIRPLUS => readdirplus_reply(service, client_ip, &call).await,
+        NFSPROC3_FSSTAT => fsstat_reply(service, client_ip, &call).await,
         NFSPROC3_FSINFO => fsinfo_reply(service, client_ip, &call).await,
         NFSPROC3_PATHCONF => pathconf_reply(service, client_ip, &call).await,
         NFSPROC3_COMMIT => commit_reply(service, client_ip, &call).await,
@@ -1441,6 +1583,68 @@ async fn rename_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall)
     accepted_success(call.xid, &writer.into_bytes())
 }
 
+async fn readdir_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let directory = match reader.opaque(MAX_HANDLE_BYTES) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let cookie = match reader.u64() {
+        Ok(cookie) => cookie,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let cookie_verifier = match reader.fixed_opaque(8) {
+        Ok(value) => match <[u8; 8]>::try_from(value.as_slice()) {
+            Ok(value) => value,
+            Err(_) => return accepted_garbage_args(call.xid),
+        },
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let count = match reader.u32() {
+        Ok(value) => value,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let mut writer = XdrWriter::new();
+    match service
+        .readdir(
+            client_ip,
+            &call.credential,
+            &directory,
+            ReadDirArgs {
+                cookie,
+                cookie_verifier,
+                count,
+            },
+        )
+        .await
+    {
+        Ok(result) => {
+            writer.u32(NFS3_OK);
+            encode_post_attr(&mut writer, Some(&result.directory_attributes));
+            writer.fixed_opaque(&result.cookie_verifier);
+            for entry in result.entries {
+                writer.u32(1);
+                writer.u64(entry.fileid);
+                if writer.string(&entry.name).is_err() {
+                    return accepted_system_error(call.xid);
+                }
+                writer.u64(entry.cookie);
+            }
+            writer.u32(0);
+            writer.u32(u32::from(result.eof));
+        }
+        Err(error) => {
+            writer.u32(nfs_status(error));
+            encode_post_attr(&mut writer, None);
+        }
+    }
+    accepted_success(call.xid, &writer.into_bytes())
+}
+
 async fn readdirplus_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
     let mut reader = XdrReader::new(&call.body);
     let directory = match reader.opaque(MAX_HANDLE_BYTES) {
@@ -1503,6 +1707,33 @@ async fn readdirplus_reply(service: &NfsV3Service, client_ip: IpAddr, call: &Rpc
             }
             writer.u32(0);
             writer.u32(u32::from(result.eof));
+        }
+        Err(error) => {
+            writer.u32(nfs_status(error));
+            encode_post_attr(&mut writer, None);
+        }
+    }
+    accepted_success(call.xid, &writer.into_bytes())
+}
+
+async fn fsstat_reply(service: &NfsV3Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let handle = match decode_single_handle(&call.body) {
+        Ok(handle) => handle,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+
+    let mut writer = XdrWriter::new();
+    match service.fsstat(client_ip, &call.credential, &handle).await {
+        Ok(result) => {
+            writer.u32(NFS3_OK);
+            encode_post_attr(&mut writer, Some(&result.attributes));
+            writer.u64(result.total_bytes);
+            writer.u64(result.free_bytes);
+            writer.u64(result.available_bytes);
+            writer.u64(result.total_files);
+            writer.u64(result.free_files);
+            writer.u64(result.available_files);
+            writer.u32(result.invariant_seconds);
         }
         Err(error) => {
             writer.u32(nfs_status(error));
@@ -1960,6 +2191,39 @@ mod tests {
             .rmdir(client_ip, &credential, &root_handle, "archive")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn readdir_and_fsstat_report_directory_and_space() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("a.txt"), b"a").unwrap();
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadWrite);
+        let root_handle = handles.issue_root(&export);
+        let client_ip = "192.168.1.10".parse().unwrap();
+        let credential = auth_sys(1000);
+
+        let listing = service
+            .readdir(
+                client_ip,
+                &credential,
+                &root_handle,
+                ReadDirArgs {
+                    cookie: 0,
+                    cookie_verifier: [0; 8],
+                    count: 4096,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(listing.entries.iter().any(|entry| entry.name == "a.txt"));
+
+        let stats = service
+            .fsstat(client_ip, &credential, &root_handle)
+            .await
+            .unwrap();
+        assert!(stats.total_bytes > 0);
+        assert!(stats.total_bytes >= stats.free_bytes);
+        assert!(stats.free_bytes >= stats.available_bytes);
     }
 
     #[tokio::test]
