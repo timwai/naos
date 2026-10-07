@@ -32,6 +32,7 @@ use crate::{
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
         accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch,
     },
+    transport::{read_record, write_record},
     xdr::{XdrReader, XdrWriter},
 };
 
@@ -1174,6 +1175,24 @@ fn system_time(time: Option<SystemTime>) -> NfsTime {
         seconds: u32::try_from(duration.as_secs()).unwrap_or(u32::MAX),
         nseconds: duration.subsec_nanos(),
     }
+}
+
+pub async fn serve_nfs3_stream<S>(
+    stream: &mut S,
+    client_ip: IpAddr,
+    service: &NfsV3Service,
+) -> io::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    while let Some(request) = read_record(stream).await? {
+        let response = dispatch_nfs3_rpc(service, client_ip, &request).await;
+        if response.is_empty() {
+            return Ok(());
+        }
+        write_record(stream, &response).await?;
+    }
+    Ok(())
 }
 
 pub async fn dispatch_nfs3_rpc(

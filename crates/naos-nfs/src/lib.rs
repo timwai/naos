@@ -2,5 +2,7 @@ pub mod handle;
 pub mod mount;
 pub mod nfs3;
 pub mod rpc;
+pub mod rpcbind;
+pub mod server;
 pub mod transport;
 pub mod xdr;

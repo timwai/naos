@@ -13,10 +13,14 @@ use naos_core::{
     operation::OperationService,
     reconcile::Reconciler,
 };
+use naos_nfs::server::{NfsServer, NfsServerConfig};
 use naos_platform::SmbDoctor;
 use naos_store::Store;
 use naos_webdav::WebDavState;
-use tokio::net::TcpListener;
+use tokio::{
+    net::TcpListener,
+    sync::watch,
+};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -38,6 +42,21 @@ struct Cli {
         default_value = "sqlite://naos.db?mode=rwc"
     )]
     database_url: String,
+
+    #[arg(long, env = "NAOS_NFS_ENABLED", default_value_t = false)]
+    nfs_enabled: bool,
+
+    #[arg(long, env = "NAOS_NFS_LISTEN", default_value = "0.0.0.0")]
+    nfs_listen: IpAddr,
+
+    #[arg(long, env = "NAOS_NFS_PORT", default_value_t = 2049)]
+    nfs_port: u16,
+
+    #[arg(long, env = "NAOS_MOUNT_PORT", default_value_t = 20048)]
+    mount_port: u16,
+
+    #[arg(long, env = "NAOS_NFS_RPCBIND", default_value_t = false)]
+    nfs_rpcbind: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -99,15 +118,55 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("bind management listener on {}:{}", cli.listen, cli.port))?;
 
+    let nfs_server = if cli.nfs_enabled {
+        let rpcbind_address = cli
+            .nfs_rpcbind
+            .then(|| SocketAddr::from(([127, 0, 0, 1], 111)));
+        let server = NfsServer::bind(
+            store,
+            NfsServerConfig {
+                listen: cli.nfs_listen,
+                nfs_port: cli.nfs_port,
+                mount_port: cli.mount_port,
+                rpcbind_address,
+            },
+        )
+        .await
+        .context("bind NFS data plane")?;
+        info!(
+            nfs = %server.nfs_address()?,
+            mount = %server.mount_address()?,
+            rpcbind = cli.nfs_rpcbind,
+            "NFS data plane started"
+        );
+        Some(server)
+    } else {
+        None
+    };
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let signal_task = tokio::spawn(signal_shutdown(shutdown_tx));
+    let nfs_task = nfs_server.map(|server| {
+        let shutdown = shutdown_rx.clone();
+        tokio::spawn(async move { server.run(shutdown).await })
+    });
+
     info!(listen = %cli.listen, port = cli.port, "naosd started");
 
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
     .await
     .context("serve management API")?;
+
+    if let Some(task) = nfs_task {
+        task.await
+            .context("join NFS data plane")?
+            .context("serve NFS data plane")?;
+    }
+    signal_task.abort();
 
     Ok(())
 }
@@ -117,7 +176,19 @@ fn init_tracing() {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }
 
-async fn shutdown_signal() {
+async fn signal_shutdown(shutdown: watch::Sender<bool>) {
     let _ = tokio::signal::ctrl_c().await;
     info!("shutdown signal received");
+    let _ = shutdown.send(true);
+}
+
+async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
+    while shutdown.changed().await.is_ok() {
+        if *shutdown.borrow() {
+            return;
+        }
+    }
 }
