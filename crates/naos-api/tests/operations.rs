@@ -207,34 +207,34 @@ async fn system_verify_operation_is_persistent_idempotent_and_replayable_over_ss
     assert_eq!(second.status(), StatusCode::ACCEPTED);
     assert_eq!(json_body(second).await["operation_id"], operation_id);
 
-    let mut terminal = None;
-    for _ in 0..50 {
-        let response = app
-            .clone()
-            .oneshot(request(
-                Method::GET,
-                &format!("/api/v1/operations/{operation_id}"),
-                None,
-                peer,
-                Some(&cookie),
-                None,
-                None,
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = json_body(response).await;
-        if matches!(
-            body["state"].as_str(),
-            Some("succeeded" | "failed" | "degraded")
-        ) {
-            terminal = Some(body);
-            break;
+    let terminal = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let response = app
+                .clone()
+                .oneshot(request(
+                    Method::GET,
+                    &format!("/api/v1/operations/{operation_id}"),
+                    None,
+                    peer,
+                    Some(&cookie),
+                    None,
+                    None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = json_body(response).await;
+            if matches!(
+                body["state"].as_str(),
+                Some("succeeded" | "failed" | "degraded")
+            ) {
+                break body;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-
-    let terminal = terminal.expect("operation should reach a terminal state");
+    })
+    .await
+    .expect("operation should reach a terminal state before timeout");
     assert_eq!(terminal["state"], "succeeded");
     assert_eq!(terminal["progress"], 100);
 
