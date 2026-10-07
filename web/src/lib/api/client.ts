@@ -19,6 +19,8 @@ export type FileSharesResponse =
   components["schemas"]["FileSharesResponse"];
 export type MoveFileRequest =
   components["schemas"]["MoveFileRequest"];
+export type AdminPasswordResetRequest =
+  components["schemas"]["AdminPasswordResetRequest"];
 export type AuthSessionResponse =
   components["schemas"]["AuthSessionResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
@@ -46,6 +48,10 @@ export type ShareWriteRequest = components["schemas"]["ShareWriteRequest"];
 export type SharesResponse = components["schemas"]["SharesResponse"];
 export type SmbDoctorResponse =
   components["schemas"]["SmbDoctorResponse"];
+export type UserCreateRequest =
+  components["schemas"]["UserCreateRequest"];
+export type UserUpdateRequest =
+  components["schemas"]["UserUpdateRequest"];
 export type UsersResponse = components["schemas"]["UsersResponse"];
 
 export class ApiError extends Error {
@@ -312,6 +318,68 @@ export async function downloadFile(shareId: string, path: string) {
 
 export async function listUsers() {
   return requestJson<UsersResponse>("/api/v1/users");
+}
+
+export async function createUser(
+  input: UserCreateRequest,
+  idempotencyKey = crypto.randomUUID(),
+) {
+  return requestJson<AcceptedOperation>("/api/v1/users", {
+    method: "POST",
+    headers: {
+      "idempotency-key": idempotencyKey,
+    },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateUser(
+  userId: string,
+  input: UserUpdateRequest,
+  idempotencyKey = crypto.randomUUID(),
+) {
+  return requestJson<AcceptedOperation>(
+    `/api/v1/users/${encodeURIComponent(userId)}`,
+    {
+      method: "PUT",
+      headers: {
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function resetUserPassword(
+  userId: string,
+  input: AdminPasswordResetRequest,
+  idempotencyKey = crypto.randomUUID(),
+) {
+  return requestJson<AcceptedOperation>(
+    `/api/v1/users/${encodeURIComponent(userId)}/password`,
+    {
+      method: "POST",
+      headers: {
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function deleteUser(
+  userId: string,
+  idempotencyKey = crypto.randomUUID(),
+) {
+  return requestJson<AcceptedOperation>(
+    `/api/v1/users/${encodeURIComponent(userId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        "idempotency-key": idempotencyKey,
+      },
+    },
+  );
 }
 
 export async function listShares() {
