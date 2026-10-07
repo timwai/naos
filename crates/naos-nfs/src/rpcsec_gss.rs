@@ -722,11 +722,7 @@ mod tests {
         assert_eq!(result.token, b"server-continue");
         assert!(!registry.contains(b"ctx").await);
 
-        let second = context_call(
-            RPCSEC_GSS_CONTINUE_INIT,
-            b"ctx",
-            b"client-continue",
-        );
+        let second = context_call(RPCSEC_GSS_CONTINUE_INIT, b"ctx", b"client-continue");
         let second_reply = accept_context_call(&registry, &FakeAcceptor, &second)
             .await
             .unwrap();
