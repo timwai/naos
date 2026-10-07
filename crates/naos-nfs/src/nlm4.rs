@@ -550,6 +550,120 @@ impl NlmV4Service {
         }
     }
 
+    async fn share(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        cookie: Vec<u8>,
+        share: NlmShare,
+        reclaim: bool,
+    ) -> NlmShareResult {
+        if self.in_grace() != reclaim {
+            return NlmShareResult {
+                cookie,
+                status: NLM4_DENIED_GRACE_PERIOD,
+                sequence: 0,
+            };
+        }
+
+        let validated = match self
+            .validate_share(client_ip, credential, &share)
+            .await
+        {
+            Ok(validated) => validated,
+            Err(status) => {
+                return NlmShareResult {
+                    cookie,
+                    status,
+                    sequence: 0,
+                };
+            }
+        };
+
+        if self
+            .identity_repository
+            .remember_nfs_nsm_peer(client_ip)
+            .await
+            .is_err()
+        {
+            return NlmShareResult {
+                cookie,
+                status: NLM4_FAILED,
+                sequence: 0,
+            };
+        }
+
+        let _state = self.state_guard.lock().await;
+        let mut shares = self.shares.lock().await;
+        if shares
+            .iter()
+            .any(|held| share_conflicts(held, &validated, share.mode, share.access))
+        {
+            return NlmShareResult {
+                cookie,
+                status: NLM4_DENIED,
+                sequence: 0,
+            };
+        }
+
+        shares.retain(|held| {
+            held.file_key != validated.file_key || held.owner != validated.owner
+        });
+        shares.push(ShareReservation {
+            file_key: validated.file_key,
+            owner: validated.owner,
+            mode: share.mode,
+            access: share.access,
+        });
+
+        NlmShareResult {
+            cookie,
+            status: NLM4_GRANTED,
+            sequence: 0,
+        }
+    }
+
+    async fn unshare(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        cookie: Vec<u8>,
+        share: NlmShare,
+    ) -> NlmShareResult {
+        if self.in_grace() {
+            return NlmShareResult {
+                cookie,
+                status: NLM4_DENIED_GRACE_PERIOD,
+                sequence: 0,
+            };
+        }
+
+        let validated = match self
+            .validate_share(client_ip, credential, &share)
+            .await
+        {
+            Ok(validated) => validated,
+            Err(status) => {
+                return NlmShareResult {
+                    cookie,
+                    status,
+                    sequence: 0,
+                };
+            }
+        };
+
+        let _state = self.state_guard.lock().await;
+        self.shares.lock().await.retain(|held| {
+            held.file_key != validated.file_key || held.owner != validated.owner
+        });
+
+        NlmShareResult {
+            cookie,
+            status: NLM4_GRANTED,
+            sequence: 0,
+        }
+    }
+
     async fn free_all(&self, client_ip: IpAddr, credential: &RpcCredential, caller_name: &str) {
         if !matches!(credential, RpcCredential::AuthSys(_)) {
             return;
@@ -562,6 +676,9 @@ impl NlmV4Service {
             self.waiters.lock().await.retain(|waiter| {
                 waiter.validated.owner.client_ip != client_ip
                     || waiter.validated.owner.caller_name != caller_name
+            });
+            self.shares.lock().await.retain(|share| {
+                share.owner.client_ip != client_ip || share.owner.caller_name != caller_name
             });
         }
         self.grant_waiters().await;
@@ -579,6 +696,10 @@ impl NlmV4Service {
                 .lock()
                 .await
                 .retain(|waiter| waiter.validated.owner.client_ip != client_ip);
+            self.shares
+                .lock()
+                .await
+                .retain(|share| share.owner.client_ip != client_ip);
         }
         self.grant_waiters().await;
     }
@@ -593,6 +714,10 @@ impl NlmV4Service {
                 waiter.validated.owner.client_ip != client_ip
                     || waiter.client_state == current_state
             });
+            self.shares
+                .lock()
+                .await
+                .retain(|share| share.owner.client_ip != client_ip);
         }
         self.grant_waiters().await;
     }
@@ -815,6 +940,103 @@ impl NlmV4Service {
             },
         })
     }
+
+    async fn validate_share(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        share: &NlmShare,
+    ) -> Result<ValidatedShare, u32> {
+        if !matches!(credential, RpcCredential::AuthSys(_)) {
+            return Err(NLM4_FAILED);
+        }
+
+        let exports = self
+            .identity_repository
+            .list_enabled_nfs_exports()
+            .await
+            .map_err(|_| NLM4_FAILED)?;
+        let resolved = self
+            .handles
+            .resolve(&share.file_handle, &exports)
+            .map_err(|_| NLM4_STALE_FH)?;
+        let bindings = self
+            .identity_repository
+            .list_nfs_bindings(&resolved.export.id)
+            .await
+            .map_err(|_| NLM4_FAILED)?;
+        let identity = resolve_nfs_identity(&bindings, client_ip, credential.uid())
+            .map_err(|_| NLM4_DENIED)?
+            .ok_or(NLM4_DENIED)?;
+
+        let write_access = share.access & 2 != 0;
+        if write_access && identity.permission == NfsBindingPermission::ReadOnly {
+            return Err(NLM4_ROFS);
+        }
+
+        let groups = self
+            .access_repository
+            .nfs_group_ids_for_user(&identity.user_id)
+            .await
+            .map_err(|_| NLM4_FAILED)?;
+        let group_refs = groups.iter().map(String::as_str).collect::<Vec<_>>();
+        let rules = self
+            .access_repository
+            .list_nfs_acl_rules(&resolved.export.id)
+            .await
+            .map_err(|_| NLM4_FAILED)?;
+        let permission = AclEngine::new(rules).evaluate(
+            Principal {
+                user_id: &identity.user_id,
+                group_ids: &group_refs,
+            },
+            &resolved.relative_path,
+        );
+        let required = if write_access {
+            Permission::ReadWrite
+        } else {
+            Permission::ReadOnly
+        };
+        if !permission.allows(required) {
+            return Err(NLM4_DENIED);
+        }
+
+        let resolver = SafePathResolver::new(Path::new(&resolved.export.canonical_path))
+            .map_err(|_| NLM4_STALE_FH)?;
+        let entry = resolver
+            .resolve_entry(&resolved.relative_path)
+            .map_err(|_| NLM4_STALE_FH)?;
+        let entry_metadata = fs::symlink_metadata(&entry)
+            .await
+            .map_err(|_| NLM4_STALE_FH)?;
+        if !entry_metadata.is_file() {
+            return Err(NLM4_FAILED);
+        }
+        let path = resolver
+            .resolve_existing(&resolved.relative_path)
+            .map_err(|_| NLM4_STALE_FH)?;
+        let metadata = fs::metadata(&path).await.map_err(|_| NLM4_STALE_FH)?;
+
+        Ok(ValidatedShare {
+            file_key: file_key(&resolved.export.id, &path, &metadata),
+            owner: ShareOwnerKey {
+                client_ip,
+                caller_name: share.caller_name.clone(),
+                owner_handle: share.owner_handle.clone(),
+            },
+        })
+    }
+}
+
+fn share_conflicts(
+    held: &ShareReservation,
+    requested: &ValidatedShare,
+    mode: u32,
+    access: u32,
+) -> bool {
+    held.file_key == requested.file_key
+        && held.owner != requested.owner
+        && ((held.mode & access) != 0 || (mode & held.access) != 0)
 }
 
 fn blocked_lock_matches(
