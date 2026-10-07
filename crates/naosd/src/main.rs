@@ -4,6 +4,15 @@ use std::{
 };
 
 use anyhow::Context;
+#[cfg(feature = "embedded-web")]
+use axum::{
+    body::Body,
+    http::{
+        HeaderName, HeaderValue, Method, StatusCode, Uri,
+        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
+    },
+    response::Response,
+};
 use clap::{Parser, Subcommand};
 use naos_api::AppState;
 use naos_core::{
@@ -36,6 +45,13 @@ use tracing_subscriber::EnvFilter;
 mod acl_reconcile;
 mod share_reconcile;
 mod user_reconcile;
+
+#[cfg(feature = "embedded-web")]
+const WEB_INDEX: &[u8] = include_bytes!("../../../web/dist/index.html");
+#[cfg(feature = "embedded-web")]
+const WEB_JAVASCRIPT: &[u8] = include_bytes!("../../../web/dist/assets/app.js");
+#[cfg(feature = "embedded-web")]
+const WEB_STYLESHEET: &[u8] = include_bytes!("../../../web/dist/assets/app.css");
 
 use acl_reconcile::PlatformAclReconcileDriverFactory;
 use share_reconcile::PlatformShareReconcileDriverFactory;
@@ -171,6 +187,9 @@ async fn main() -> anyhow::Result<()> {
         smb_doctor,
     })
     .merge(webdav);
+    #[cfg(feature = "embedded-web")]
+    let app = app.fallback(embedded_web_fallback);
+
     let address = (cli.listen, cli.port);
     let listener = TcpListener::bind(address)
         .await
@@ -325,5 +344,127 @@ async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
         if *shutdown.borrow() {
             return;
         }
+    }
+}
+
+
+#[cfg(feature = "embedded-web")]
+async fn embedded_web_fallback(method: Method, uri: Uri) -> Response {
+    let path = uri.path();
+    if is_reserved_web_path(path) {
+        return empty_web_response(StatusCode::NOT_FOUND);
+    }
+    if method != Method::GET && method != Method::HEAD {
+        return empty_web_response(StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    match path {
+        "/" | "/index.html" => embedded_web_response(
+            &method,
+            WEB_INDEX,
+            "text/html; charset=utf-8",
+        ),
+        "/assets/app.js" => embedded_web_response(
+            &method,
+            WEB_JAVASCRIPT,
+            "text/javascript; charset=utf-8",
+        ),
+        "/assets/app.css" => embedded_web_response(
+            &method,
+            WEB_STYLESHEET,
+            "text/css; charset=utf-8",
+        ),
+        _ if path.starts_with("/assets/") || looks_like_static_asset(path) => {
+            empty_web_response(StatusCode::NOT_FOUND)
+        }
+        _ => embedded_web_response(&method, WEB_INDEX, "text/html; charset=utf-8"),
+    }
+}
+
+#[cfg(feature = "embedded-web")]
+fn embedded_web_response(
+    method: &Method,
+    bytes: &'static [u8],
+    content_type: &'static str,
+) -> Response {
+    let body = if *method == Method::HEAD {
+        Body::empty()
+    } else {
+        Body::from(bytes)
+    };
+    let mut response = Response::new(body);
+    let headers = response.headers_mut();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&bytes.len().to_string()).expect("embedded asset length is valid"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        ),
+    );
+    response
+}
+
+#[cfg(feature = "embedded-web")]
+fn empty_web_response(status: StatusCode) -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = status;
+    response
+}
+
+#[cfg(feature = "embedded-web")]
+fn is_reserved_web_path(path: &str) -> bool {
+    path == "/api"
+        || path.starts_with("/api/")
+        || path == "/health"
+        || path.starts_with("/health/")
+        || path == "/dav"
+        || path.starts_with("/dav/")
+}
+
+#[cfg(feature = "embedded-web")]
+fn looks_like_static_asset(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .is_some_and(|segment| segment.contains('.'))
+}
+
+#[cfg(all(test, feature = "embedded-web"))]
+mod embedded_web_tests {
+    use super::*;
+
+    #[test]
+    fn production_index_references_embedded_assets() {
+        let index = std::str::from_utf8(WEB_INDEX).expect("Vite index is utf-8");
+        assert!(index.contains("/assets/app.js"));
+        assert!(index.contains("/assets/app.css"));
+        assert!(!WEB_JAVASCRIPT.is_empty());
+        assert!(!WEB_STYLESHEET.is_empty());
+    }
+
+    #[test]
+    fn spa_fallback_never_masks_control_plane_or_missing_assets() {
+        assert!(is_reserved_web_path("/api/v1/auth/session"));
+        assert!(is_reserved_web_path("/health/ready"));
+        assert!(is_reserved_web_path("/dav/share"));
+        assert!(looks_like_static_asset("/assets/missing.js"));
+        assert!(looks_like_static_asset("/favicon.ico"));
+        assert!(!looks_like_static_asset("/shares/share_123"));
     }
 }
