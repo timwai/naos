@@ -801,26 +801,17 @@ mod tests {
             window.check_and_mark(11),
             RpcSecGssSequenceDecision::Accepted
         );
-        assert_eq!(
-            window.check_and_mark(11),
-            RpcSecGssSequenceDecision::Replay
-        );
+        assert_eq!(window.check_and_mark(11), RpcSecGssSequenceDecision::Replay);
         assert_eq!(
             window.check_and_mark(9),
             RpcSecGssSequenceDecision::Accepted
         );
-        assert_eq!(
-            window.check_and_mark(8),
-            RpcSecGssSequenceDecision::TooOld
-        );
+        assert_eq!(window.check_and_mark(8), RpcSecGssSequenceDecision::TooOld);
         assert_eq!(
             window.check_and_mark(16),
             RpcSecGssSequenceDecision::Accepted
         );
-        assert_eq!(
-            window.check_and_mark(12),
-            RpcSecGssSequenceDecision::TooOld
-        );
+        assert_eq!(window.check_and_mark(12), RpcSecGssSequenceDecision::TooOld);
         assert_eq!(
             window.check_and_mark(RPCSEC_GSS_MAXSEQ),
             RpcSecGssSequenceDecision::OutOfRange
