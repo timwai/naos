@@ -11,7 +11,8 @@ use crate::{
     rpc::{
         AUTH_NONE, AUTH_SYS, RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
-        accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch, rpcsec_gss_unavailable_reply,
+        accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch,
+        rpcsec_gss_unavailable_reply,
     },
     transport::{read_record, write_record},
     xdr::{XdrReader, XdrWriter},
