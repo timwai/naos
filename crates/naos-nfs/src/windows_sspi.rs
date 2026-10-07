@@ -8,12 +8,14 @@ use thiserror::Error;
 use windows_sys::Win32::Security::{
     Authentication::Identity::{
         ASC_REQ_CONFIDENTIALITY, ASC_REQ_CONNECTION, ASC_REQ_INTEGRITY, ASC_REQ_MUTUAL_AUTH,
-        ASC_REQ_REPLAY_DETECT, ASC_REQ_SEQUENCE_DETECT, ASC_RET_INTEGRITY, AcceptSecurityContext,
-        AcquireCredentialsHandleW, CompleteAuthToken, DeleteSecurityContext, FreeContextBuffer,
-        FreeCredentialsHandle, MakeSignature, QueryContextAttributesW, SECBUFFER_DATA,
-        SECBUFFER_TOKEN, SECBUFFER_VERSION, SECPKG_ATTR_NATIVE_NAMES, SECPKG_ATTR_SIZES,
-        SECPKG_CRED_INBOUND, SECURITY_NATIVE_DREP, SecBuffer, SecBufferDesc,
-        SecPkgContext_NativeNamesW, SecPkgContext_Sizes, VerifySignature,
+        ASC_REQ_REPLAY_DETECT, ASC_REQ_SEQUENCE_DETECT, ASC_RET_CONFIDENTIALITY, ASC_RET_INTEGRITY,
+        AcceptSecurityContext, AcquireCredentialsHandleW, CompleteAuthToken, DecryptMessage,
+        DeleteSecurityContext, EncryptMessage, FreeContextBuffer, FreeCredentialsHandle,
+        MakeSignature, QueryContextAttributesW, SECBUFFER_DATA, SECBUFFER_PADDING,
+        SECBUFFER_STREAM, SECBUFFER_TOKEN, SECBUFFER_VERSION, SECPKG_ATTR_NATIVE_NAMES,
+        SECPKG_ATTR_SIZES, SECPKG_CRED_INBOUND, SECQOP_WRAP_NO_ENCRYPT, SECURITY_NATIVE_DREP,
+        SecBuffer, SecBufferDesc, SecPkgContext_NativeNamesW, SecPkgContext_Sizes,
+        VerifySignature,
     },
     Credentials::SecHandle,
 };
@@ -38,6 +40,9 @@ const KERBEROS_PACKAGE: &[u16] = &[
     0,
 ];
 const MAX_SSPI_TOKEN_BYTES: usize = 64 * 1024;
+const RFC4121_WRAP_TOKEN_ID: [u8; 2] = [0x05, 0x04];
+const RFC4121_WRAP_TOKEN_HEADER_LEN: usize = 16;
+const RFC4121_FLAG_SEALED: u8 = 0x02;
 const GSS_S_BAD_NAME: u32 = 2 << 16;
 const GSS_S_FAILURE: u32 = 13 << 16;
 
@@ -269,6 +274,10 @@ impl RpcSecGssHandshake for WindowsSspiHandshake {
             security: Arc::new(WindowsSspiSecurityContext {
                 principal: client_principal,
                 max_signature: sizes.cbMaxSignature as usize,
+                max_security_trailer: sizes.cbSecurityTrailer as usize,
+                block_size: sizes.cbBlockSize as usize,
+                privacy_supported: context_attributes & ASC_RET_CONFIDENTIALITY != 0
+                    && sizes.cbSecurityTrailer > 0,
                 context: Mutex::new(context),
             }),
         })
@@ -288,6 +297,9 @@ impl WindowsSspiHandshake {
 struct WindowsSspiSecurityContext {
     principal: String,
     max_signature: usize,
+    max_security_trailer: usize,
+    block_size: usize,
+    privacy_supported: bool,
     context: Mutex<WindowsContextHandle>,
 }
 
@@ -378,17 +390,135 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
         Ok(token)
     }
 
-    fn unwrap(&self, _ciphertext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
-        Err(RpcSecGssSecurityError::ProtectionFailure)
+    fn unwrap(&self, ciphertext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
+        if !self.privacy_supported || !is_sealed_rfc4121_wrap_token(ciphertext) {
+            return Err(RpcSecGssSecurityError::ProtectionFailure);
+        }
+
+        let context = self.lock()?;
+        let mut stream = ciphertext.to_vec();
+        let mut buffers = [
+            SecBuffer {
+                cbBuffer: stream
+                    .len()
+                    .try_into()
+                    .map_err(|_| RpcSecGssSecurityError::ProtectionFailure)?,
+                BufferType: SECBUFFER_STREAM,
+                pvBuffer: stream.as_mut_ptr().cast(),
+            },
+            SecBuffer {
+                cbBuffer: 0,
+                BufferType: SECBUFFER_DATA,
+                pvBuffer: ptr::null_mut(),
+            },
+        ];
+        let mut desc = SecBufferDesc {
+            ulVersion: SECBUFFER_VERSION,
+            cBuffers: buffers.len() as u32,
+            pBuffers: buffers.as_mut_ptr(),
+        };
+        let mut qop = 0u32;
+        let status = unsafe { DecryptMessage(&context.handle, &mut desc, 0, &mut qop) };
+        if status != SEC_E_OK || qop == SECQOP_WRAP_NO_ENCRYPT {
+            return Err(RpcSecGssSecurityError::ProtectionFailure);
+        }
+
+        copy_sec_buffer_view(&stream, &buffers[1])
+            .ok_or(RpcSecGssSecurityError::ProtectionFailure)
     }
 
-    fn wrap(&self, _plaintext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
-        Err(RpcSecGssSecurityError::ProtectionFailure)
+    fn wrap(&self, plaintext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
+        if !self.privacy_supported {
+            return Err(RpcSecGssSecurityError::ProtectionFailure);
+        }
+
+        let context = self.lock()?;
+        let mut token = vec![0u8; self.max_security_trailer];
+        let mut data = plaintext.to_vec();
+        let mut padding = vec![0u8; self.block_size];
+        let mut buffers = [
+            SecBuffer {
+                cbBuffer: token.len() as u32,
+                BufferType: SECBUFFER_TOKEN,
+                pvBuffer: token.as_mut_ptr().cast(),
+            },
+            SecBuffer {
+                cbBuffer: data
+                    .len()
+                    .try_into()
+                    .map_err(|_| RpcSecGssSecurityError::ProtectionFailure)?,
+                BufferType: SECBUFFER_DATA,
+                pvBuffer: data.as_mut_ptr().cast(),
+            },
+            SecBuffer {
+                cbBuffer: padding.len() as u32,
+                BufferType: SECBUFFER_PADDING,
+                pvBuffer: mutable_buffer_ptr(&mut padding).cast(),
+            },
+        ];
+        let mut desc = SecBufferDesc {
+            ulVersion: SECBUFFER_VERSION,
+            cBuffers: buffers.len() as u32,
+            pBuffers: buffers.as_mut_ptr(),
+        };
+        let status = unsafe { EncryptMessage(&context.handle, 0, &mut desc, 0) };
+        if status != SEC_E_OK {
+            return Err(RpcSecGssSecurityError::ProtectionFailure);
+        }
+
+        let token_part = copy_sec_buffer_view(&token, &buffers[0])
+            .ok_or(RpcSecGssSecurityError::ProtectionFailure)?;
+        let data_part = copy_sec_buffer_view(&data, &buffers[1])
+            .ok_or(RpcSecGssSecurityError::ProtectionFailure)?;
+        let padding_part = copy_sec_buffer_view(&padding, &buffers[2])
+            .ok_or(RpcSecGssSecurityError::ProtectionFailure)?;
+        let mut wrapped =
+            Vec::with_capacity(token_part.len() + data_part.len() + padding_part.len());
+        wrapped.extend_from_slice(&token_part);
+        wrapped.extend_from_slice(&data_part);
+        wrapped.extend_from_slice(&padding_part);
+        if !is_sealed_rfc4121_wrap_token(&wrapped) {
+            return Err(RpcSecGssSecurityError::ProtectionFailure);
+        }
+        Ok(wrapped)
     }
 
     fn supports_privacy(&self) -> bool {
-        false
+        self.privacy_supported
     }
+}
+
+fn is_sealed_rfc4121_wrap_token(token: &[u8]) -> bool {
+    token.len() >= RFC4121_WRAP_TOKEN_HEADER_LEN
+        && token[..2] == RFC4121_WRAP_TOKEN_ID
+        && token[2] & RFC4121_FLAG_SEALED != 0
+}
+
+fn mutable_buffer_ptr(buffer: &mut [u8]) -> *mut u8 {
+    if buffer.is_empty() {
+        ptr::null_mut()
+    } else {
+        buffer.as_mut_ptr()
+    }
+}
+
+fn copy_sec_buffer_view(storage: &[u8], buffer: &SecBuffer) -> Option<Vec<u8>> {
+    let len = usize::try_from(buffer.cbBuffer).ok()?;
+    if len == 0 {
+        return Some(Vec::new());
+    }
+    if buffer.pvBuffer.is_null() {
+        return None;
+    }
+
+    let base = storage.as_ptr() as usize;
+    let data = buffer.pvBuffer as usize;
+    let offset = data.checked_sub(base)?;
+    let end = offset.checked_add(len)?;
+    if end > storage.len() {
+        return None;
+    }
+    Some(storage[offset..end].to_vec())
 }
 
 fn query_native_principals(context: &SecHandle) -> Result<(String, String), i32> {
@@ -486,6 +616,37 @@ mod tests {
             "nfs/server.example.com@EXAMPLE.COM",
             "host/server.example.com@EXAMPLE.COM"
         ));
+    }
+
+    #[test]
+    fn sealed_rfc4121_wrap_token_detection_is_fail_closed() {
+        let mut sealed = [0u8; RFC4121_WRAP_TOKEN_HEADER_LEN];
+        sealed[..2].copy_from_slice(&RFC4121_WRAP_TOKEN_ID);
+        sealed[2] = RFC4121_FLAG_SEALED;
+        assert!(is_sealed_rfc4121_wrap_token(&sealed));
+
+        let mut integrity_only = sealed;
+        integrity_only[2] = 0;
+        assert!(!is_sealed_rfc4121_wrap_token(&integrity_only));
+        assert!(!is_sealed_rfc4121_wrap_token(&sealed[..15]));
+    }
+
+    #[test]
+    fn sec_buffer_view_must_stay_inside_its_backing_storage() {
+        let storage = vec![10u8, 20, 30, 40];
+        let inside = SecBuffer {
+            cbBuffer: 2,
+            BufferType: SECBUFFER_DATA,
+            pvBuffer: unsafe { storage.as_ptr().add(1) as *mut c_void },
+        };
+        assert_eq!(copy_sec_buffer_view(&storage, &inside), Some(vec![20, 30]));
+
+        let outside = SecBuffer {
+            cbBuffer: 8,
+            BufferType: SECBUFFER_DATA,
+            pvBuffer: storage.as_ptr() as *mut c_void,
+        };
+        assert_eq!(copy_sec_buffer_view(&storage, &outside), None);
     }
 
     #[test]
