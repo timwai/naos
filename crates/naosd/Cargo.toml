@@ -9,6 +9,7 @@ repository.workspace = true
 [features]
 default = []
 system-gss = ["naos-nfs/system-gss"]
+windows-sspi = ["naos-nfs/windows-sspi"]
 
 [dependencies]
 anyhow.workspace = true

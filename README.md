@@ -27,9 +27,9 @@
 - **SMB 适配**：现阶段不自研 SMB Server；Linux 复用 Samba，Windows 复用系统 SMB Server，macOS 优先复用可管理的系统 SMB provider；启动/Apply 前检测 TCP/445 归属并拒绝未知冲突
 
 
-## 🔐 NFS Kerberos（Unix 可选）
+## 🔐 NFS Kerberos（可选）
 
-Linux / macOS 可使用 `system-gss` feature 将 NFS RPCSEC_GSS 接到系统 Kerberos/GSS：
+Linux / macOS 使用 `system-gss` feature 将 NFS RPCSEC_GSS 接到系统 Kerberos/GSS：
 
 ```bash
 cargo build -p naosd --features system-gss
@@ -38,6 +38,15 @@ NAOS_NFS_KERBEROS_SERVICE_PRINCIPAL='nfs/server.example.com@EXAMPLE.COM' \
 ./target/debug/naosd
 ```
 
-服务 principal 必须能从系统 GSS acceptor 的凭据来源取得对应密钥；MIT/Heimdal 环境可在启动 `naosd` 前通过 `KRB5_KTNAME` 指定 keytab。若配置了 Kerberos principal 但当前构建不支持 system GSS，或 acceptor credential 无法取得，NFS 数据面会拒绝启动而不会降级认证。
+Windows 使用 `windows-sspi` feature，直接调用原生 Kerberos SSPI package，不经过 `Negotiate`，因此不会回退到 NTLM：
 
-当前 Unix system GSS provider 支持 `krb5` / `krb5i`，并对 Kerberos RFC 4121 Wrap token 支持 `krb5p`：只有协商出 `GSS_C_CONF_FLAG` 且每个 Wrap token 都设置 `Sealed` 标志时才接受 privacy 请求；未加密、旧格式或无法确认 confidentiality 的 token 会 fail-closed。Linux CI 会用临时 MIT Kerberos realm/keytab 真正跑过 MOUNT → NFS 的 `krb5i` 与 `krb5p` RPCSEC_GSS TCP smoke。
+```powershell
+cargo build -p naosd --features windows-sspi
+$env:NAOS_NFS_ENABLED = "true"
+$env:NAOS_NFS_KERBEROS_SERVICE_PRINCIPAL = "nfs/server.example.com@EXAMPLE.COM"
+.\target\debug\naosd.exe
+```
+
+Unix 的 service principal 必须能从系统 GSS acceptor 的凭据来源取得对应密钥；MIT/Heimdal 环境可在启动 `naosd` 前通过 `KRB5_KTNAME` 指定 keytab。Windows SSPI 使用 naosd 进程当前安全上下文可用的入站 Kerberos credentials，并在 context 完成后校验 SSPI 返回的 server principal 与配置值一致。任一平台无法取得 Kerberos acceptor credential 时，NFS 数据面拒绝启动，不降级到弱认证。
+
+Unix system GSS provider 已支持 `krb5` / `krb5i` / `krb5p`；privacy 只有在协商 `GSS_C_CONF_FLAG` 且 RFC 4121 Wrap token 设置 `Sealed` 时才接受。Windows SSPI 第一阶段支持 Kerberos context establishment、principal 与 MIC（`krb5` / `krb5i`），`krb5p` 暂时 fail-closed，待域环境下完成 EncryptMessage/DecryptMessage wire 互操作验证后启用。Linux CI 使用临时 MIT Kerberos realm/keytab 跑真实 MOUNT → NFS `krb5i` / `krb5p` TCP smoke；Windows hosted CI 目前覆盖 SSPI feature 的编译、lint 与单测，真实 AD/Kerberos 客户端互操作留给 domain-joined self-hosted gate。

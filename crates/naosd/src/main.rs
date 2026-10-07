@@ -13,9 +13,16 @@ use naos_core::{
     operation::OperationService,
     reconcile::Reconciler,
 };
+#[cfg(any(
+    all(unix, feature = "system-gss"),
+    all(windows, feature = "windows-sspi")
+))]
+use naos_nfs::rpcsec_gss::StatefulRpcSecGssAcceptor;
 use naos_nfs::server::{NfsServer, NfsServerConfig};
 #[cfg(all(unix, feature = "system-gss"))]
-use naos_nfs::{rpcsec_gss::StatefulRpcSecGssAcceptor, system_gss::SystemGssHandshakeProvider};
+use naos_nfs::system_gss::SystemGssHandshakeProvider;
+#[cfg(all(windows, feature = "windows-sspi"))]
+use naos_nfs::windows_sspi::WindowsSspiHandshakeProvider;
 use naos_platform::SmbDoctor;
 use naos_store::Store;
 use naos_webdav::WebDavState;
@@ -214,10 +221,28 @@ async fn bind_nfs_server(
                 .context("bind Kerberos-enabled NFS data plane");
         }
 
-        #[cfg(not(all(unix, feature = "system-gss")))]
+        #[cfg(all(windows, feature = "windows-sspi"))]
+        {
+            let provider = Arc::new(
+                WindowsSspiHandshakeProvider::new(service_principal)
+                    .context("initialize NFS Kerberos Windows SSPI credentials")?,
+            );
+            let acceptor = Arc::new(
+                StatefulRpcSecGssAcceptor::new(provider, 128)
+                    .context("configure NFS RPCSEC_GSS sequence window")?,
+            );
+            return NfsServer::bind_with_rpcsec_gss(store, config, acceptor)
+                .await
+                .context("bind Windows Kerberos-enabled NFS data plane");
+        }
+
+        #[cfg(not(any(
+            all(unix, feature = "system-gss"),
+            all(windows, feature = "windows-sspi")
+        )))]
         {
             let _ = (store, config, service_principal);
-            anyhow::bail!("NFS Kerberos requires a Unix naosd build with the system-gss feature");
+            anyhow::bail!("NFS Kerberos requires system-gss on Unix or windows-sspi on Windows");
         }
     }
 

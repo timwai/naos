@@ -9,6 +9,7 @@ repository.workspace = true
 [features]
 default = []
 system-gss = ["dep:libgssapi"]
+windows-sspi = []
 
 [dependencies]
 hmac.workspace = true
