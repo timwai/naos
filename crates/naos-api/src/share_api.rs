@@ -1,6 +1,7 @@
 use axum::{
     Json, Router,
-    extract::{Extension, State},
+    extract::{Extension, Path, State},
+    http::StatusCode,
     routing::get,
 };
 use naos_contract::{
@@ -16,7 +17,9 @@ use utoipa::OpenApi;
 use super::{ApiError, AppState};
 
 pub(crate) fn routes() -> Router<AppState> {
-    Router::new().route("/shares", get(list_shares))
+    Router::new()
+        .route("/shares", get(list_shares))
+        .route("/shares/{share_id}", get(get_share))
 }
 
 #[utoipa::path(
@@ -38,6 +41,32 @@ async fn list_shares(
     Ok(Json(SharesResponse {
         items: shares.into_iter().map(share_dto).collect(),
     }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/shares/{share_id}",
+    params(("share_id" = String, Path, description = "Share ID")),
+    responses(
+        (status = 200, body = ShareDto),
+        (status = 401, body = ErrorResponse),
+        (status = 403, body = ErrorResponse),
+        (status = 404, body = ErrorResponse)
+    ),
+    tag = "shares"
+)]
+async fn get_share(
+    State(state): State<AppState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Path(share_id): Path<String>,
+) -> Result<Json<ShareDto>, ApiError> {
+    AuthService::ensure_admin(&session)?;
+    let share = state
+        .shares
+        .get(&share_id)
+        .await?
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "SHARE_NOT_FOUND", "共享不存在"))?;
+    Ok(Json(share_dto(share)))
 }
 
 fn share_dto(share: ShareSummary) -> ShareDto {
@@ -65,7 +94,7 @@ impl From<ShareCatalogRepositoryError> for ApiError {
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(list_shares),
+    paths(list_shares, get_share),
     components(schemas(ShareDto, SharesResponse, ErrorResponse)),
     tags((name = "shares", description = "Share catalog"))
 )]

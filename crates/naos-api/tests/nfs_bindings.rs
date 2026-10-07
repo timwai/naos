@@ -212,6 +212,24 @@ async fn nfs_binding_crud_normalizes_and_rejects_duplicates() {
     assert_eq!(shares["items"][0]["nfs_enabled"], true);
     assert_eq!(shares["items"][0]["apply_state"], "in_sync");
 
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/shares/shr_nfs",
+            None,
+            peer,
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let share = json_body(response).await;
+    assert_eq!(share["id"], "shr_nfs");
+    assert_eq!(share["name"], "nfs");
+    assert_eq!(share["nfs_enabled"], true);
+
     sqlx::query(
         "INSERT INTO share_acl
             (id, share_id, rel_path, subject_type, subject_id, perm, inherit)

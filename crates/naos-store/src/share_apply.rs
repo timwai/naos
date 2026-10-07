@@ -106,6 +106,24 @@ impl ShareCatalogRepository for Store {
 
         rows.into_iter().map(share_summary_from_row).collect()
     }
+
+    async fn get_share(
+        &self,
+        id: &str,
+    ) -> Result<Option<ShareSummary>, ShareCatalogRepositoryError> {
+        let row = sqlx::query(
+            "SELECT id, name, path, canonical_path, comment, enabled, smb_enabled,
+                    webdav_enabled, nfs_enabled, generation, applied_generation, apply_state
+             FROM shares
+             WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(catalog_store_error)?;
+
+        row.map(share_summary_from_row).transpose()
+    }
 }
 
 fn share_from_row(

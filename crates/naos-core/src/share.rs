@@ -73,6 +73,11 @@ pub trait ShareApplyRepository: Send + Sync {
 #[async_trait]
 pub trait ShareCatalogRepository: Send + Sync {
     async fn list_shares(&self) -> Result<Vec<ShareSummary>, ShareCatalogRepositoryError>;
+
+    async fn get_share(
+        &self,
+        id: &str,
+    ) -> Result<Option<ShareSummary>, ShareCatalogRepositoryError>;
 }
 
 pub struct ShareCatalogService {
@@ -86,5 +91,12 @@ impl ShareCatalogService {
 
     pub async fn list(&self) -> Result<Vec<ShareSummary>, ShareCatalogRepositoryError> {
         self.repository.list_shares().await
+    }
+
+    pub async fn get(
+        &self,
+        id: &str,
+    ) -> Result<Option<ShareSummary>, ShareCatalogRepositoryError> {
+        self.repository.get_share(id).await
     }
 }
