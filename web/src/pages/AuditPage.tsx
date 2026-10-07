@@ -244,7 +244,7 @@ export function AuditPage() {
                 <div className="audit-meta">
                   {item.share_id && <span>{item.share_id}</span>}
                   {item.operation_id && <span>{item.operation_id}</span>}
-                  {item.detail && (
+                  {item.detail !== null && item.detail !== undefined && (
                     <details>
                       <summary>detail</summary>
                       <pre>{JSON.stringify(item.detail, null, 2)}</pre>
