@@ -1,7 +1,4 @@
-use std::{
-    io,
-    net::SocketAddr,
-};
+use std::{io, net::SocketAddr};
 
 use rand_core::{OsRng, RngCore};
 use thiserror::Error;
@@ -68,7 +65,9 @@ async fn update_mapping(
     let request = mapping_call(xid, procedure, program, version, port);
     let mut stream = TcpStream::connect(rpcbind_address).await?;
     write_record(&mut stream, &request).await?;
-    let reply = read_record(&mut stream).await?.ok_or(RpcBindError::MissingReply)?;
+    let reply = read_record(&mut stream)
+        .await?
+        .ok_or(RpcBindError::MissingReply)?;
     parse_bool_reply(&reply, xid)
 }
 
