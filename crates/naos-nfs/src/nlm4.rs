@@ -186,6 +186,11 @@ impl NlmV4Service {
         self
     }
 
+    fn in_grace(&self) -> bool {
+        self.grace_until
+            .is_some_and(|deadline| Instant::now() < deadline)
+    }
+
     #[cfg(test)]
     fn with_callback_rpcbind_port(mut self, port: u16) -> Self {
         self.callback_rpcbind_port = port;
@@ -265,6 +270,14 @@ impl NlmV4Service {
         exclusive: bool,
         lock: NlmLock,
     ) -> NlmTestResult {
+        if self.in_grace() {
+            return NlmTestResult {
+                cookie,
+                status: NLM4_DENIED_GRACE_PERIOD,
+                holder: None,
+            };
+        }
+
         let validated = match self
             .validate_lock(client_ip, credential, &lock, exclusive)
             .await
@@ -337,10 +350,7 @@ impl NlmV4Service {
             reclaim,
             client_state,
         } = request;
-        let in_grace = self
-            .grace_until
-            .is_some_and(|deadline| Instant::now() < deadline);
-        if in_grace != reclaim {
+        if self.in_grace() != reclaim {
             return NlmResult {
                 cookie,
                 status: NLM4_DENIED_GRACE_PERIOD,
@@ -422,6 +432,13 @@ impl NlmV4Service {
         cookie: Vec<u8>,
         lock: NlmLock,
     ) -> NlmResult {
+        if self.in_grace() {
+            return NlmResult {
+                cookie,
+                status: NLM4_DENIED_GRACE_PERIOD,
+            };
+        }
+
         let validated = match self
             .validate_lock(client_ip, credential, &lock, false)
             .await
@@ -455,6 +472,13 @@ impl NlmV4Service {
         cookie: Vec<u8>,
         lock: NlmLock,
     ) -> NlmResult {
+        if self.in_grace() {
+            return NlmResult {
+                cookie,
+                status: NLM4_DENIED_GRACE_PERIOD,
+            };
+        }
+
         let validated = match self
             .validate_lock(client_ip, credential, &lock, false)
             .await
@@ -1997,23 +2021,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grace_period_accepts_reclaim_and_rejects_new_locks() {
+    async fn grace_period_accepts_reclaim_and_rejects_normal_lock_operations() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
         let (service, handles, export) = service(temp.path());
         let service = service.with_grace_period(Duration::from_secs(60));
         let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
         let client_ip = "192.168.1.10".parse().unwrap();
+        let requested = lock(handle.clone(), "client-a", 10, 0, 0);
 
         assert_eq!(
             service
-                .lock(
+                .test(
                     client_ip,
                     &credential(1000),
                     vec![1],
                     true,
-                    lock(handle.clone(), "client-a", 10, 0, 0),
-                    false,
+                    requested.clone(),
                 )
                 .await
                 .status,
@@ -2026,8 +2050,81 @@ mod tests {
                     &credential(1000),
                     vec![2],
                     true,
-                    lock(handle, "client-a", 10, 0, 0),
+                    requested.clone(),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_DENIED_GRACE_PERIOD
+        );
+        assert_eq!(
+            service
+                .cancel(
+                    client_ip,
+                    &credential(1000),
+                    vec![3],
+                    requested.clone(),
+                )
+                .await
+                .status,
+            NLM4_DENIED_GRACE_PERIOD
+        );
+        assert_eq!(
+            service
+                .unlock(client_ip, &credential(1000), vec![4], requested.clone())
+                .await
+                .status,
+            NLM4_DENIED_GRACE_PERIOD
+        );
+        assert_eq!(
+            service
+                .lock(
+                    client_ip,
+                    &credential(1000),
+                    vec![5],
                     true,
+                    requested,
+                    true,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_grace_rejects_late_reclaim_and_accepts_new_locks() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let service = service.with_grace_period(Duration::ZERO);
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let client_ip = "192.168.1.10".parse().unwrap();
+        let requested = lock(handle, "client-a", 10, 0, 0);
+
+        assert_eq!(
+            service
+                .lock(
+                    client_ip,
+                    &credential(1000),
+                    vec![1],
+                    true,
+                    requested.clone(),
+                    true,
+                )
+                .await
+                .status,
+            NLM4_DENIED_GRACE_PERIOD
+        );
+        assert_eq!(
+            service
+                .lock(
+                    client_ip,
+                    &credential(1000),
+                    vec![2],
+                    true,
+                    requested,
+                    false,
                 )
                 .await
                 .status,
