@@ -76,7 +76,7 @@ impl WindowsSspiHandshakeProvider {
             AcquireCredentialsHandleW(
                 ptr::null(),
                 KERBEROS_PACKAGE.as_ptr(),
-                SECPKG_CRED_INBOUND as u32,
+                SECPKG_CRED_INBOUND,
                 ptr::null(),
                 ptr::null(),
                 None,
@@ -136,7 +136,7 @@ struct WindowsContextHandle {
 impl Drop for WindowsContextHandle {
     fn drop(&mut self) {
         unsafe {
-            DeleteSecurityContext(&mut self.handle);
+            DeleteSecurityContext(&self.handle);
         }
     }
 }
@@ -161,11 +161,11 @@ impl RpcSecGssHandshake for WindowsSspiHandshake {
                 .len()
                 .try_into()
                 .map_err(|_| RpcSecGssAcceptorError::ProviderFailure)?,
-            BufferType: SECBUFFER_TOKEN as u32,
+            BufferType: SECBUFFER_TOKEN,
             pvBuffer: input.as_mut_ptr().cast(),
         };
-        let mut input_desc = SecBufferDesc {
-            ulVersion: SECBUFFER_VERSION as u32,
+        let input_desc = SecBufferDesc {
+            ulVersion: SECBUFFER_VERSION,
             cBuffers: 1,
             pBuffers: &mut input_buffer,
         };
@@ -173,11 +173,11 @@ impl RpcSecGssHandshake for WindowsSspiHandshake {
         let mut output = vec![0u8; MAX_SSPI_TOKEN_BYTES];
         let mut output_buffer = SecBuffer {
             cbBuffer: output.len() as u32,
-            BufferType: SECBUFFER_TOKEN as u32,
+            BufferType: SECBUFFER_TOKEN,
             pvBuffer: output.as_mut_ptr().cast(),
         };
-        let mut output_desc = SecBufferDesc {
-            ulVersion: SECBUFFER_VERSION as u32,
+        let output_desc = SecBufferDesc {
+            ulVersion: SECBUFFER_VERSION,
             cBuffers: 1,
             pBuffers: &mut output_buffer,
         };
@@ -194,19 +194,19 @@ impl RpcSecGssHandshake for WindowsSspiHandshake {
             .unwrap_or(ptr::null_mut());
         let mut context_attributes = 0u32;
         let mut expiry = 0i64;
-        let mut credential = self.credential.lock()?;
+        let credential = self.credential.lock()?;
         let status = unsafe {
             AcceptSecurityContext(
-                &mut *credential,
+                &*credential,
                 previous_context,
-                &mut input_desc,
-                (ASC_REQ_CONNECTION
+                &input_desc,
+                ASC_REQ_CONNECTION
                     | ASC_REQ_INTEGRITY
                     | ASC_REQ_CONFIDENTIALITY
                     | ASC_REQ_MUTUAL_AUTH
                     | ASC_REQ_REPLAY_DETECT
-                    | ASC_REQ_SEQUENCE_DETECT) as u32,
-                SECURITY_NATIVE_DREP as u32,
+                    | ASC_REQ_SEQUENCE_DETECT,
+                SECURITY_NATIVE_DREP,
                 &mut context_handle,
                 &mut output_desc,
                 &mut context_attributes,
@@ -217,7 +217,7 @@ impl RpcSecGssHandshake for WindowsSspiHandshake {
 
         if matches!(status, SEC_I_COMPLETE_NEEDED | SEC_I_COMPLETE_AND_CONTINUE) {
             let complete_status =
-                unsafe { CompleteAuthToken(&mut context_handle, &mut output_desc) };
+                unsafe { CompleteAuthToken(&context_handle, &output_desc) };
             if complete_status != SEC_E_OK {
                 return Ok(sspi_failure(complete_status));
             }
@@ -238,7 +238,7 @@ impl RpcSecGssHandshake for WindowsSspiHandshake {
         if !matches!(status, SEC_E_OK | SEC_I_COMPLETE_NEEDED) {
             return Ok(sspi_failure(status));
         }
-        if context_attributes & ASC_RET_INTEGRITY as u32 == 0 {
+        if context_attributes & ASC_RET_INTEGRITY == 0 {
             return Ok(RpcSecGssHandshakeResult::Failure {
                 gss_major: GSS_S_UNAVAILABLE,
                 gss_minor: 0,
@@ -297,7 +297,7 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
     }
 
     fn verify_mic(&self, message: &[u8], mic: &[u8]) -> Result<(), RpcSecGssSecurityError> {
-        let mut context = self.lock()?;
+        let context = self.lock()?;
         let mut data = message.to_vec();
         let mut token = mic.to_vec();
         let mut buffers = [
@@ -306,7 +306,7 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
                     .len()
                     .try_into()
                     .map_err(|_| RpcSecGssSecurityError::ProtectionFailure)?,
-                BufferType: SECBUFFER_DATA as u32,
+                BufferType: SECBUFFER_DATA,
                 pvBuffer: data.as_mut_ptr().cast(),
             },
             SecBuffer {
@@ -314,17 +314,17 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
                     .len()
                     .try_into()
                     .map_err(|_| RpcSecGssSecurityError::ProtectionFailure)?,
-                BufferType: SECBUFFER_TOKEN as u32,
+                BufferType: SECBUFFER_TOKEN,
                 pvBuffer: token.as_mut_ptr().cast(),
             },
         ];
-        let mut desc = SecBufferDesc {
-            ulVersion: SECBUFFER_VERSION as u32,
+        let desc = SecBufferDesc {
+            ulVersion: SECBUFFER_VERSION,
             cBuffers: buffers.len() as u32,
             pBuffers: buffers.as_mut_ptr(),
         };
         let mut qop = 0u32;
-        let status = unsafe { VerifySignature(&mut context.handle, &mut desc, 0, &mut qop) };
+        let status = unsafe { VerifySignature(&context.handle, &desc, 0, &mut qop) };
         match status {
             SEC_E_OK => Ok(()),
             SEC_E_MESSAGE_ALTERED | SEC_E_OUT_OF_SEQUENCE => Err(RpcSecGssSecurityError::BadMic),
@@ -333,7 +333,7 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
     }
 
     fn get_mic(&self, message: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
-        let mut context = self.lock()?;
+        let context = self.lock()?;
         let mut data = message.to_vec();
         let mut token = vec![0u8; self.max_signature.max(1)];
         let mut buffers = [
@@ -342,21 +342,21 @@ impl RpcSecGssSecurityContext for WindowsSspiSecurityContext {
                     .len()
                     .try_into()
                     .map_err(|_| RpcSecGssSecurityError::ProtectionFailure)?,
-                BufferType: SECBUFFER_DATA as u32,
+                BufferType: SECBUFFER_DATA,
                 pvBuffer: data.as_mut_ptr().cast(),
             },
             SecBuffer {
                 cbBuffer: token.len() as u32,
-                BufferType: SECBUFFER_TOKEN as u32,
+                BufferType: SECBUFFER_TOKEN,
                 pvBuffer: token.as_mut_ptr().cast(),
             },
         ];
-        let mut desc = SecBufferDesc {
-            ulVersion: SECBUFFER_VERSION as u32,
+        let desc = SecBufferDesc {
+            ulVersion: SECBUFFER_VERSION,
             cBuffers: buffers.len() as u32,
             pBuffers: buffers.as_mut_ptr(),
         };
-        let status = unsafe { MakeSignature(&mut context.handle, 0, &mut desc, 0) };
+        let status = unsafe { MakeSignature(&context.handle, 0, &desc, 0) };
         if status != SEC_E_OK {
             return Err(RpcSecGssSecurityError::ProtectionFailure);
         }
@@ -388,7 +388,7 @@ fn query_client_principal(context: &SecHandle) -> Result<String, i32> {
     let status = unsafe {
         QueryContextAttributesW(
             context as *const SecHandle as *mut SecHandle,
-            SECPKG_ATTR_NATIVE_NAMES as u32,
+            SECPKG_ATTR_NATIVE_NAMES,
             &mut names as *mut SecPkgContext_NativeNamesW as *mut c_void,
         )
     };
@@ -413,7 +413,7 @@ fn query_context_sizes(context: &SecHandle) -> Result<SecPkgContext_Sizes, i32> 
     let status = unsafe {
         QueryContextAttributesW(
             context as *const SecHandle as *mut SecHandle,
-            SECPKG_ATTR_SIZES as u32,
+            SECPKG_ATTR_SIZES,
             &mut sizes as *mut SecPkgContext_Sizes as *mut c_void,
         )
     };
