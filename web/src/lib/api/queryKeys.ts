@@ -13,6 +13,11 @@ export const queryKeys = {
     directory: (shareId: string, path: string) =>
       ["files", "directory", shareId, path] as const,
   },
+  groups: {
+    list: () => ["groups", "list"] as const,
+    detail: (groupId: string) => ["groups", "detail", groupId] as const,
+    user: (userId: string) => ["groups", "user", userId] as const,
+  },
   health: {
     ready: () => ["health", "ready"] as const,
   },
