@@ -425,17 +425,13 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
 
     let integrity_seq = 8;
     let integrity_arguments = b"real-integrity-arguments";
-    let integrity_plaintext =
-        encode_rpcsec_gss_plaintext(integrity_seq, integrity_arguments);
+    let integrity_plaintext = encode_rpcsec_gss_plaintext(integrity_seq, integrity_arguments);
     let integrity_checksum = wire_client
         .get_mic(&integrity_plaintext)
         .expect("client integrity body MIC");
-    let integrity_body = encode_rpcsec_gss_integrity_body(
-        integrity_seq,
-        integrity_arguments,
-        &integrity_checksum,
-    )
-    .expect("encode real integrity request");
+    let integrity_body =
+        encode_rpcsec_gss_integrity_body(integrity_seq, integrity_arguments, &integrity_checksum)
+            .expect("encode real integrity request");
     let integrity_header = b"rpcsec-gss-real-integrity-header";
     let integrity_header_mic = wire_client
         .get_mic(integrity_header)
@@ -453,10 +449,7 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
         .await
         .expect("authenticate real svc_integrity request");
     assert_eq!(integrity_authenticated.principal(), client_principal);
-    assert_eq!(
-        integrity_authenticated.arguments(),
-        integrity_arguments
-    );
+    assert_eq!(integrity_authenticated.arguments(), integrity_arguments);
 
     let integrity_reply = integrity_authenticated
         .protect_reply(b"real-integrity-reply")
@@ -467,12 +460,10 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
             &integrity_reply.verifier.body,
         )
         .expect("verify real integrity reply verifier");
-    let decoded_reply =
-        decode_rpcsec_gss_integrity_body(&integrity_reply.body, integrity_seq)
-            .expect("decode real integrity reply");
+    let decoded_reply = decode_rpcsec_gss_integrity_body(&integrity_reply.body, integrity_seq)
+        .expect("decode real integrity reply");
     assert_eq!(decoded_reply.arguments, b"real-integrity-reply");
-    let reply_plaintext =
-        encode_rpcsec_gss_plaintext(integrity_seq, &decoded_reply.arguments);
+    let reply_plaintext = encode_rpcsec_gss_plaintext(integrity_seq, &decoded_reply.arguments);
     wire_client
         .verify_mic(&reply_plaintext, &decoded_reply.checksum)
         .expect("verify real integrity reply checksum");
