@@ -1684,7 +1684,7 @@ NFSv3 数据面当前实现约束：
 - `rpcbind/portmapper` 注册是显式可选项，默认关闭；开启时仅向本机 `127.0.0.1:111` 发起 portmapper v2 TCP SET/UNSET；
 - naos **不自行监听 111**，也不启动、停止或覆盖系统 rpcbind；注册失败视为 NFS 启动失败；
 - 不启用 rpcbind 时，客户端必须显式知道 NFS/MOUNT 端口，或由部署层提供等价服务发现；
-- 当前实现的 NFSv3 procedure 至少包含 `NULL/GETATTR/SETATTR/LOOKUP/ACCESS/READ/WRITE/CREATE/MKDIR/REMOVE/RMDIR/RENAME/READDIR/READDIRPLUS/FSSTAT/FSINFO/PATHCONF/COMMIT`；
+- 当前实现的 NFSv3 procedure 至少包含 `NULL/GETATTR/SETATTR/LOOKUP/ACCESS/READLINK/READ/WRITE/CREATE/MKDIR/SYMLINK/REMOVE/RMDIR/RENAME/LINK/READDIR/READDIRPLUS/FSSTAT/FSINFO/PATHCONF/COMMIT`；其中 `SYMLINK` 创建当前仅在 Unix 平台启用，Windows 返回 `NFS3ERR_NOTSUPP`，避免在 NFSv3 不提供目标类型信息时错误选择 Windows file/dir symlink API；
 - MOUNT v3 支持 `NULL/MNT/DUMP/UMNT/UMNTALL/EXPORT`；
 - MOUNT 与 NFSv3 共用同一 file-handle table，rename 后已签发 handle 保持有效，delete 后对应 handle 变为 stale；
 - 当前 file-handle path registry 为进程内状态；`naosd` 重启后旧 handle 视为 stale，v1 客户端需要重新 mount。若未来要求 daemon restart 后 handle 持久稳定，需单独设计持久 object identity/handle index，而不能把绝对路径直接暴露进 handle；

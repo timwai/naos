@@ -9,7 +9,7 @@ fi
 OS="$(uname -s)"
 case "$OS" in
   Linux)
-    for command in mount umount mount.nfs grep cmp mv rm mkdir rmdir sync; do
+    for command in mount umount mount.nfs grep cmp mv rm mkdir rmdir sync ln readlink; do
       command -v "$command" >/dev/null || {
         echo "missing required command: $command" >&2
         exit 3
@@ -17,7 +17,7 @@ case "$OS" in
     done
     ;;
   Darwin)
-    for command in mount_nfs umount grep cmp mv rm mkdir rmdir sync; do
+    for command in mount_nfs umount grep cmp mv rm mkdir rmdir sync ln readlink; do
       command -v "$command" >/dev/null || {
         echo "missing required command: $command" >&2
         exit 3
@@ -115,6 +115,19 @@ printf 'truncated\n' >"$ROOT/expected-truncated.txt"
 cmp "$ROOT/expected-truncated.txt" "$MOUNTPOINT/roundtrip.txt"
 cmp "$ROOT/expected-truncated.txt" "$SHARE/roundtrip.txt"
 
+printf 'linked\n' >"$MOUNTPOINT/link-target.txt"
+ln -s link-target.txt "$MOUNTPOINT/symlink.txt"
+[[ "$(readlink "$MOUNTPOINT/symlink.txt")" == "link-target.txt" ]]
+[[ "$(readlink "$SHARE/symlink.txt")" == "link-target.txt" ]]
+cmp "$MOUNTPOINT/link-target.txt" "$MOUNTPOINT/symlink.txt"
+
+ln "$MOUNTPOINT/link-target.txt" "$MOUNTPOINT/hardlink.txt"
+cmp "$MOUNTPOINT/link-target.txt" "$MOUNTPOINT/hardlink.txt"
+cmp "$SHARE/link-target.txt" "$SHARE/hardlink.txt"
+
+rm "$MOUNTPOINT/symlink.txt" "$MOUNTPOINT/hardlink.txt" "$MOUNTPOINT/link-target.txt"
+[[ ! -e "$SHARE/symlink.txt" && ! -e "$SHARE/hardlink.txt" && ! -e "$SHARE/link-target.txt" ]]
+
 mv "$MOUNTPOINT/roundtrip.txt" "$MOUNTPOINT/renamed.txt"
 [[ -f "$SHARE/renamed.txt" && ! -e "$SHARE/roundtrip.txt" ]]
 
@@ -126,4 +139,4 @@ rm "$MOUNTPOINT/renamed.txt"
 
 [[ ! -e "$SHARE/dir" && ! -e "$SHARE/renamed.txt" ]]
 
-echo "real $OS NFSv3 mount/create/truncate/read/write/rename/delete smoke test passed"
+echo "real $OS NFSv3 mount/create/truncate/read/write/symlink/hardlink/rename/delete smoke test passed"
