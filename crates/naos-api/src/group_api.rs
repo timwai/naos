@@ -247,10 +247,7 @@ async fn list_user_groups(
     }))
 }
 
-fn launch_reconcile(
-    state: &AppState,
-    result: &mut GroupMutationResult,
-) -> Result<(), ApiError> {
+fn launch_reconcile(state: &AppState, result: &mut GroupMutationResult) -> Result<(), ApiError> {
     if !result.created_operation {
         return Ok(());
     }
