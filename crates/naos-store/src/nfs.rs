@@ -265,7 +265,6 @@ fn store_error(_: sqlx::Error) -> NfsRepositoryError {
     NfsRepositoryError::Unavailable
 }
 
-
 #[cfg(test)]
 mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
