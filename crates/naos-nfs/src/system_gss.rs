@@ -166,9 +166,8 @@ impl RpcSecGssSecurityContext for SystemGssSecurityContext {
 }
 
 fn map_verify_error(error: GssError) -> RpcSecGssSecurityError {
-    if error.major.contains(MajorFlags::GSS_S_BAD_MIC)
-        || error.major.contains(MajorFlags::GSS_S_BAD_SIG)
-    {
+    let major = error.major.bits();
+    if major == MajorFlags::GSS_S_BAD_MIC.bits() || major == MajorFlags::GSS_S_BAD_SIG.bits() {
         RpcSecGssSecurityError::BadMic
     } else {
         RpcSecGssSecurityError::ProtectionFailure
@@ -185,5 +184,23 @@ mod tests {
             SystemGssHandshakeProvider::new("   "),
             Err(SystemGssProviderError::EmptyServicePrincipal)
         ));
+    }
+
+    #[test]
+    fn maps_only_explicit_mic_statuses_to_bad_mic() {
+        let bad_mic = GssError {
+            major: MajorFlags::GSS_S_BAD_MIC,
+            minor: 0,
+        };
+        assert_eq!(map_verify_error(bad_mic), RpcSecGssSecurityError::BadMic);
+
+        let failure = GssError {
+            major: MajorFlags::GSS_S_FAILURE,
+            minor: 1,
+        };
+        assert_eq!(
+            map_verify_error(failure),
+            RpcSecGssSecurityError::ProtectionFailure
+        );
     }
 }
