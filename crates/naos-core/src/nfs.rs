@@ -282,9 +282,7 @@ pub trait NfsBindingRepository: Send + Sync {
         Ok(candidate)
     }
 
-    async fn list_nfs_file_handles(
-        &self,
-    ) -> Result<Vec<NfsFileHandleRecord>, NfsRepositoryError> {
+    async fn list_nfs_file_handles(&self) -> Result<Vec<NfsFileHandleRecord>, NfsRepositoryError> {
         Ok(Vec::new())
     }
 
