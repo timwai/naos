@@ -1562,6 +1562,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wire_blocking_lock_returns_nlm4_blocked() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let client_ip = "192.168.1.10".parse().unwrap();
+
+        assert_eq!(
+            service
+                .lock(
+                    client_ip,
+                    &credential(1000),
+                    vec![1],
+                    true,
+                    lock(handle.clone(), "client-a", 10, 0, 100),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+
+        let requested = lock(handle, "client-b", 20, 0, 100);
+        let mut body = XdrWriter::new();
+        body.opaque(&[2]).unwrap();
+        body.u32(1);
+        body.u32(1);
+        encode_lock(&mut body, &requested);
+        body.u32(0);
+        body.u32(0);
+        let request = rpc_call(
+            73,
+            NLMPROC4_LOCK,
+            credential(1000),
+            &body.into_bytes(),
+        );
+
+        let reply = dispatch_nlm4_rpc(&service, client_ip, &request).await;
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 73);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+        assert!(reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.opaque(16).unwrap(), vec![2]);
+        assert_eq!(reader.u32().unwrap(), NLM4_BLOCKED);
+        reader.finish().unwrap();
+        assert_eq!(service.waiters.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
     async fn blocked_lock_is_granted_after_conflicting_unlock() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
