@@ -57,6 +57,41 @@ jobs:
       - name: Build SPA from generated OpenAPI types
         working-directory: web
         run: npm run build
+      - name: Verify embedded SPA asset contract
+        run: |
+          test -s web/dist/index.html
+          test -s web/dist/assets/app.js
+          test -s web/dist/assets/app.css
+      - name: Test embedded SPA feature
+        run: cargo test -p naosd --features embedded-web embedded_web
+      - name: Build production single binary
+        run: cargo build -p naosd --features embedded-web
+      - name: Smoke embedded SPA routing
+        shell: bash
+        run: |
+          set -euo pipefail
+          export NAOS_LISTEN=127.0.0.1
+          export NAOS_PORT=18443
+          export NAOS_DATABASE_URL="sqlite://$RUNNER_TEMP/naos-spa-smoke.db?mode=rwc"
+          ./target/debug/naosd >"$RUNNER_TEMP/naosd-spa.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:18443/" >"$RUNNER_TEMP/root.html"; then
+              break
+            fi
+            sleep 1
+          done
+
+          grep -q '<div id="root"></div>' "$RUNNER_TEMP/root.html"
+          curl -fsS "http://127.0.0.1:18443/users" >"$RUNNER_TEMP/users.html"
+          cmp "$RUNNER_TEMP/root.html" "$RUNNER_TEMP/users.html"
+          curl -fsS "http://127.0.0.1:18443/assets/app.js" >/dev/null
+          curl -fsS "http://127.0.0.1:18443/assets/app.css" >/dev/null
+
+          status="$(curl -sS -o /dev/null -w '%{http_code}'             "http://127.0.0.1:18443/api/v1/not-a-real-route")"
+          test "$status" = "404"
 
 
   nfs-system-gss:
