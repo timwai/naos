@@ -2,12 +2,34 @@ name: nfs-real-smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      remote_nlm_host:
+        description: "Separate naos NFS server host for remote NLMv4 validation"
+        required: false
+        default: ""
+        type: string
+      remote_nlm_export:
+        description: "Remote export path"
+        required: false
+        default: "/ci-share"
+        type: string
+      remote_nfs_port:
+        description: "Remote NFSv3 TCP port"
+        required: false
+        default: "2049"
+        type: string
+      remote_mount_port:
+        description: "Remote MOUNTv3 TCP port"
+        required: false
+        default: "20048"
+        type: string
   push:
     branches: [main]
     paths:
       - "crates/naos-nfs/**"
       - "crates/naos-core/src/path.rs"
       - "scripts/ci/nfs-real-smoke.sh"
+      - "scripts/ci/nfs-remote-lock-smoke.sh"
       - ".github/workflows/nfs-real-smoke.yml"
 
 jobs:
@@ -43,6 +65,25 @@ jobs:
             NAOS_NFS_SMOKE_SERVER="$NAOS_NFS_SMOKE_SERVER" \
             NAOS_NFS_SMOKE_LOCKS=0 \
             bash scripts/ci/nfs-real-smoke.sh
+
+  remote-macos-nlm-client:
+    if: github.event_name == 'workflow_dispatch' && inputs.remote_nlm_host != ''
+    runs-on: [self-hosted, macos, nfs]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run remote macOS NLMv4 lock smoke test
+        env:
+          NAOS_NFS_REMOTE_HOST: ${{ inputs.remote_nlm_host }}
+          NAOS_NFS_REMOTE_EXPORT: ${{ inputs.remote_nlm_export }}
+          NAOS_NFS_REMOTE_NFS_PORT: ${{ inputs.remote_nfs_port }}
+          NAOS_NFS_REMOTE_MOUNT_PORT: ${{ inputs.remote_mount_port }}
+        run: |
+          sudo env \
+            NAOS_NFS_REMOTE_HOST="$NAOS_NFS_REMOTE_HOST" \
+            NAOS_NFS_REMOTE_EXPORT="$NAOS_NFS_REMOTE_EXPORT" \
+            NAOS_NFS_REMOTE_NFS_PORT="$NAOS_NFS_REMOTE_NFS_PORT" \
+            NAOS_NFS_REMOTE_MOUNT_PORT="$NAOS_NFS_REMOTE_MOUNT_PORT" \
+            bash scripts/ci/nfs-remote-lock-smoke.sh
 
   windows-nfs-client:
     if: github.event_name == 'workflow_dispatch'
