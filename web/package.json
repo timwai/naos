@@ -1,0 +1,29 @@
+{
+  "name": "@naos/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate:openapi": "cargo run --manifest-path ../Cargo.toml -p naosd -- export-openapi > openapi.json",
+    "generate:types": "openapi-typescript openapi.json -o src/lib/api/generated.ts",
+    "generate:api": "npm run generate:openapi && npm run generate:types",
+    "dev": "npm run generate:api && vite",
+    "check": "npm run generate:api && tsc --noEmit",
+    "build": "npm run generate:api && tsc --noEmit && vite build",
+    "ci": "npm run build"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.104.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router-dom": "7.18.3"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "openapi-typescript": "7.13.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.3"
+  }
+}

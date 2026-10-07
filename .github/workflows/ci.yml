@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install web dependencies
+        run: npm install --prefix web --package-lock=false
+      - name: Type-check and build web UI
+        run: npm run ci --prefix web
+
   rust:
     strategy:
       matrix:
