@@ -13,7 +13,7 @@ use tokio::{
 
 use crate::{
     rpc::{
-        AUTH_NONE, RPC_VERSION, RpcCall, RpcDecodeError, accepted_garbage_args,
+        AUTH_NONE, MAX_AUTH_BYTES, RPC_VERSION, RpcCall, RpcDecodeError, accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
         accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch,
     },
@@ -250,8 +250,40 @@ async fn send_reboot_notification(peer_ip: IpAddr, state: u32) -> bool {
         Ok(address) => address.ip().to_string(),
         Err(_) => return false,
     };
-    let request = notify_rpc_call(random_xid(), &notify_name, state);
-    socket.send(&request).await.ok() == Some(request.len())
+    let xid = random_xid();
+    let request = notify_rpc_call(xid, &notify_name, state);
+    if socket.send(&request).await.ok() != Some(request.len()) {
+        return false;
+    }
+
+    let mut reply = vec![0u8; 4096];
+    let received = tokio::time::timeout(std::time::Duration::from_secs(2), socket.recv(&mut reply))
+        .await;
+    let Ok(Ok(length)) = received else {
+        return false;
+    };
+
+    parse_notify_reply(&reply[..length], xid)
+}
+
+fn parse_notify_reply(reply: &[u8], expected_xid: u32) -> bool {
+    let mut reader = XdrReader::new(reply);
+    let parsed = (|| {
+        if reader.u32().ok()? != expected_xid
+            || reader.u32().ok()? != 1
+            || reader.u32().ok()? != 0
+        {
+            return None;
+        }
+        reader.u32().ok()?;
+        reader.opaque(MAX_AUTH_BYTES).ok()?;
+        if reader.u32().ok()? != 0 {
+            return None;
+        }
+        reader.finish().ok()?;
+        Some(())
+    })();
+    parsed.is_some()
 }
 
 fn notify_rpc_call(xid: u32, notify_name: &str, state: u32) -> Vec<u8> {
@@ -487,6 +519,21 @@ fn decode_my_id(reader: &mut XdrReader<'_>) -> Result<NsmMyId, ()> {
 mod tests {
     use super::*;
     use crate::xdr::XdrWriter;
+
+    #[test]
+    fn reboot_notify_reply_requires_matching_successful_rpc_reply() {
+        assert!(parse_notify_reply(&accepted_success(77, &[]), 77));
+        assert!(!parse_notify_reply(&accepted_success(78, &[]), 77));
+
+        let mut malformed = XdrWriter::new();
+        malformed.u32(77);
+        malformed.u32(1);
+        malformed.u32(0);
+        malformed.u32(AUTH_NONE);
+        malformed.u32(0);
+        malformed.u32(1);
+        assert!(!parse_notify_reply(&malformed.into_bytes(), 77));
+    }
 
     #[tokio::test]
     async fn reboot_notify_call_is_accepted_and_recorded() {
