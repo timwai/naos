@@ -2694,6 +2694,38 @@ mod tests {
         principal: String,
     }
 
+    struct FakeGssAcceptor;
+
+    impl RpcSecGssAcceptor for FakeGssAcceptor {
+        fn accept(
+            &self,
+            request: crate::rpcsec_gss::RpcSecGssAcceptRequest,
+        ) -> Result<
+            crate::rpcsec_gss::RpcSecGssAcceptResult,
+            crate::rpcsec_gss::RpcSecGssAcceptorError,
+        > {
+            Ok(match request {
+                crate::rpcsec_gss::RpcSecGssAcceptRequest::Init { token }
+                    if token == b"client-init" =>
+                {
+                    crate::rpcsec_gss::RpcSecGssAcceptResult::Complete {
+                        handle: b"ctx".to_vec(),
+                        gss_minor: 0,
+                        seq_window: 8,
+                        token: b"server-complete".to_vec(),
+                        security: Arc::new(FakeGssContext {
+                            principal: "alice@EXAMPLE.COM".to_owned(),
+                        }),
+                    }
+                }
+                _ => crate::rpcsec_gss::RpcSecGssAcceptResult::Failure {
+                    gss_major: 0x000d_0000,
+                    gss_minor: 1,
+                },
+            })
+        }
+    }
+
     impl crate::rpcsec_gss::RpcSecGssSecurityContext for FakeGssContext {
         fn principal(&self) -> &str {
             &self.principal
@@ -2796,6 +2828,53 @@ mod tests {
             [7; 8],
         );
         (service, handles, export)
+    }
+
+    #[tokio::test]
+    async fn rpcsec_gss_init_then_data_dispatch_uses_registered_context() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("report.txt"), b"hello").unwrap();
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadOnly);
+        let file_handle = handles.issue(&export, &RelativePath::parse("/report.txt").unwrap());
+        let registry = RpcSecGssContextRegistry::new();
+        let service = service.with_rpcsec_gss(registry.clone(), Arc::new(FakeGssAcceptor));
+
+        let init = rpcsec_gss_init_call(500, b"client-init");
+        let init_reply =
+            dispatch_nfs3_rpc(&service, "203.0.113.77".parse().unwrap(), &init).await;
+        let mut reader = XdrReader::new(&init_reply);
+        assert_eq!(reader.u32().unwrap(), 500);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), crate::rpc::RPCSEC_GSS);
+        assert_eq!(reader.opaque(64).unwrap(), 8u32.to_be_bytes());
+        assert_eq!(reader.u32().unwrap(), 0);
+        let init_result =
+            crate::rpc::decode_rpcsec_gss_init_result(reader.remaining()).unwrap();
+        assert_eq!(init_result.handle, b"ctx");
+        assert_eq!(init_result.gss_major, crate::rpc::GSS_S_COMPLETE);
+        assert_eq!(init_result.seq_window, 8);
+        assert!(registry.contains(b"ctx").await);
+
+        let mut body = XdrWriter::new();
+        body.opaque(&file_handle).unwrap();
+        let data = rpcsec_gss_call(
+            501,
+            NFSPROC3_GETATTR,
+            10,
+            crate::rpc::RPCSEC_GSS_SVC_NONE,
+            &body.into_bytes(),
+        );
+        let data_reply =
+            dispatch_nfs3_rpc(&service, "203.0.113.77".parse().unwrap(), &data).await;
+        let mut reader = XdrReader::new(&data_reply);
+        assert_eq!(reader.u32().unwrap(), 501);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), crate::rpc::RPCSEC_GSS);
+        assert_eq!(reader.opaque(64).unwrap(), 10u32.to_be_bytes());
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), NFS3_OK);
     }
 
     #[tokio::test]
@@ -3350,6 +3429,32 @@ mod tests {
         writer.u32(0);
         writer.u32(0);
         writer.u32(0);
+    }
+
+    fn rpcsec_gss_init_call(xid: u32, token: &[u8]) -> Vec<u8> {
+        let mut writer = XdrWriter::new();
+        writer.u32(xid);
+        writer.u32(0);
+        writer.u32(crate::rpc::RPC_VERSION);
+        writer.u32(NFS_PROGRAM);
+        writer.u32(NFS_VERSION);
+        writer.u32(NFSPROC3_NULL);
+
+        let mut credential = XdrWriter::new();
+        credential.u32(crate::rpc::RPCSEC_GSS_VERSION_1);
+        credential.u32(crate::rpc::RPCSEC_GSS_INIT);
+        credential.u32(0xffff_ffff);
+        credential.u32(0xffff_ffff);
+        credential.opaque(&[]).unwrap();
+        writer.u32(crate::rpc::RPCSEC_GSS);
+        writer.opaque(&credential.into_bytes()).unwrap();
+
+        writer.u32(crate::rpc::AUTH_NONE);
+        writer.opaque(&[]).unwrap();
+
+        let mut output = writer.into_bytes();
+        output.extend_from_slice(&crate::rpc::encode_rpcsec_gss_init_token(token).unwrap());
+        output
     }
 
     fn rpcsec_gss_call(
