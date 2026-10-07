@@ -20,6 +20,7 @@ if ([string]::IsNullOrWhiteSpace($server) -or -not (Test-Path -LiteralPath $serv
 
 $nfsPort = if ($env:NAOS_NFS_SMOKE_NFS_PORT) { [int]$env:NAOS_NFS_SMOKE_NFS_PORT } else { 32049 }
 $mountPort = if ($env:NAOS_NFS_SMOKE_MOUNT_PORT) { [int]$env:NAOS_NFS_SMOKE_MOUNT_PORT } else { 32048 }
+$nlmPort = if ($env:NAOS_NFS_SMOKE_NLM_PORT) { [int]$env:NAOS_NFS_SMOKE_NLM_PORT } else { 32047 }
 $rpcbindAddress = if ($env:NAOS_NFS_SMOKE_RPCBIND) { $env:NAOS_NFS_SMOKE_RPCBIND } else { "127.0.0.1:111" }
 
 if ($rpcbindAddress -ne "127.0.0.1:111") {
@@ -59,9 +60,14 @@ try {
         }
 
         $registrations = (& rpcinfo.exe -p 127.0.0.1 2>$null | Out-String)
-        $nfsPattern = "(?m)^\s*100003\s+3\s+tcp\s+$nfsPort\s*$"
-        $mountPattern = "(?m)^\s*100005\s+3\s+tcp\s+$mountPort\s*$"
-        if ($registrations -match $nfsPattern -and $registrations -match $mountPattern) {
+        $nfsPattern = "(?m)^\s*100003\s+3\s+tcp\s+$nfsPort(?:\s+.*)?$"
+        $mountPattern = "(?m)^\s*100005\s+3\s+tcp\s+$mountPort(?:\s+.*)?$"
+        $nlmPattern = "(?m)^\s*100021\s+4\s+tcp\s+$nlmPort(?:\s+.*)?$"
+        if (
+            $registrations -match $nfsPattern -and
+            $registrations -match $mountPattern -and
+            $registrations -match $nlmPattern
+        ) {
             $registered = $true
             break
         }
