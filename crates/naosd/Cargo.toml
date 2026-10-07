@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+system-gss = ["naos-nfs/system-gss"]
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
