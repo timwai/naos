@@ -92,6 +92,7 @@ impl NfsAccessRepository for SmokeRepository {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let (share_path, nfs_port, mount_port) = parse_args()?;
+    let nlm_port = parse_env_port("NAOS_NFS_SMOKE_NLM_PORT", 32047)?;
     let rpcbind_address = parse_rpcbind_address()?;
     let canonical = std::fs::canonicalize(&share_path)?;
     if !canonical.is_dir() {
@@ -130,15 +131,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             listen: "127.0.0.1".parse()?,
             nfs_port,
             mount_port,
+            nlm_port,
             rpcbind_address,
         },
     )
     .await?;
 
     println!(
-        "NFS_SMOKE_READY export=/{EXPORT_NAME} nfs={} mount={} rpcbind={}",
+        "NFS_SMOKE_READY export=/{EXPORT_NAME} nfs={} mount={} nlm={} rpcbind={}",
         server.nfs_address()?,
         server.mount_address()?,
+        server.nlm_address()?,
         rpcbind_address
             .map(|address| address.to_string())
             .unwrap_or_else(|| "disabled".to_owned())
@@ -160,6 +163,17 @@ fn parse_args() -> Result<(PathBuf, u16, u16), Box<dyn Error>> {
         );
     }
     Ok((share_path, nfs_port, mount_port))
+}
+
+fn parse_env_port(name: &'static str, default: u16) -> Result<u16, io::Error> {
+    match env::var(name) {
+        Ok(value) if !value.trim().is_empty() => parse_port(&value),
+        Ok(_) | Err(env::VarError::NotPresent) => Ok(default),
+        Err(env::VarError::NotUnicode(_)) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name} is not valid Unicode"),
+        )),
+    }
 }
 
 fn parse_rpcbind_address() -> Result<Option<SocketAddr>, io::Error> {

@@ -1,6 +1,7 @@
 pub mod handle;
 pub mod mount;
 pub mod nfs3;
+pub mod nlm4;
 pub mod rpc;
 pub mod rpcbind;
 pub mod server;
