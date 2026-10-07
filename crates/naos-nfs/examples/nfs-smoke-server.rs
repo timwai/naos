@@ -2,7 +2,7 @@ use std::{
     env,
     error::Error,
     io,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -64,10 +64,7 @@ impl NfsBindingRepository for SmokeRepository {
         Err(NfsRepositoryError::Unavailable)
     }
 
-    async fn update_nfs_binding(
-        &self,
-        _binding: &NfsBinding,
-    ) -> Result<bool, NfsRepositoryError> {
+    async fn update_nfs_binding(&self, _binding: &NfsBinding) -> Result<bool, NfsRepositoryError> {
         Err(NfsRepositoryError::Unavailable)
     }
 
@@ -82,10 +79,7 @@ impl NfsBindingRepository for SmokeRepository {
 
 #[async_trait]
 impl NfsAccessRepository for SmokeRepository {
-    async fn list_nfs_acl_rules(
-        &self,
-        share_id: &str,
-    ) -> Result<Vec<AclRule>, NfsRepositoryError> {
+    async fn list_nfs_acl_rules(&self, share_id: &str) -> Result<Vec<AclRule>, NfsRepositoryError> {
         Ok(if share_id == self.export.id {
             self.rules.clone()
         } else {
@@ -106,7 +100,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (share_path, nfs_port, mount_port) = parse_args()?;
     let canonical = std::fs::canonicalize(&share_path)?;
     if !canonical.is_dir() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "share path is not a directory").into());
+        return Err(
+            io::Error::new(io::ErrorKind::InvalidInput, "share path is not a directory").into(),
+        );
     }
 
     let export = NfsExport {
@@ -161,7 +157,9 @@ fn parse_args() -> Result<(PathBuf, u16, u16), Box<dyn Error>> {
     let nfs_port = parse_port(&required_arg(&mut args, "NFS port")?)?;
     let mount_port = parse_port(&required_arg(&mut args, "MOUNT port")?)?;
     if args.next().is_some() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "unexpected extra argument").into());
+        return Err(
+            io::Error::new(io::ErrorKind::InvalidInput, "unexpected extra argument").into(),
+        );
     }
     Ok((share_path, nfs_port, mount_port))
 }
@@ -185,9 +183,4 @@ fn parse_port(value: &str) -> Result<u16, io::Error> {
             format!("invalid TCP port: {value}"),
         )
     })
-}
-
-#[allow(dead_code)]
-fn _assert_share_path_is_absolute(path: &Path) -> bool {
-    path.is_absolute()
 }
