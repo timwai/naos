@@ -11,7 +11,7 @@ use crate::{
     rpc::{
         AUTH_NONE, AUTH_SYS, RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
-        accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch,
+        accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch, rpcsec_gss_unavailable_reply,
     },
     transport::{read_record, write_record},
     xdr::{XdrReader, XdrWriter},
@@ -201,6 +201,10 @@ pub async fn dispatch_mount_rpc(
         Err(RpcDecodeError::MalformedCredential { xid }) => return accepted_garbage_args(xid),
         Err(RpcDecodeError::Xdr(_)) => return Vec::new(),
     };
+
+    if let Some(reply) = rpcsec_gss_unavailable_reply(&call) {
+        return reply;
+    }
 
     if call.program != MOUNT_PROGRAM {
         return accepted_program_unavailable(call.xid);
