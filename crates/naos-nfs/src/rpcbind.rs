@@ -91,14 +91,7 @@ pub async fn lookup_port(
     transport: RpcTransport,
 ) -> Result<Option<u16>, RpcBindError> {
     let xid = random_xid();
-    let request = mapping_call(
-        xid,
-        PMAPPROC_GETPORT,
-        program,
-        version,
-        transport,
-        0,
-    );
+    let request = mapping_call(xid, PMAPPROC_GETPORT, program, version, transport, 0);
     let mut stream = TcpStream::connect(rpcbind_address).await?;
     write_record(&mut stream, &request).await?;
     let reply = read_record(&mut stream)

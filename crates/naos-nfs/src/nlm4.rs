@@ -12,11 +12,7 @@ use naos_core::{
 };
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
-use tokio::{
-    fs,
-    net::UdpSocket,
-    sync::Mutex,
-};
+use tokio::{fs, net::UdpSocket, sync::Mutex};
 
 use crate::{
     handle::FileHandleTable,
@@ -159,17 +155,16 @@ impl NlmV4Service {
 
     async fn send_callback(&self, client_ip: IpAddr, procedure: u32, body: &[u8]) -> bool {
         let rpcbind_address = SocketAddr::new(client_ip, self.callback_rpcbind_port);
-        let port = match lookup_port(
-            rpcbind_address,
-            NLM_PROGRAM,
-            NLM_VERSION,
-            RpcTransport::Udp,
-        )
-        .await
+        let port = match lookup_port(rpcbind_address, NLM_PROGRAM, NLM_VERSION, RpcTransport::Udp)
+            .await
         {
             Ok(Some(port)) => port,
             Ok(None) => {
-                trace_callback_failure(client_ip, procedure, "client NLMv4 UDP port is not registered");
+                trace_callback_failure(
+                    client_ip,
+                    procedure,
+                    "client NLMv4 UDP port is not registered",
+                );
                 return false;
             }
             Err(error) => {
@@ -799,12 +794,7 @@ async fn lock_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCal
         .await;
     if !callback_sent && result.status == NLM4_GRANTED {
         let _ = service
-            .unlock(
-                client_ip,
-                &call.credential,
-                rollback_cookie,
-                rollback_lock,
-            )
+            .unlock(client_ip, &call.credential, rollback_cookie, rollback_lock)
             .await;
     }
     accepted_success(call.xid, &[])
@@ -1086,12 +1076,7 @@ mod tests {
         writer.u64(lock.length);
     }
 
-    fn rpc_call(
-        xid: u32,
-        procedure: u32,
-        credential: RpcCredential,
-        body: &[u8],
-    ) -> Vec<u8> {
+    fn rpc_call(xid: u32, procedure: u32, credential: RpcCredential, body: &[u8]) -> Vec<u8> {
         let mut writer = XdrWriter::new();
         writer.u32(xid);
         writer.u32(0);
@@ -1122,12 +1107,8 @@ mod tests {
         output
     }
 
-    async fn fake_callback_endpoints(
-        callback_port: u16,
-    ) -> (tokio::net::TcpListener, u16) {
-        let portmapper = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+    async fn fake_callback_endpoints(callback_port: u16) -> (tokio::net::TcpListener, u16) {
+        let portmapper = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         (portmapper, callback_port)
     }
 
@@ -1175,8 +1156,7 @@ mod tests {
         body.u32(0);
         let request = rpc_call(77, NLMPROC4_LOCK_MSG, credential(1000), &body.into_bytes());
 
-        let reply =
-            dispatch_nlm4_rpc(&service, "127.0.0.1".parse().unwrap(), &request).await;
+        let reply = dispatch_nlm4_rpc(&service, "127.0.0.1".parse().unwrap(), &request).await;
         let mut reply_reader = XdrReader::new(&reply);
         assert_eq!(reply_reader.u32().unwrap(), 77);
         assert_eq!(reply_reader.u32().unwrap(), 1);
@@ -1214,9 +1194,7 @@ mod tests {
         let (service, handles, export) = service(temp.path());
         let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
 
-        let portmapper = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+        let portmapper = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let rpcbind_port = portmapper.local_addr().unwrap().port();
         let portmapper_task = tokio::spawn(async move {
             let (mut stream, _) = portmapper.accept().await.unwrap();
@@ -1240,8 +1218,7 @@ mod tests {
         body.u32(0);
         let request = rpc_call(78, NLMPROC4_LOCK_MSG, credential(1000), &body.into_bytes());
 
-        let reply =
-            dispatch_nlm4_rpc(&service, "127.0.0.1".parse().unwrap(), &request).await;
+        let reply = dispatch_nlm4_rpc(&service, "127.0.0.1".parse().unwrap(), &request).await;
         assert!(!reply.is_empty());
         portmapper_task.await.unwrap();
         assert!(service.locks.lock().await.is_empty());
