@@ -897,26 +897,24 @@ mod tests {
             &mut self,
             token: &[u8],
         ) -> Result<RpcSecGssHandshakeResult, RpcSecGssAcceptorError> {
-            match (self.step, token) {
-                (0, b"client-init") => {
-                    self.step = 1;
-                    Ok(RpcSecGssHandshakeResult::Continue {
-                        gss_minor: 0,
-                        token: b"server-continue".to_vec(),
-                    })
-                }
-                (1, b"client-continue") => {
-                    self.step = 2;
-                    Ok(RpcSecGssHandshakeResult::Complete {
-                        gss_minor: 0,
-                        token: b"server-complete".to_vec(),
-                        security: context("alice@EXAMPLE.COM"),
-                    })
-                }
-                _ => Ok(RpcSecGssHandshakeResult::Failure {
+            if self.step == 0 && token == b"client-init" {
+                self.step = 1;
+                Ok(RpcSecGssHandshakeResult::Continue {
+                    gss_minor: 0,
+                    token: b"server-continue".to_vec(),
+                })
+            } else if self.step == 1 && token == b"client-continue" {
+                self.step = 2;
+                Ok(RpcSecGssHandshakeResult::Complete {
+                    gss_minor: 0,
+                    token: b"server-complete".to_vec(),
+                    security: context("alice@EXAMPLE.COM"),
+                })
+            } else {
+                Ok(RpcSecGssHandshakeResult::Failure {
                     gss_major: 0x000d_0000,
                     gss_minor: 7,
-                }),
+                })
             }
         }
     }
