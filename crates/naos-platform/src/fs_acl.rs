@@ -377,7 +377,7 @@ fn path_text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 fn linux_has_entry(output: &str, account: &str, default: bool) -> bool {
     let prefix = if default { "default:user:" } else { "user:" };
     let marker = format!("{prefix}{account}:");
@@ -386,7 +386,7 @@ fn linux_has_entry(output: &str, account: &str, default: bool) -> bool {
         .any(|line| line.trim() == marker || line.trim().starts_with(&marker))
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 fn linux_entry_matches(output: &str, entry: &EffectiveAclEntry, is_dir: bool) -> bool {
     let permission = match entry.permission {
         FsAclPermission::None => "---",
