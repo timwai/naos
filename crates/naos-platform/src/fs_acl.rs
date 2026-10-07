@@ -407,7 +407,7 @@ fn linux_entry_matches(output: &str, entry: &EffectiveAclEntry, is_dir: bool) ->
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 fn macos_entry_matches(output: &str, entry: &EffectiveAclEntry) -> bool {
     let marker = format!("user:{} ", entry.account.as_str());
     let lines = output
