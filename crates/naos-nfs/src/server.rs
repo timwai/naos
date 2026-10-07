@@ -14,6 +14,7 @@ use tokio::{
 use tracing::warn;
 
 use crate::{
+    handle::FileHandleTable,
     mount::{MOUNT_PROGRAM, MOUNT_VERSION, MountService, serve_mount_stream},
     nfs3::{NFS_PROGRAM, NFS_VERSION, NfsV3Service, serve_nfs3_stream},
     nlm4::{NLM_PROGRAM, NLM_VERSION, NlmV4Service, dispatch_nlm4_rpc, serve_nlm4_stream},
@@ -113,13 +114,14 @@ impl NfsServer {
         let secret = repository
             .get_or_create_nfs_handle_secret(secret_candidate)
             .await?;
+        let handle_records = repository.list_nfs_file_handles().await?;
+        let handles = FileHandleTable::from_records(secret, handle_records);
         let mount_repository: Arc<dyn NfsBindingRepository> = repository.clone();
         let nfs_access_repository: Arc<dyn NfsAccessRepository> = repository.clone();
         let nfs_identity_repository: Arc<dyn NfsBindingRepository> = repository.clone();
         let nlm_access_repository: Arc<dyn NfsAccessRepository> = repository.clone();
         let nlm_identity_repository: Arc<dyn NfsBindingRepository> = repository;
-        let mount_service = MountService::new(mount_repository, secret);
-        let handles = mount_service.handle_table();
+        let mount_service = MountService::with_handles(mount_repository, handles.clone());
         let nfs_service = NfsV3Service::new(
             nfs_identity_repository,
             nfs_access_repository,

@@ -28,7 +28,7 @@ use tokio::{
 };
 
 use crate::{
-    handle::{FileHandleError, FileHandleTable},
+    handle::{FileHandleChanges, FileHandleError, FileHandleTable},
     rpc::{
         RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
@@ -458,7 +458,7 @@ impl NfsV3Service {
         let resolver = resolver(&context.export)?;
         let child_path = resolver.resolve_entry(&child).map_err(path_error)?;
         let object_attributes = attributes(&child_path).await?;
-        let file_handle = self.handles.issue(&context.export, &child);
+        let file_handle = self.issue_handle(&context.export, &child).await?;
 
         Ok(LookupResult {
             file_handle,
@@ -667,7 +667,7 @@ impl NfsV3Service {
         };
 
         Ok(LookupResult {
-            file_handle: self.handles.issue(&context.export, &child),
+            file_handle: self.issue_handle(&context.export, &child).await?,
             object_attributes,
             directory_attributes: attributes(&directory).await?,
         })
@@ -698,7 +698,7 @@ impl NfsV3Service {
         fs::create_dir(&target).await.map_err(io_error)?;
 
         Ok(LookupResult {
-            file_handle: self.handles.issue(&context.export, &child),
+            file_handle: self.issue_handle(&context.export, &child).await?,
             object_attributes: attributes(&target).await?,
             directory_attributes: attributes(&directory).await?,
         })
@@ -734,7 +734,7 @@ impl NfsV3Service {
         create_symlink(target.to_owned(), link_path.clone()).await?;
 
         Ok(LookupResult {
-            file_handle: self.handles.issue(&context.export, &child),
+            file_handle: self.issue_handle(&context.export, &child).await?,
             object_attributes: attributes(&link_path).await?,
             directory_attributes: attributes(&directory).await?,
         })
@@ -764,8 +764,10 @@ impl NfsV3Service {
             return Err(NfsV3Error::IsDirectory);
         }
         fs::remove_file(&target).await.map_err(io_error)?;
-        self.handles
+        let changes = self
+            .handles
             .invalidate_subtree(&context.export.id, &child)?;
+        self.persist_handle_changes(changes).await?;
         attributes(&directory).await
     }
 
@@ -797,8 +799,10 @@ impl NfsV3Service {
             return Err(NfsV3Error::NotEmpty);
         }
         fs::remove_dir(&target).await.map_err(io_error)?;
-        self.handles
+        let changes = self
+            .handles
             .invalidate_subtree(&context.export.id, &child)?;
+        self.persist_handle_changes(changes).await?;
         attributes(&directory).await
     }
 
@@ -839,8 +843,10 @@ impl NfsV3Service {
         fs::rename(&source_path, &target_path)
             .await
             .map_err(io_error)?;
-        self.handles
-            .rename_subtree(&source_context.export.id, &source, &target)?;
+        let changes =
+            self.handles
+                .rename_subtree(&source_context.export.id, &source, &target)?;
+        self.persist_handle_changes(changes).await?;
 
         Ok(RenameResult {
             source_directory_attributes: attributes(&source_directory).await?,
@@ -1053,6 +1059,7 @@ impl NfsV3Service {
         }
 
         let mut entries = Vec::new();
+        let mut handle_upserts = Vec::new();
         let mut dir_bytes = 0usize;
         let mut total_bytes = 128usize;
         let mut eof = true;
@@ -1065,7 +1072,10 @@ impl NfsV3Service {
                 .resolve_entry(&child)
                 .map_err(path_error)?;
             let child_attributes = attributes(&child_path).await?;
-            let file_handle = self.handles.issue(&context.export, &child);
+            let (file_handle, record) = self.handles.issue_with_record(&context.export, &child);
+            if let Some(record) = record {
+                handle_upserts.push(record);
+            }
             let name_bytes = xdr_padded_len(name.len());
             let entry_dir_bytes = 24usize.saturating_add(name_bytes);
             let entry_total_bytes = entry_dir_bytes
@@ -1093,6 +1103,12 @@ impl NfsV3Service {
             return Err(NfsV3Error::TooSmall);
         }
 
+        if !handle_upserts.is_empty() {
+            self.identity_repository
+                .apply_nfs_file_handle_changes(handle_upserts, Vec::new())
+                .await?;
+        }
+
         Ok(ReadDirPlusResult {
             directory_attributes,
             cookie_verifier: current_verifier,
@@ -1111,6 +1127,33 @@ impl NfsV3Service {
         } else {
             Err(NfsV3Error::AccessDenied)
         }
+    }
+
+    async fn issue_handle(
+        &self,
+        export: &NfsExport,
+        relative_path: &RelativePath,
+    ) -> Result<Vec<u8>, NfsV3Error> {
+        let (handle, record) = self.handles.issue_with_record(export, relative_path);
+        if let Some(record) = record {
+            self.identity_repository
+                .apply_nfs_file_handle_changes(vec![record], Vec::new())
+                .await?;
+        }
+        Ok(handle)
+    }
+
+    async fn persist_handle_changes(
+        &self,
+        changes: FileHandleChanges,
+    ) -> Result<(), NfsV3Error> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+        self.identity_repository
+            .apply_nfs_file_handle_changes(changes.upserts, changes.deletes)
+            .await?;
+        Ok(())
     }
 
     async fn resolve_handle(

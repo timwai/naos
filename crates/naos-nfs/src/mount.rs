@@ -78,9 +78,16 @@ pub struct MountService {
 
 impl MountService {
     pub fn new(repository: Arc<dyn NfsBindingRepository>, handle_secret: [u8; 32]) -> Self {
+        Self::with_handles(repository, FileHandleTable::new(handle_secret))
+    }
+
+    pub fn with_handles(
+        repository: Arc<dyn NfsBindingRepository>,
+        handles: FileHandleTable,
+    ) -> Self {
         Self {
             repository,
-            handles: FileHandleTable::new(handle_secret),
+            handles,
         }
     }
 
@@ -112,7 +119,12 @@ impl MountService {
             NfsBindingLevel::L1 => vec![AUTH_SYS, AUTH_NONE],
             NfsBindingLevel::L2 => vec![AUTH_SYS],
         };
-        let file_handle = self.handles.issue_root(&export);
+        let (file_handle, record) = self.handles.issue_root_with_record(&export);
+        if let Some(record) = record {
+            self.repository
+                .apply_nfs_file_handle_changes(vec![record], Vec::new())
+                .await?;
+        }
 
         Ok(MountGrant {
             export,
