@@ -88,7 +88,10 @@ impl FileUpload {
     }
 
     pub async fn commit(mut self) -> Result<(), FileServiceError> {
-        self.file.sync_all().await.map_err(|_| FileServiceError::Io)?;
+        self.file
+            .sync_all()
+            .await
+            .map_err(|_| FileServiceError::Io)?;
         drop(self.file);
 
         #[cfg(target_os = "windows")]
@@ -99,7 +102,10 @@ impl FileUpload {
             }
         }
 
-        if fs::rename(&self.temp_path, &self.target_path).await.is_err() {
+        if fs::rename(&self.temp_path, &self.target_path)
+            .await
+            .is_err()
+        {
             let _ = fs::remove_file(&self.temp_path).await;
             return Err(FileServiceError::Io);
         }
@@ -342,9 +348,10 @@ impl FileService {
         if existing.as_ref().is_some_and(|metadata| metadata.is_dir()) {
             return Err(validation("path", "上传目标不能是目录"));
         }
-        if existing.as_ref().is_some_and(|metadata| {
-            !metadata.is_file() && !metadata.file_type().is_symlink()
-        }) {
+        if existing
+            .as_ref()
+            .is_some_and(|metadata| !metadata.is_file() && !metadata.file_type().is_symlink())
+        {
             return Err(validation("path", "上传目标必须是普通文件路径"));
         }
 

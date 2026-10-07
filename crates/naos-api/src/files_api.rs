@@ -9,6 +9,7 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
+use http_body_util::BodyExt;
 use naos_contract::{
     auth::ErrorResponse,
     files::{
@@ -16,7 +17,6 @@ use naos_contract::{
         FileSharesResponse, MoveFileRequest,
     },
 };
-use http_body_util::BodyExt;
 use naos_core::{
     auth::AuthenticatedSession,
     files::{FileDirectoryListing, FileServiceError},
