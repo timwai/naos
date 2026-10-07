@@ -29,10 +29,11 @@ use naos_nfs::{
     rpc::{
         AUTH_NONE, GSS_S_COMPLETE, GSS_S_CONTINUE_NEEDED, MAX_AUTH_BYTES, RPC_VERSION, RPCSEC_GSS,
         RPCSEC_GSS_CONTINUE_INIT, RPCSEC_GSS_DATA, RPCSEC_GSS_INIT, RPCSEC_GSS_SVC_INTEGRITY,
-        RPCSEC_GSS_SVC_NONE, RPCSEC_GSS_VERSION_1, RpcCall, RpcCredential, RpcSecGssCredential,
-        RpcSecGssInitResult, RpcVerifier, decode_rpcsec_gss_init_result,
-        decode_rpcsec_gss_integrity_body, encode_rpcsec_gss_init_token,
-        encode_rpcsec_gss_integrity_body, encode_rpcsec_gss_plaintext, rpcsec_gss_u32_mic_input,
+        RPCSEC_GSS_SVC_NONE, RPCSEC_GSS_SVC_PRIVACY, RPCSEC_GSS_VERSION_1, RpcCall, RpcCredential,
+        RpcSecGssCredential, RpcSecGssInitResult, RpcVerifier, decode_rpcsec_gss_init_result,
+        decode_rpcsec_gss_integrity_body, decode_rpcsec_gss_unwrapped_body,
+        encode_rpcsec_gss_init_token, encode_rpcsec_gss_integrity_body,
+        encode_rpcsec_gss_plaintext, rpcsec_gss_u32_mic_input,
     },
     rpcsec_gss::{
         RpcSecGssAcceptRequest, RpcSecGssAcceptResult, RpcSecGssAcceptor, RpcSecGssContextRegistry,
@@ -274,7 +275,7 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
     let mut client = ClientCtx::new(
         Some(client_credential),
         target,
-        CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_INTEG_FLAG,
+        CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_INTEG_FLAG | CtxFlags::GSS_C_CONF_FLAG,
         Some(GSS_MECH_KRB5),
     );
 
@@ -364,8 +365,8 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
     assert!(!handle.expect("RPCSEC_GSS handle").is_empty());
     assert_eq!(security.principal(), client_principal);
     assert!(
-        !security.supports_privacy(),
-        "system GSS provider must keep krb5p fail-closed until privacy is enabled"
+        security.supports_privacy(),
+        "Kerberos context negotiated confidentiality but provider disabled privacy"
     );
 
     let message = b"naos real Kerberos MIC smoke";
@@ -387,6 +388,25 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
         Err(RpcSecGssSecurityError::BadMic)
     );
 
+    let privacy_plaintext = b"naos real Kerberos privacy smoke";
+    let client_wrapped = client
+        .wrap(true, privacy_plaintext)
+        .expect("client privacy wrap");
+    assert_sealed_rfc4121_wrap_token(&client_wrapped);
+    let server_unwrapped = security
+        .unwrap(&client_wrapped)
+        .expect("server privacy unwrap");
+    assert_eq!(server_unwrapped, privacy_plaintext);
+
+    let server_wrapped = security
+        .wrap(privacy_plaintext)
+        .expect("server privacy wrap");
+    assert_sealed_rfc4121_wrap_token(&server_wrapped);
+    let client_unwrapped = client
+        .unwrap(&server_wrapped)
+        .expect("client privacy unwrap");
+    assert_eq!(&*client_unwrapped, privacy_plaintext);
+
     let wire_target = Name::new(service_principal.as_bytes(), Some(GSS_NT_KRB5_PRINCIPAL))
         .expect("import wire service principal")
         .canonicalize(Some(GSS_MECH_KRB5))
@@ -406,7 +426,7 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
     let mut wire_client = ClientCtx::new(
         Some(wire_client_credential),
         wire_target,
-        CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_INTEG_FLAG,
+        CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_INTEG_FLAG | CtxFlags::GSS_C_CONF_FLAG,
         Some(GSS_MECH_KRB5),
     );
     let wire_provider = Arc::new(
@@ -626,7 +646,7 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
     let mut tcp_client = ClientCtx::new(
         Some(tcp_client_credential),
         tcp_target,
-        CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_INTEG_FLAG,
+        CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_INTEG_FLAG | CtxFlags::GSS_C_CONF_FLAG,
         Some(GSS_MECH_KRB5),
     );
 
@@ -748,6 +768,37 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
     let mut getattr_reader = XdrReader::new(&getattr_body);
     assert_eq!(getattr_reader.u32().expect("GETATTR status"), 0);
 
+    let mut privacy_getattr_arguments = XdrWriter::new();
+    privacy_getattr_arguments
+        .opaque(&root_handle)
+        .expect("encode privacy GETATTR file handle");
+    let privacy_getattr_request = rpcsec_gss_wire_data_call(
+        &mut tcp_client,
+        402,
+        NFS_PROGRAM,
+        NFS_VERSION,
+        1,
+        3,
+        RPCSEC_GSS_SVC_PRIVACY,
+        &tcp_handle,
+        &privacy_getattr_arguments.into_bytes(),
+    );
+    let privacy_getattr_reply = rpc_round_trip(nfs_address, privacy_getattr_request).await;
+    let privacy_getattr_body = decode_wire_data_reply(
+        &mut tcp_client,
+        402,
+        3,
+        RPCSEC_GSS_SVC_PRIVACY,
+        &privacy_getattr_reply,
+    );
+    let mut privacy_getattr_reader = XdrReader::new(&privacy_getattr_body);
+    assert_eq!(
+        privacy_getattr_reader
+            .u32()
+            .expect("privacy GETATTR status"),
+        0
+    );
+
     shutdown_tx.send(true).expect("request NFS server shutdown");
     server_task
         .await
@@ -824,6 +875,16 @@ fn rpcsec_gss_wire_data_call(
             encode_rpcsec_gss_integrity_body(seq_num, arguments, &checksum)
                 .expect("encode integrity request body")
         }
+        RPCSEC_GSS_SVC_PRIVACY => {
+            let plaintext = encode_rpcsec_gss_plaintext(seq_num, arguments);
+            let ciphertext = client.wrap(true, &plaintext).expect("client privacy wrap");
+            assert_sealed_rfc4121_wrap_token(&ciphertext);
+            let mut protected = XdrWriter::new();
+            protected
+                .opaque(&ciphertext)
+                .expect("encode privacy request body");
+            protected.into_bytes()
+        }
         _ => panic!("unsupported real TCP service {service}"),
     };
 
@@ -893,8 +954,33 @@ fn decode_wire_data_reply(
                 .expect("verify integrity reply body MIC");
             protected.arguments
         }
+        RPCSEC_GSS_SVC_PRIVACY => {
+            let mut protected = XdrReader::new(reader.remaining());
+            let ciphertext = protected
+                .opaque(16 * 1024 * 1024)
+                .expect("decode privacy reply body");
+            protected.finish().expect("privacy reply trailing data");
+            assert_sealed_rfc4121_wrap_token(&ciphertext);
+            let plaintext = client.unwrap(&ciphertext).expect("client privacy unwrap");
+            decode_rpcsec_gss_unwrapped_body(&plaintext, seq_num)
+                .expect("decode privacy reply plaintext")
+        }
         _ => panic!("unsupported real TCP reply service {service}"),
     }
+}
+
+fn assert_sealed_rfc4121_wrap_token(token: &[u8]) {
+    assert!(token.len() >= 16, "Kerberos Wrap token is too short");
+    assert_eq!(
+        &token[..2],
+        &[0x05, 0x04],
+        "unexpected Kerberos Wrap TOK_ID"
+    );
+    assert_ne!(
+        token[2] & 0x02,
+        0,
+        "Kerberos Wrap token did not set the RFC 4121 Sealed flag"
+    );
 }
 
 fn context_call(xid: u32, gss_proc: u32, handle: &[u8], token: &[u8]) -> RpcCall {

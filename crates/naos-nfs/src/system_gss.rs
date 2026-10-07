@@ -25,6 +25,10 @@ pub enum SystemGssProviderError {
     Gss(#[from] GssError),
 }
 
+const RFC4121_WRAP_TOKEN_ID: [u8; 2] = [0x05, 0x04];
+const RFC4121_WRAP_TOKEN_HEADER_LEN: usize = 16;
+const RFC4121_FLAG_SEALED: u8 = 0x02;
+
 #[derive(Clone)]
 pub struct SystemGssHandshakeProvider {
     credential: Cred,
@@ -117,6 +121,7 @@ impl RpcSecGssHandshake for SystemGssHandshake {
             token: output_token,
             security: Arc::new(SystemGssSecurityContext {
                 principal,
+                privacy_supported: flags.contains(CtxFlags::GSS_C_CONF_FLAG),
                 context: Mutex::new(context),
             }),
         })
@@ -125,6 +130,7 @@ impl RpcSecGssHandshake for SystemGssHandshake {
 
 struct SystemGssSecurityContext {
     principal: String,
+    privacy_supported: bool,
     context: Mutex<ServerCtx>,
 }
 
@@ -152,17 +158,47 @@ impl RpcSecGssSecurityContext for SystemGssSecurityContext {
             .map_err(|_| RpcSecGssSecurityError::ProtectionFailure)
     }
 
-    fn unwrap(&self, _ciphertext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
-        Err(RpcSecGssSecurityError::ProtectionFailure)
+    fn unwrap(&self, ciphertext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
+        if !self.privacy_supported || !is_sealed_rfc4121_wrap_token(ciphertext) {
+            return Err(RpcSecGssSecurityError::ProtectionFailure);
+        }
+        let mut context = self
+            .context
+            .lock()
+            .map_err(|_| RpcSecGssSecurityError::ProviderFailure)?;
+        context
+            .unwrap(ciphertext)
+            .map(|plaintext| plaintext.to_vec())
+            .map_err(|_| RpcSecGssSecurityError::ProtectionFailure)
     }
 
-    fn wrap(&self, _plaintext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
-        Err(RpcSecGssSecurityError::ProtectionFailure)
+    fn wrap(&self, plaintext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError> {
+        if !self.privacy_supported {
+            return Err(RpcSecGssSecurityError::ProtectionFailure);
+        }
+        let mut context = self
+            .context
+            .lock()
+            .map_err(|_| RpcSecGssSecurityError::ProviderFailure)?;
+        let token = context
+            .wrap(true, plaintext)
+            .map(|ciphertext| ciphertext.to_vec())
+            .map_err(|_| RpcSecGssSecurityError::ProtectionFailure)?;
+        if !is_sealed_rfc4121_wrap_token(&token) {
+            return Err(RpcSecGssSecurityError::ProtectionFailure);
+        }
+        Ok(token)
     }
 
     fn supports_privacy(&self) -> bool {
-        false
+        self.privacy_supported
     }
+}
+
+fn is_sealed_rfc4121_wrap_token(token: &[u8]) -> bool {
+    token.len() >= RFC4121_WRAP_TOKEN_HEADER_LEN
+        && token[..2] == RFC4121_WRAP_TOKEN_ID
+        && token[2] & RFC4121_FLAG_SEALED != 0
 }
 
 fn map_verify_error(error: GssError) -> RpcSecGssSecurityError {
@@ -184,6 +220,20 @@ mod tests {
             SystemGssHandshakeProvider::new("   "),
             Err(SystemGssProviderError::EmptyServicePrincipal)
         ));
+    }
+
+    #[test]
+    fn sealed_rfc4121_wrap_token_detection_is_fail_closed() {
+        let mut sealed = [0u8; RFC4121_WRAP_TOKEN_HEADER_LEN];
+        sealed[..2].copy_from_slice(&RFC4121_WRAP_TOKEN_ID);
+        sealed[2] = RFC4121_FLAG_SEALED;
+        assert!(is_sealed_rfc4121_wrap_token(&sealed));
+
+        let mut integrity_only = sealed;
+        integrity_only[2] = 0;
+        assert!(!is_sealed_rfc4121_wrap_token(&integrity_only));
+        assert!(!is_sealed_rfc4121_wrap_token(&[0x02, 0x01, 0x02]));
+        assert!(!is_sealed_rfc4121_wrap_token(&sealed[..15]));
     }
 
     #[test]
