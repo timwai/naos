@@ -100,7 +100,7 @@ impl NfsServer {
         self.mount_listener.local_addr()
     }
 
-    pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<(), NfsServerError> {
+    pub async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), NfsServerError> {
         loop {
             tokio::select! {
                 changed = shutdown.changed() => {
