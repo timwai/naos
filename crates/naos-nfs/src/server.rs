@@ -27,6 +27,7 @@ use crate::{
         serve_nsm1_stream,
     },
     rpcbind::{RpcBindError, RpcTransport, register_mapping, unregister_mapping},
+    rpcsec_gss::{RpcSecGssAcceptor, RpcSecGssContextRegistry},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -78,6 +79,28 @@ impl NfsServer {
     pub async fn bind<R>(
         repository: Arc<R>,
         config: NfsServerConfig,
+    ) -> Result<Self, NfsServerError>
+    where
+        R: NfsBindingRepository + NfsAccessRepository + 'static,
+    {
+        Self::bind_inner(repository, config, None).await
+    }
+
+    pub async fn bind_with_rpcsec_gss<R>(
+        repository: Arc<R>,
+        config: NfsServerConfig,
+        acceptor: Arc<dyn RpcSecGssAcceptor>,
+    ) -> Result<Self, NfsServerError>
+    where
+        R: NfsBindingRepository + NfsAccessRepository + 'static,
+    {
+        Self::bind_inner(repository, config, Some(acceptor)).await
+    }
+
+    async fn bind_inner<R>(
+        repository: Arc<R>,
+        config: NfsServerConfig,
+        rpcsec_gss_acceptor: Option<Arc<dyn RpcSecGssAcceptor>>,
     ) -> Result<Self, NfsServerError>
     where
         R: NfsBindingRepository + NfsAccessRepository + 'static,
@@ -134,12 +157,17 @@ impl NfsServer {
         let nlm_access_repository: Arc<dyn NfsAccessRepository> = repository.clone();
         let nsm_state_repository: Arc<dyn NfsBindingRepository> = repository.clone();
         let nlm_identity_repository: Arc<dyn NfsBindingRepository> = repository;
-        let mount_service = MountService::with_handles(mount_repository, handles.clone());
-        let nfs_service = NfsV3Service::new(
+        let mut mount_service = MountService::with_handles(mount_repository, handles.clone());
+        let mut nfs_service = NfsV3Service::new(
             nfs_identity_repository,
             nfs_access_repository,
             handles.clone(),
         );
+        if let Some(acceptor) = rpcsec_gss_acceptor {
+            let registry = RpcSecGssContextRegistry::new();
+            mount_service = mount_service.with_rpcsec_gss(registry.clone(), acceptor.clone());
+            nfs_service = nfs_service.with_rpcsec_gss(registry, acceptor);
+        }
         let nlm_service =
             NlmV4Service::new(nlm_identity_repository, nlm_access_repository, handles);
         let nlm_service = if restarted {
@@ -424,6 +452,13 @@ mod tests {
             Ok(true)
         }
 
+        async fn resolve_nfs_krb_principal(
+            &self,
+            principal: &str,
+        ) -> Result<Option<String>, NfsRepositoryError> {
+            Ok((principal == "alice@EXAMPLE.COM").then(|| "usr_alice".to_owned()))
+        }
+
         async fn list_nfs_bindings(
             &self,
             share_id: &str,
@@ -538,6 +573,81 @@ mod tests {
         }
     }
 
+    struct FakeGssContext {
+        principal: String,
+    }
+
+    struct FakeGssAcceptor;
+
+    impl RpcSecGssAcceptor for FakeGssAcceptor {
+        fn accept(
+            &self,
+            request: crate::rpcsec_gss::RpcSecGssAcceptRequest,
+        ) -> Result<
+            crate::rpcsec_gss::RpcSecGssAcceptResult,
+            crate::rpcsec_gss::RpcSecGssAcceptorError,
+        > {
+            Ok(match request {
+                crate::rpcsec_gss::RpcSecGssAcceptRequest::Init { token }
+                    if token == b"client-init" =>
+                {
+                    crate::rpcsec_gss::RpcSecGssAcceptResult::Complete {
+                        handle: b"ctx".to_vec(),
+                        gss_minor: 0,
+                        seq_window: 8,
+                        token: b"server-complete".to_vec(),
+                        security: Arc::new(FakeGssContext {
+                            principal: "alice@EXAMPLE.COM".to_owned(),
+                        }),
+                    }
+                }
+                _ => crate::rpcsec_gss::RpcSecGssAcceptResult::Failure {
+                    gss_major: 0x000d_0000,
+                    gss_minor: 1,
+                },
+            })
+        }
+    }
+
+    impl crate::rpcsec_gss::RpcSecGssSecurityContext for FakeGssContext {
+        fn principal(&self) -> &str {
+            &self.principal
+        }
+
+        fn verify_mic(
+            &self,
+            message: &[u8],
+            mic: &[u8],
+        ) -> Result<(), crate::rpcsec_gss::RpcSecGssSecurityError> {
+            if message == mic {
+                Ok(())
+            } else {
+                Err(crate::rpcsec_gss::RpcSecGssSecurityError::BadMic)
+            }
+        }
+
+        fn get_mic(
+            &self,
+            message: &[u8],
+        ) -> Result<Vec<u8>, crate::rpcsec_gss::RpcSecGssSecurityError> {
+            Ok(message.to_vec())
+        }
+
+        fn unwrap(
+            &self,
+            ciphertext: &[u8],
+        ) -> Result<Vec<u8>, crate::rpcsec_gss::RpcSecGssSecurityError> {
+            Ok(ciphertext.to_vec())
+        }
+
+        fn wrap(
+            &self,
+            plaintext: &[u8],
+        ) -> Result<Vec<u8>, crate::rpcsec_gss::RpcSecGssSecurityError> {
+            Ok(plaintext.to_vec())
+        }
+    }
+
     fn repository(root: &Path) -> Arc<FakeRepository> {
         let export = NfsExport {
             id: "shr_media".to_owned(),
@@ -575,6 +685,99 @@ mod tests {
             lock_manager_started: Mutex::new(false),
             nsm_state: Mutex::new(None),
         })
+    }
+
+    #[tokio::test]
+    async fn rpcsec_gss_context_created_on_mount_is_usable_on_nfs() {
+        let temp = tempfile::tempdir().unwrap();
+        let server = NfsServer::bind_with_rpcsec_gss(
+            repository(temp.path()),
+            NfsServerConfig {
+                listen: "127.0.0.1".parse().unwrap(),
+                nfs_port: 0,
+                mount_port: 0,
+                nlm_port: 0,
+                nsm_port: 0,
+                rpcbind_address: None,
+            },
+            Arc::new(FakeGssAcceptor),
+        )
+        .await
+        .unwrap();
+        let nfs_address = server.nfs_address().unwrap();
+        let mount_address = server.mount_address().unwrap();
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let server_task = tokio::spawn(server.run(shutdown_rx));
+
+        let init_reply = rpc_round_trip(
+            mount_address,
+            rpcsec_gss_init_call(30, MOUNT_PROGRAM, MOUNT_VERSION, b"client-init"),
+        )
+        .await;
+        let mut reader = XdrReader::new(&init_reply);
+        assert_eq!(reader.u32().unwrap(), 30);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), crate::rpc::RPCSEC_GSS);
+        assert_eq!(reader.opaque(64).unwrap(), 8u32.to_be_bytes());
+        assert_eq!(reader.u32().unwrap(), 0);
+        let init_result = crate::rpc::decode_rpcsec_gss_init_result(reader.remaining()).unwrap();
+        assert_eq!(init_result.handle, b"ctx");
+        assert_eq!(init_result.gss_major, crate::rpc::GSS_S_COMPLETE);
+        assert_eq!(init_result.token, b"server-complete");
+
+        let mut mount_body = XdrWriter::new();
+        mount_body.string("/media").unwrap();
+        let mount_reply = rpc_round_trip(
+            mount_address,
+            rpcsec_gss_data_call(
+                31,
+                MOUNT_PROGRAM,
+                MOUNT_VERSION,
+                1,
+                1,
+                &mount_body.into_bytes(),
+            ),
+        )
+        .await;
+        let mut reader = XdrReader::new(&mount_reply);
+        assert_eq!(reader.u32().unwrap(), 31);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), crate::rpc::RPCSEC_GSS);
+        assert_eq!(reader.opaque(64).unwrap(), 1u32.to_be_bytes());
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), 0);
+        let root_handle = reader.opaque(64).unwrap();
+        assert!(!root_handle.is_empty());
+        assert_eq!(reader.u32_array(4).unwrap(), vec![crate::rpc::RPCSEC_GSS]);
+
+        let mut getattr_body = XdrWriter::new();
+        getattr_body.opaque(&root_handle).unwrap();
+        let getattr_reply = rpc_round_trip(
+            nfs_address,
+            rpcsec_gss_data_call(
+                32,
+                NFS_PROGRAM,
+                NFS_VERSION,
+                1,
+                2,
+                &getattr_body.into_bytes(),
+            ),
+        )
+        .await;
+        let mut reader = XdrReader::new(&getattr_reply);
+        assert_eq!(reader.u32().unwrap(), 32);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), crate::rpc::RPCSEC_GSS);
+        assert_eq!(reader.opaque(64).unwrap(), 2u32.to_be_bytes());
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), 0);
+
+        shutdown_tx.send(true).unwrap();
+        server_task.await.unwrap().unwrap();
     }
 
     #[tokio::test]
@@ -915,6 +1118,68 @@ mod tests {
         let mut body = XdrWriter::new();
         body.opaque(handle).unwrap();
         rpc_call(xid, NFS_PROGRAM, NFS_VERSION, 1, &body.into_bytes())
+    }
+
+    fn rpcsec_gss_init_call(xid: u32, program: u32, version: u32, token: &[u8]) -> Vec<u8> {
+        let mut writer = XdrWriter::new();
+        writer.u32(xid);
+        writer.u32(0);
+        writer.u32(RPC_VERSION);
+        writer.u32(program);
+        writer.u32(version);
+        writer.u32(0);
+
+        let mut credential = XdrWriter::new();
+        credential.u32(crate::rpc::RPCSEC_GSS_VERSION_1);
+        credential.u32(crate::rpc::RPCSEC_GSS_INIT);
+        credential.u32(u32::MAX);
+        credential.u32(u32::MAX);
+        credential.opaque(&[]).unwrap();
+        writer.u32(crate::rpc::RPCSEC_GSS);
+        writer.opaque(&credential.into_bytes()).unwrap();
+
+        writer.u32(AUTH_NONE);
+        writer.opaque(&[]).unwrap();
+
+        let mut output = writer.into_bytes();
+        output.extend_from_slice(&crate::rpc::encode_rpcsec_gss_init_token(token).unwrap());
+        output
+    }
+
+    fn rpcsec_gss_data_call(
+        xid: u32,
+        program: u32,
+        version: u32,
+        procedure: u32,
+        seq_num: u32,
+        body: &[u8],
+    ) -> Vec<u8> {
+        let mut writer = XdrWriter::new();
+        writer.u32(xid);
+        writer.u32(0);
+        writer.u32(RPC_VERSION);
+        writer.u32(program);
+        writer.u32(version);
+        writer.u32(procedure);
+
+        let mut credential = XdrWriter::new();
+        credential.u32(crate::rpc::RPCSEC_GSS_VERSION_1);
+        credential.u32(crate::rpc::RPCSEC_GSS_DATA);
+        credential.u32(seq_num);
+        credential.u32(crate::rpc::RPCSEC_GSS_SVC_NONE);
+        credential.opaque(b"ctx").unwrap();
+        writer.u32(crate::rpc::RPCSEC_GSS);
+        writer.opaque(&credential.into_bytes()).unwrap();
+
+        let header = writer.into_bytes();
+        let mut verifier = XdrWriter::new();
+        verifier.u32(crate::rpc::RPCSEC_GSS);
+        verifier.opaque(&header).unwrap();
+
+        let mut output = header;
+        output.extend_from_slice(&verifier.into_bytes());
+        output.extend_from_slice(body);
+        output
     }
 
     fn rpc_call(xid: u32, program: u32, version: u32, procedure: u32, body: &[u8]) -> Vec<u8> {
