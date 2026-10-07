@@ -20,16 +20,14 @@ use libgssapi::{
 };
 use naos_core::{
     acl::{AclRule, Permission, Subject},
-    nfs::{
-        NfsAccessRepository, NfsBinding, NfsBindingRepository, NfsExport, NfsRepositoryError,
-    },
+    nfs::{NfsAccessRepository, NfsBinding, NfsBindingRepository, NfsExport, NfsRepositoryError},
     path::RelativePath,
 };
 use naos_nfs::{
     mount::{MOUNT_PROGRAM, MOUNT_VERSION},
     nfs3::{NFS_PROGRAM, NFS_VERSION},
     rpc::{
-        AUTH_NONE, GSS_S_COMPLETE, GSS_S_CONTINUE_NEEDED, MAX_AUTH_BYTES, RPCSEC_GSS, RPC_VERSION,
+        AUTH_NONE, GSS_S_COMPLETE, GSS_S_CONTINUE_NEEDED, MAX_AUTH_BYTES, RPC_VERSION, RPCSEC_GSS,
         RPCSEC_GSS_CONTINUE_INIT, RPCSEC_GSS_DATA, RPCSEC_GSS_INIT, RPCSEC_GSS_SVC_INTEGRITY,
         RPCSEC_GSS_SVC_NONE, RPCSEC_GSS_VERSION_1, RpcCall, RpcCredential, RpcSecGssCredential,
         RpcSecGssInitResult, RpcVerifier, decode_rpcsec_gss_init_result,
@@ -93,10 +91,7 @@ impl NfsBindingRepository for FakeRepository {
         Err(NfsRepositoryError::Unavailable)
     }
 
-    async fn update_nfs_binding(
-        &self,
-        _binding: &NfsBinding,
-    ) -> Result<bool, NfsRepositoryError> {
+    async fn update_nfs_binding(&self, _binding: &NfsBinding) -> Result<bool, NfsRepositoryError> {
         Err(NfsRepositoryError::Unavailable)
     }
 
@@ -111,10 +106,7 @@ impl NfsBindingRepository for FakeRepository {
 
 #[async_trait]
 impl NfsAccessRepository for FakeRepository {
-    async fn list_nfs_acl_rules(
-        &self,
-        share_id: &str,
-    ) -> Result<Vec<AclRule>, NfsRepositoryError> {
+    async fn list_nfs_acl_rules(&self, share_id: &str) -> Result<Vec<AclRule>, NfsRepositoryError> {
         Ok(if self.export.id == share_id {
             self.rules.clone()
         } else {
@@ -691,10 +683,7 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
                 }
                 assert!(tcp_client.is_complete());
                 tcp_client
-                    .verify_mic(
-                        &rpcsec_gss_u32_mic_input(result.seq_window),
-                        &verifier.body,
-                    )
+                    .verify_mic(&rpcsec_gss_u32_mic_input(result.seq_window), &verifier.body)
                     .expect("verify TCP init reply verifier");
                 tcp_complete = true;
                 break;
@@ -721,13 +710,8 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
         &mount_arguments.into_bytes(),
     );
     let mount_reply = rpc_round_trip(mount_address, mount_request).await;
-    let mount_body = decode_wire_data_reply(
-        &mut tcp_client,
-        400,
-        1,
-        RPCSEC_GSS_SVC_NONE,
-        &mount_reply,
-    );
+    let mount_body =
+        decode_wire_data_reply(&mut tcp_client, 400, 1, RPCSEC_GSS_SVC_NONE, &mount_reply);
     let mut mount_reader = XdrReader::new(&mount_body);
     assert_eq!(mount_reader.u32().expect("MOUNT status"), 0);
     let root_handle = mount_reader.opaque(64).expect("MOUNT root file handle");
@@ -817,9 +801,7 @@ fn rpcsec_gss_context_wire_call(
     writer.opaque(&[]).expect("encode AUTH_NONE verifier");
 
     let mut request = writer.into_bytes();
-    request.extend_from_slice(
-        &encode_rpcsec_gss_init_token(token).expect("encode GSS init token"),
-    );
+    request.extend_from_slice(&encode_rpcsec_gss_init_token(token).expect("encode GSS init token"));
     request
 }
 
@@ -858,7 +840,9 @@ fn rpcsec_gss_wire_data_call(
     credential.u32(RPCSEC_GSS_DATA);
     credential.u32(seq_num);
     credential.u32(service);
-    credential.opaque(handle).expect("encode DATA context handle");
+    credential
+        .opaque(handle)
+        .expect("encode DATA context handle");
     writer.u32(RPCSEC_GSS);
     writer
         .opaque(&credential.into_bytes())
@@ -901,9 +885,8 @@ fn decode_wire_data_reply(
     match service {
         RPCSEC_GSS_SVC_NONE => reader.remaining().to_vec(),
         RPCSEC_GSS_SVC_INTEGRITY => {
-            let protected =
-                decode_rpcsec_gss_integrity_body(reader.remaining(), seq_num)
-                    .expect("decode integrity reply body");
+            let protected = decode_rpcsec_gss_integrity_body(reader.remaining(), seq_num)
+                .expect("decode integrity reply body");
             let plaintext = encode_rpcsec_gss_plaintext(seq_num, &protected.arguments);
             client
                 .verify_mic(&plaintext, &protected.checksum)
