@@ -52,6 +52,7 @@ async fn test_app() -> (Router, TempDir) {
     ));
     let acl_reconcile_factory = Arc::new(naos_core::acl::DatabaseAclReconcileDriverFactory::new(
         store.clone(),
+        store.clone(),
     ));
     let share_mutations = Arc::new(naos_core::share::ShareMutationService::new(
         store.clone(),
