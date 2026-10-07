@@ -179,10 +179,7 @@ impl MountService {
         }
     }
 
-    async fn resolve_rpcsec_gss_user(
-        &self,
-        principal: &str,
-    ) -> Result<Option<String>, MountError> {
+    async fn resolve_rpcsec_gss_user(&self, principal: &str) -> Result<Option<String>, MountError> {
         Ok(self.repository.resolve_nfs_krb_principal(principal).await?)
     }
 }
@@ -244,11 +241,7 @@ pub async fn dispatch_mount_rpc(
     dispatch_mount_call(service, client_ip, &call).await
 }
 
-async fn dispatch_mount_call(
-    service: &MountService,
-    client_ip: IpAddr,
-    call: &RpcCall,
-) -> Vec<u8> {
+async fn dispatch_mount_call(service: &MountService, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
     if call.program != MOUNT_PROGRAM {
         return accepted_program_unavailable(call.xid);
     }
@@ -604,8 +597,7 @@ mod tests {
             crate::rpc::RPCSEC_GSS_SVC_NONE,
             &body.into_bytes(),
         );
-        let reply =
-            dispatch_mount_rpc(&service, "203.0.113.77".parse().unwrap(), &request).await;
+        let reply = dispatch_mount_rpc(&service, "203.0.113.77".parse().unwrap(), &request).await;
 
         let mut reader = XdrReader::new(&reply);
         assert_eq!(reader.u32().unwrap(), 97);
@@ -618,8 +610,7 @@ mod tests {
         assert!(!reader.opaque(64).unwrap().is_empty());
         assert_eq!(reader.u32_array(4).unwrap(), vec![RPCSEC_GSS]);
 
-        let replay =
-            dispatch_mount_rpc(&service, "203.0.113.77".parse().unwrap(), &request).await;
+        let replay = dispatch_mount_rpc(&service, "203.0.113.77".parse().unwrap(), &request).await;
         assert!(replay.is_empty());
     }
 
