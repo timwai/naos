@@ -117,6 +117,24 @@ impl SystemAccountManager {
         Err(AccountError::InvalidUsername)
     }
 
+    pub async fn enable(&self, account: &SystemAccountName) -> Result<(), AccountError> {
+        #[cfg(target_os = "linux")]
+        {
+            return self.enable_linux(account).await;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            return self.enable_macos(account).await;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            return self.enable_windows(account).await;
+        }
+
+        #[allow(unreachable_code)]
+        Err(AccountError::InvalidUsername)
+    }
+
     pub async fn disable(&self, account: &SystemAccountName) -> Result<(), AccountError> {
         #[cfg(target_os = "linux")]
         {
@@ -194,6 +212,23 @@ impl SystemAccountManager {
         require_success(&spec, &output)?;
 
         Ok(EnsureAccountResult::Created)
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn enable_linux(&self, account: &SystemAccountName) -> Result<(), AccountError> {
+        let probe = CommandSpec::new("getent").args(["passwd", account.as_str()]);
+        let output = self.runner.run(probe.clone()).await?;
+        if !output.success() {
+            return Err(AccountError::NotFound);
+        }
+        if !linux_account_is_managed(&output.stdout) {
+            return Err(AccountError::OwnershipConflict);
+        }
+
+        let spec =
+            CommandSpec::new("usermod").args(["-U", "-s", "/usr/sbin/nologin", account.as_str()]);
+        let output = self.runner.run(spec.clone()).await?;
+        require_success(&spec, &output)
     }
 
     #[cfg(target_os = "linux")]
@@ -310,6 +345,34 @@ impl SystemAccountManager {
     }
 
     #[cfg(target_os = "macos")]
+    async fn enable_macos(&self, account: &SystemAccountName) -> Result<(), AccountError> {
+        let user_path = format!("/Users/{}", account.as_str());
+        let probe = CommandSpec::new("dscl").args([".", "-read", user_path.as_str()]);
+        let output = self.runner.run(probe.clone()).await?;
+        if !output.success() {
+            return Err(AccountError::NotFound);
+        }
+        if !output
+            .stdout
+            .contains(&format!("RealName: {ACCOUNT_MARKER}"))
+        {
+            return Err(AccountError::OwnershipConflict);
+        }
+
+        // macOS naos identities remain non-interactive. "Enable" means the managed
+        // identity is present and usable for ownership/ACL mapping.
+        let spec = CommandSpec::new("dscl").args([
+            ".",
+            "-create",
+            user_path.as_str(),
+            "UserShell",
+            "/usr/bin/false",
+        ]);
+        let output = self.runner.run(spec.clone()).await?;
+        require_success(&spec, &output)
+    }
+
+    #[cfg(target_os = "macos")]
     async fn disable_macos(&self, account: &SystemAccountName) -> Result<(), AccountError> {
         let user_path = format!("/Users/{}", account.as_str());
         let probe = CommandSpec::new("dscl").args([".", "-read", user_path.as_str()]);
@@ -384,6 +447,21 @@ impl SystemAccountManager {
         require_success(&create, &output)?;
 
         Ok(EnsureAccountResult::Created)
+    }
+
+    #[cfg(target_os = "windows")]
+    async fn enable_windows(&self, account: &SystemAccountName) -> Result<(), AccountError> {
+        const SCRIPT: &str = "$u=Get-LocalUser -Name $env:NAOS_ACCOUNT -ErrorAction SilentlyContinue; if ($null -eq $u) { exit 3 }; if ($u.Description -ne 'Managed by naos') { exit 4 }; Enable-LocalUser -Name $env:NAOS_ACCOUNT -ErrorAction Stop";
+        let spec = CommandSpec::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+            .env(WINDOWS_ACCOUNT_ENV, account.as_str());
+        let output = self.runner.run(spec.clone()).await?;
+        match output.status {
+            0 => Ok(()),
+            3 => Err(AccountError::NotFound),
+            4 => Err(AccountError::OwnershipConflict),
+            _ => Err(command_failure(&spec, &output)),
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -576,9 +654,11 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn linux_disable_and_delete_require_naos_ownership() {
+    async fn linux_enable_disable_and_delete_require_naos_ownership() {
         let managed = "naos_alice:x:900:900:Managed by naos:/nonexistent:/usr/sbin/nologin\n";
         let runner = Arc::new(FakeRunner::new(vec![
+            output(0, managed),
+            output(0, ""),
             output(0, managed),
             output(0, ""),
             output(0, managed),
@@ -587,14 +667,19 @@ mod tests {
         let manager = SystemAccountManager::new(runner.clone());
         let account = SystemAccountName::from_username("alice").unwrap();
 
+        manager.enable(&account).await.unwrap();
         manager.disable(&account).await.unwrap();
         manager.delete(&account).await.unwrap();
 
         let commands = runner.commands();
         assert_eq!(commands[0].program, "getent");
         assert_eq!(commands[1].program, "usermod");
+        assert_eq!(commands[1].args[0], "-U");
         assert_eq!(commands[2].program, "getent");
-        assert_eq!(commands[3].program, "userdel");
+        assert_eq!(commands[3].program, "usermod");
+        assert_eq!(commands[3].args[0], "-L");
+        assert_eq!(commands[4].program, "getent");
+        assert_eq!(commands[5].program, "userdel");
     }
 
     #[cfg(target_os = "linux")]
@@ -636,6 +721,24 @@ mod tests {
                 .iter()
                 .any(|spec| { spec.args.windows(2).any(|args| args == ["IsHidden", "1"]) })
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn macos_enable_preserves_non_interactive_managed_identity() {
+        let runner = Arc::new(FakeRunner::new(vec![
+            output(0, "RealName: Managed by naos\n"),
+            output(0, ""),
+        ]));
+        let manager = SystemAccountManager::new(runner.clone());
+        let account = SystemAccountName::from_username("alice").unwrap();
+
+        manager.enable(&account).await.unwrap();
+
+        let commands = runner.commands();
+        assert_eq!(commands.len(), 2);
+        assert!(commands[1].args.contains(&"UserShell".to_owned()));
+        assert!(commands[1].args.contains(&"/usr/bin/false".to_owned()));
     }
 
     #[cfg(target_os = "macos")]
@@ -687,16 +790,21 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[tokio::test]
-    async fn windows_disable_and_delete_keep_account_name_out_of_script_text() {
-        let runner = Arc::new(FakeRunner::new(vec![output(0, ""), output(0, "")]));
+    async fn windows_enable_disable_and_delete_keep_account_name_out_of_script_text() {
+        let runner = Arc::new(FakeRunner::new(vec![
+            output(0, ""),
+            output(0, ""),
+            output(0, ""),
+        ]));
         let manager = SystemAccountManager::new(runner.clone());
         let account = SystemAccountName::from_username("alice").unwrap();
 
+        manager.enable(&account).await.unwrap();
         manager.disable(&account).await.unwrap();
         manager.delete(&account).await.unwrap();
 
         let commands = runner.commands();
-        assert_eq!(commands.len(), 2);
+        assert_eq!(commands.len(), 3);
         assert!(commands.iter().all(|command| {
             command.env == vec![(WINDOWS_ACCOUNT_ENV.to_owned(), "naos_alice".to_owned())]
         }));

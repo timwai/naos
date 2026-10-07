@@ -99,6 +99,21 @@ impl LinuxSambaCredentialManager {
             system_account,
         })
     }
+    pub async fn enable(&self, username: &str) -> Result<(), SambaCredentialError> {
+        ensure_linux()?;
+        let account = SystemAccountName::from_username(username)?;
+        self.accounts.enable(&account).await?;
+
+        let spec = CommandSpec::new("smbpasswd").args([
+            "-e".to_owned(),
+            "-c".to_owned(),
+            self.config_path.to_string_lossy().into_owned(),
+            account.as_str().to_owned(),
+        ]);
+        let output = self.runner.run(spec.clone()).await?;
+        require_success(&spec, &output)
+    }
+
     pub async fn disable(&self, username: &str) -> Result<(), SambaCredentialError> {
         ensure_linux()?;
         let account = SystemAccountName::from_username(username)?;
@@ -273,11 +288,12 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn disable_and_delete_revoke_samba_before_system_account() {
+    async fn enable_disable_and_delete_coordinate_samba_and_system_account() {
         let runner = Arc::new(FakeRunner::default());
         let manager =
             LinuxSambaCredentialManager::new(PathBuf::from("/etc/samba/smb.conf"), runner.clone());
 
+        manager.enable("alice").await.unwrap();
         manager.disable("alice").await.unwrap();
         manager.delete("alice").await.unwrap();
 
@@ -289,6 +305,9 @@ mod tests {
         assert_eq!(
             programs,
             [
+                "getent",
+                "usermod",
+                "smbpasswd",
                 "smbpasswd",
                 "getent",
                 "usermod",
@@ -297,8 +316,10 @@ mod tests {
                 "userdel"
             ]
         );
-        assert_eq!(commands[0].args[0], "-d");
-        assert_eq!(commands[3].args[0], "-x");
+        assert_eq!(commands[1].args[0], "-U");
+        assert_eq!(commands[2].args[0], "-e");
+        assert_eq!(commands[3].args[0], "-d");
+        assert_eq!(commands[6].args[0], "-x");
     }
 
     #[test]

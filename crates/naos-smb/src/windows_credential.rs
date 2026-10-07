@@ -233,6 +233,13 @@ impl WindowsSmbCredentialManager {
             deny_interactive_applied: true,
         })
     }
+    pub async fn enable(&self, username: &str) -> Result<(), WindowsSmbCredentialError> {
+        ensure_windows()?;
+        let account = SystemAccountName::from_username(username)?;
+        self.accounts.enable(&account).await?;
+        Ok(())
+    }
+
     pub async fn disable(&self, username: &str) -> Result<(), WindowsSmbCredentialError> {
         ensure_windows()?;
         let account = SystemAccountName::from_username(username)?;
@@ -352,6 +359,22 @@ mod tests {
                 stdout: stdout.to_owned(),
                 stderr: String::new(),
             }
+        }
+
+        #[tokio::test]
+        async fn enable_uses_managed_account_primitive() {
+            let runner = Arc::new(FakeRunner::new(vec![output(0, "")]));
+            let manager = WindowsSmbCredentialManager::new(runner.clone());
+
+            manager.enable("alice").await.unwrap();
+
+            let commands = runner.commands.lock().unwrap();
+            assert_eq!(commands.len(), 1);
+            assert_eq!(
+                commands[0].env,
+                vec![("NAOS_ACCOUNT".to_owned(), "naos_alice".to_owned())]
+            );
+            assert!(commands[0].args.iter().all(|arg| !arg.contains("naos_alice")));
         }
 
         #[tokio::test]
