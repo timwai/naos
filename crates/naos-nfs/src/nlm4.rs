@@ -1592,12 +1592,7 @@ mod tests {
         encode_lock(&mut body, &requested);
         body.u32(0);
         body.u32(0);
-        let request = rpc_call(
-            73,
-            NLMPROC4_LOCK,
-            credential(1000),
-            &body.into_bytes(),
-        );
+        let request = rpc_call(73, NLMPROC4_LOCK, credential(1000), &body.into_bytes());
 
         let reply = dispatch_nlm4_rpc(&service, client_ip, &request).await;
         let mut reader = XdrReader::new(&reply);
