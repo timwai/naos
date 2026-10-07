@@ -8,7 +8,7 @@ repository.workspace = true
 
 [features]
 default = []
-system-gss = ["dep:libgssapi"]
+system-gss = ["dep:libgssapi", "dep:windows-sys"]
 
 [dependencies]
 hmac.workspace = true
@@ -24,6 +24,13 @@ tokio.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libgssapi = { version = "0.11", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Security_Authentication_Identity",
+    "Win32_Security_Credentials",
+] }
 
 [dev-dependencies]
 async-trait.workspace = true
