@@ -306,7 +306,6 @@ pub mod acl {
     }
 }
 
-
 pub mod audit {
     use serde::Serialize;
     use serde_json::Value;

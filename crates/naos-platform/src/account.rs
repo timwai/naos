@@ -207,12 +207,8 @@ impl SystemAccountManager {
             return Err(AccountError::OwnershipConflict);
         }
 
-        let spec = CommandSpec::new("usermod").args([
-            "-L",
-            "-s",
-            "/usr/sbin/nologin",
-            account.as_str(),
-        ]);
+        let spec =
+            CommandSpec::new("usermod").args(["-L", "-s", "/usr/sbin/nologin", account.as_str()]);
         let output = self.runner.run(spec.clone()).await?;
         require_success(&spec, &output)
     }
@@ -581,8 +577,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn linux_disable_and_delete_require_naos_ownership() {
-        let managed =
-            "naos_alice:x:900:900:Managed by naos:/nonexistent:/usr/sbin/nologin\n";
+        let managed = "naos_alice:x:900:900:Managed by naos:/nonexistent:/usr/sbin/nologin\n";
         let runner = Arc::new(FakeRunner::new(vec![
             output(0, managed),
             output(0, ""),
@@ -657,7 +652,10 @@ mod tests {
 
         let commands = runner.commands();
         assert_eq!(commands.len(), 2);
-        assert_eq!(commands[1].args.last().map(String::as_str), Some("/Users/naos_alice"));
+        assert_eq!(
+            commands[1].args.last().map(String::as_str),
+            Some("/Users/naos_alice")
+        );
         assert!(commands[1].args.contains(&"-delete".to_owned()));
     }
 
@@ -700,11 +698,12 @@ mod tests {
         let commands = runner.commands();
         assert_eq!(commands.len(), 2);
         assert!(commands.iter().all(|command| {
-            command.env
-                == vec![(WINDOWS_ACCOUNT_ENV.to_owned(), "naos_alice".to_owned())]
+            command.env == vec![(WINDOWS_ACCOUNT_ENV.to_owned(), "naos_alice".to_owned())]
         }));
-        assert!(commands.iter().all(|command| {
-            command.args.iter().all(|arg| !arg.contains("naos_alice"))
-        }));
+        assert!(
+            commands
+                .iter()
+                .all(|command| { command.args.iter().all(|arg| !arg.contains("naos_alice")) })
+        );
     }
 }

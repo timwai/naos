@@ -288,7 +288,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             programs,
-            ["smbpasswd", "getent", "usermod", "smbpasswd", "getent", "userdel"]
+            [
+                "smbpasswd",
+                "getent",
+                "usermod",
+                "smbpasswd",
+                "getent",
+                "userdel"
+            ]
         );
         assert_eq!(commands[0].args[0], "-d");
         assert_eq!(commands[3].args[0], "-x");

@@ -142,31 +142,35 @@ mod tests {
 
     #[test]
     fn rejects_zero_page_and_oversized_page_size() {
-        assert!(normalize_filter(AuditFilter {
-            from: None,
-            to: None,
-            protocol: None,
-            user_id: None,
-            share_id: None,
-            result: None,
-            q: None,
-            page: 0,
-            page_size: 50,
-        })
-        .is_err());
+        assert!(
+            normalize_filter(AuditFilter {
+                from: None,
+                to: None,
+                protocol: None,
+                user_id: None,
+                share_id: None,
+                result: None,
+                q: None,
+                page: 0,
+                page_size: 50,
+            })
+            .is_err()
+        );
 
-        assert!(normalize_filter(AuditFilter {
-            from: None,
-            to: None,
-            protocol: None,
-            user_id: None,
-            share_id: None,
-            result: None,
-            q: None,
-            page: 1,
-            page_size: 201,
-        })
-        .is_err());
+        assert!(
+            normalize_filter(AuditFilter {
+                from: None,
+                to: None,
+                protocol: None,
+                user_id: None,
+                share_id: None,
+                result: None,
+                q: None,
+                page: 1,
+                page_size: 201,
+            })
+            .is_err()
+        );
     }
 
     #[test]

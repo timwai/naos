@@ -10,9 +10,7 @@ use crate::Store;
 #[async_trait]
 impl AuditRepository for Store {
     async fn list(&self, filter: &AuditFilter) -> Result<AuditPage, AuditRepositoryError> {
-        let mut count = QueryBuilder::<Sqlite>::new(
-            "SELECT COUNT(*) FROM audit_log WHERE 1 = 1",
-        );
+        let mut count = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM audit_log WHERE 1 = 1");
         push_filters(&mut count, filter);
         let total = count
             .build_query_scalar::<i64>()
