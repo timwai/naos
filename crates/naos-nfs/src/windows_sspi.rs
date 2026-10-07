@@ -216,8 +216,7 @@ impl RpcSecGssHandshake for WindowsSspiHandshake {
         drop(credential);
 
         if matches!(status, SEC_I_COMPLETE_NEEDED | SEC_I_COMPLETE_AND_CONTINUE) {
-            let complete_status =
-                unsafe { CompleteAuthToken(&context_handle, &output_desc) };
+            let complete_status = unsafe { CompleteAuthToken(&context_handle, &output_desc) };
             if complete_status != SEC_E_OK {
                 return Ok(sspi_failure(complete_status));
             }
