@@ -290,9 +290,7 @@ pub trait NfsBindingRepository: Send + Sync {
         Ok(None)
     }
 
-    async fn list_nfs_krb_principals(
-        &self,
-    ) -> Result<Vec<NfsKrbPrincipal>, NfsRepositoryError> {
+    async fn list_nfs_krb_principals(&self) -> Result<Vec<NfsKrbPrincipal>, NfsRepositoryError> {
         Ok(Vec::new())
     }
 
@@ -494,10 +492,7 @@ impl NfsKrbPrincipalService {
         }
     }
 
-    async fn ensure_enabled_user(
-        &self,
-        user_id: &str,
-    ) -> Result<(), NfsKrbPrincipalServiceError> {
+    async fn ensure_enabled_user(&self, user_id: &str) -> Result<(), NfsKrbPrincipalServiceError> {
         if user_id.trim().is_empty() {
             return Err(NfsKrbPrincipalServiceError::Validation {
                 field: "user_id",
@@ -720,7 +715,10 @@ mod tests {
             Self {
                 mappings: Mutex::new(Vec::new()),
                 enabled_users: Mutex::new(
-                    enabled_users.iter().map(|user| (*user).to_owned()).collect(),
+                    enabled_users
+                        .iter()
+                        .map(|user| (*user).to_owned())
+                        .collect(),
                 ),
             }
         }
@@ -822,7 +820,9 @@ mod tests {
                 .mappings
                 .lock()
                 .map_err(|_| NfsRepositoryError::Unavailable)?;
-            let Some(current) = mappings.iter_mut().find(|mapping| mapping.id == principal.id)
+            let Some(current) = mappings
+                .iter_mut()
+                .find(|mapping| mapping.id == principal.id)
             else {
                 return Ok(false);
             };
