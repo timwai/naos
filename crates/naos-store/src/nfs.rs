@@ -5,7 +5,8 @@ use naos_core::{
     acl::{AclRule, Permission, Subject},
     nfs::{
         NFS_HANDLE_NONCE_BYTES, NfsAccessRepository, NfsBinding, NfsBindingPermission,
-        NfsBindingRepository, NfsCidr, NfsExport, NfsFileHandleRecord, NfsRepositoryError,
+        NfsBindingRepository, NfsCidr, NfsExclusiveCreateRecord, NfsExport, NfsFileHandleRecord,
+        NfsRepositoryError,
     },
     path::RelativePath,
 };
@@ -244,13 +245,13 @@ impl NfsBindingRepository for Store {
         Ok(())
     }
 
-    async fn get_nfs_exclusive_create_verifier(
+    async fn get_nfs_exclusive_create_record(
         &self,
         share_id: &str,
         relative_path: &RelativePath,
-    ) -> Result<Option<[u8; 8]>, NfsRepositoryError> {
-        let value = sqlx::query_scalar::<_, Vec<u8>>(
-            "SELECT verifier
+    ) -> Result<Option<NfsExclusiveCreateRecord>, NfsRepositoryError> {
+        let row = sqlx::query(
+            "SELECT verifier, identity
              FROM nfs_exclusive_creates
              WHERE share_id = ? AND rel_path = ?",
         )
@@ -260,30 +261,38 @@ impl NfsBindingRepository for Store {
         .await
         .map_err(store_error)?;
 
-        value
-            .map(|value| {
-                value
-                    .try_into()
-                    .map_err(|_| NfsRepositoryError::Unavailable)
-            })
-            .transpose()
+        row.map(|row| {
+            let verifier = row
+                .try_get::<Vec<u8>, _>("verifier")
+                .map_err(store_error)?
+                .try_into()
+                .map_err(|_| NfsRepositoryError::Unavailable)?;
+            let identity = row
+                .try_get::<Vec<u8>, _>("identity")
+                .map_err(store_error)?
+                .try_into()
+                .map_err(|_| NfsRepositoryError::Unavailable)?;
+            Ok(NfsExclusiveCreateRecord { verifier, identity })
+        })
+        .transpose()
     }
 
-    async fn set_nfs_exclusive_create_verifier(
+    async fn set_nfs_exclusive_create_record(
         &self,
         share_id: &str,
         relative_path: &RelativePath,
-        verifier: [u8; 8],
+        record: &NfsExclusiveCreateRecord,
     ) -> Result<(), NfsRepositoryError> {
         sqlx::query(
-            "INSERT INTO nfs_exclusive_creates (share_id, rel_path, verifier)
-             VALUES (?, ?, ?)
+            "INSERT INTO nfs_exclusive_creates (share_id, rel_path, verifier, identity)
+             VALUES (?, ?, ?, ?)
              ON CONFLICT(share_id, rel_path)
-             DO UPDATE SET verifier = excluded.verifier",
+             DO UPDATE SET verifier = excluded.verifier, identity = excluded.identity",
         )
         .bind(share_id)
         .bind(relative_path.as_slash_path())
-        .bind(verifier.as_slice())
+        .bind(record.verifier.as_slice())
+        .bind(record.identity.as_slice())
         .execute(&self.pool)
         .await
         .map_err(store_error)?;
@@ -553,6 +562,7 @@ mod tests {
                 share_id TEXT NOT NULL,
                 rel_path TEXT NOT NULL,
                 verifier BLOB NOT NULL CHECK(length(verifier) = 8),
+                identity BLOB NOT NULL CHECK(length(identity) = 32),
                 PRIMARY KEY (share_id, rel_path)
             )",
         )
@@ -564,34 +574,54 @@ mod tests {
 
         assert_eq!(
             store
-                .get_nfs_exclusive_create_verifier("shr_media", &path)
+                .get_nfs_exclusive_create_record("shr_media", &path)
                 .await
                 .unwrap(),
             None
         );
 
         store
-            .set_nfs_exclusive_create_verifier("shr_media", &path, [7; 8])
+            .set_nfs_exclusive_create_record(
+                "shr_media",
+                &path,
+                &NfsExclusiveCreateRecord {
+                    verifier: [7; 8],
+                    identity: [17; 32],
+                },
+            )
             .await
             .unwrap();
         assert_eq!(
             store
-                .get_nfs_exclusive_create_verifier("shr_media", &path)
+                .get_nfs_exclusive_create_record("shr_media", &path)
                 .await
                 .unwrap(),
-            Some([7; 8])
+            Some(NfsExclusiveCreateRecord {
+                verifier: [7; 8],
+                identity: [17; 32],
+            })
         );
 
         store
-            .set_nfs_exclusive_create_verifier("shr_media", &path, [8; 8])
+            .set_nfs_exclusive_create_record(
+                "shr_media",
+                &path,
+                &NfsExclusiveCreateRecord {
+                    verifier: [8; 8],
+                    identity: [18; 32],
+                },
+            )
             .await
             .unwrap();
         assert_eq!(
             store
-                .get_nfs_exclusive_create_verifier("shr_media", &path)
+                .get_nfs_exclusive_create_record("shr_media", &path)
                 .await
                 .unwrap(),
-            Some([8; 8])
+            Some(NfsExclusiveCreateRecord {
+                verifier: [8; 8],
+                identity: [18; 32],
+            })
         );
 
         store
@@ -600,7 +630,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             store
-                .get_nfs_exclusive_create_verifier("shr_media", &path)
+                .get_nfs_exclusive_create_record("shr_media", &path)
                 .await
                 .unwrap(),
             None
