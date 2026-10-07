@@ -20,7 +20,7 @@ use crate::{
     rpc::{
         AUTH_NONE, AUTH_SYS, RPC_VERSION, RpcCall, RpcCredential, RpcDecodeError,
         accepted_garbage_args, accepted_procedure_unavailable, accepted_program_mismatch,
-        accepted_program_unavailable, accepted_success, decode_call, denied_rpc_mismatch,
+        accepted_program_unavailable, accepted_success, decode_call, denied_rpc_mismatch, rpcsec_gss_unavailable_reply,
     },
     rpcbind::{RpcTransport, lookup_port},
     transport::{read_record, write_record},
@@ -1242,6 +1242,10 @@ pub async fn dispatch_nlm4_rpc(
         }
         Err(RpcDecodeError::Xdr(_)) => return Vec::new(),
     };
+
+    if let Some(reply) = rpcsec_gss_unavailable_reply(&call) {
+        return reply;
+    }
 
     if call.program != NLM_PROGRAM {
         return accepted_program_unavailable(call.xid);
