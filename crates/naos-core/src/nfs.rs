@@ -241,6 +241,12 @@ pub struct NfsFileHandleRecord {
     pub relative_path: RelativePath,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfsExclusiveCreateRecord {
+    pub verifier: [u8; 8],
+    pub identity: [u8; 32],
+}
+
 #[derive(Debug, Error)]
 pub enum NfsRepositoryError {
     #[error("nfs repository is unavailable")]
@@ -295,22 +301,22 @@ pub trait NfsBindingRepository: Send + Sync {
         Ok(())
     }
 
-    async fn get_nfs_exclusive_create_verifier(
+    async fn get_nfs_exclusive_create_record(
         &self,
         share_id: &str,
         relative_path: &RelativePath,
-    ) -> Result<Option<[u8; 8]>, NfsRepositoryError> {
+    ) -> Result<Option<NfsExclusiveCreateRecord>, NfsRepositoryError> {
         let _ = (share_id, relative_path);
         Ok(None)
     }
 
-    async fn set_nfs_exclusive_create_verifier(
+    async fn set_nfs_exclusive_create_record(
         &self,
         share_id: &str,
         relative_path: &RelativePath,
-        verifier: [u8; 8],
+        record: &NfsExclusiveCreateRecord,
     ) -> Result<(), NfsRepositoryError> {
-        let _ = (share_id, relative_path, verifier);
+        let _ = (share_id, relative_path, record);
         Ok(())
     }
 
