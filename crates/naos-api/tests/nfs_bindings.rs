@@ -56,6 +56,14 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
     let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
     let nfs_principals = Arc::new(naos_core::nfs::NfsKrbPrincipalService::new(store.clone()));
     let shares = Arc::new(naos_core::share::ShareCatalogService::new(store.clone()));
+    let user_mutations = Arc::new(naos_core::user::UserMutationService::new(
+        store.clone(),
+        operations.clone(),
+        AuthConfig::default(),
+    ));
+    let user_reconcile_factory = Arc::new(
+        naos_core::user::DatabaseUserReconcileDriverFactory::new(store.clone()),
+    );
     let reconciler = Arc::new(Reconciler::new(operations.clone()));
     let smb_doctor = Arc::new(StaticSmbDoctorProbe::new(SmbDoctorReport {
         status: "ready".to_owned(),
@@ -90,6 +98,8 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
         nfs_bindings,
         nfs_principals,
         shares,
+        user_mutations,
+        user_reconcile_factory,
         reconciler,
         smb_doctor,
     });

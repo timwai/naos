@@ -315,6 +315,19 @@ impl AuthService {
         self.repository.list_users().await.map_err(Into::into)
     }
 
+    pub async fn get_user(
+        &self,
+        session: &AuthenticatedSession,
+        user_id: &str,
+    ) -> Result<UserSummary, AuthError> {
+        Self::ensure_admin(session)?;
+        self.repository
+            .find_user_by_id(user_id)
+            .await?
+            .map(|record| record.user)
+            .ok_or(AuthError::NotFound)
+    }
+
     pub async fn login(
         &self,
         username: &str,
@@ -612,7 +625,7 @@ impl AuthService {
     }
 }
 
-fn validate_username(username: &str) -> Result<(), AuthError> {
+pub(crate) fn validate_username(username: &str) -> Result<(), AuthError> {
     let valid_length = (3..=32).contains(&username.len());
     let valid_chars = username
         .chars()
@@ -627,7 +640,7 @@ fn validate_username(username: &str) -> Result<(), AuthError> {
     Ok(())
 }
 
-fn validate_password(password: &str, min_length: usize) -> Result<(), AuthError> {
+pub(crate) fn validate_password(password: &str, min_length: usize) -> Result<(), AuthError> {
     if password.len() < min_length {
         return Err(AuthError::Validation {
             field: "password",
@@ -656,7 +669,7 @@ fn verify_password_sync(password: &str, encoded: &str) -> Result<bool, AuthError
         .is_ok())
 }
 
-async fn hash_password(password: String) -> Result<String, AuthError> {
+pub(crate) async fn hash_password(password: String) -> Result<String, AuthError> {
     tokio::task::spawn_blocking(move || hash_password_sync(&password))
         .await
         .map_err(|_| AuthError::Crypto)?
@@ -678,11 +691,11 @@ fn token_hash(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
 
-fn prefixed_id(prefix: &str) -> String {
+pub(crate) fn prefixed_id(prefix: &str) -> String {
     format!("{prefix}_{}", Ulid::new())
 }
 
-fn now_rfc3339() -> Result<String, AuthError> {
+pub(crate) fn now_rfc3339() -> Result<String, AuthError> {
     format_time(OffsetDateTime::now_utc())
 }
 

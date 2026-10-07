@@ -5,6 +5,7 @@ mod files;
 mod nfs;
 mod operation;
 mod share_apply;
+mod user_mutation;
 mod webdav;
 
 use std::{path::Path, str::FromStr, time::Duration};

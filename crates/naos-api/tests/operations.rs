@@ -58,6 +58,14 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
     let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
     let nfs_principals = Arc::new(naos_core::nfs::NfsKrbPrincipalService::new(store.clone()));
     let shares = Arc::new(naos_core::share::ShareCatalogService::new(store.clone()));
+    let user_mutations = Arc::new(naos_core::user::UserMutationService::new(
+        store.clone(),
+        operations.clone(),
+        AuthConfig::default(),
+    ));
+    let user_reconcile_factory = Arc::new(
+        naos_core::user::DatabaseUserReconcileDriverFactory::new(store.clone()),
+    );
     let reconciler = Arc::new(Reconciler::new(operations.clone()));
     let smb_doctor = Arc::new(StaticSmbDoctorProbe::new(SmbDoctorReport {
         status: "ready".to_owned(),
@@ -92,6 +100,8 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
         nfs_bindings,
         nfs_principals,
         shares,
+        user_mutations,
+        user_reconcile_factory,
         reconciler,
         smb_doctor,
     });
@@ -664,6 +674,262 @@ async fn acl_replace_is_operation_backed_idempotent_and_bumps_share_generation()
         .unwrap();
     assert_eq!(group.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(json_body(group).await["code"], "ACL_GROUP_UNSUPPORTED");
+}
+
+#[tokio::test]
+async fn user_lifecycle_is_operation_backed_and_password_reset_revokes_old_credentials() {
+    let (app, _store, _dir) = test_app().await;
+    let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 33005);
+    let (cookie, csrf) = login_admin(&app, peer).await;
+
+    let create_body = json!({
+        "username": "alice",
+        "password": "alice-initial-password",
+        "role": "user",
+        "enabled": true,
+        "group_ids": []
+    });
+    let create = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/users",
+            Some(create_body.clone()),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("user-create-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::ACCEPTED);
+    let create = json_body(create).await;
+    let create_operation = create["operation_id"].as_str().unwrap().to_owned();
+
+    let replay = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/users",
+            Some(create_body),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("user-create-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::ACCEPTED);
+    assert_eq!(json_body(replay).await["operation_id"], create_operation);
+
+    let created = wait_operation(&app, peer, &cookie, &create_operation).await;
+    assert_eq!(created["state"], "succeeded");
+    assert_eq!(created["kind"], "user.create");
+    let user_id = created["resource_id"].as_str().unwrap().to_owned();
+
+    let detail = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/users/{user_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    assert_eq!(json_body(detail).await["enabled"], true);
+
+    let disable = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/v1/users/{user_id}"),
+            Some(json!({"role": "user", "enabled": false})),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("user-disable-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(disable.status(), StatusCode::ACCEPTED);
+    let disable = json_body(disable).await;
+    let disabled = wait_operation(
+        &app,
+        peer,
+        &cookie,
+        disable["operation_id"].as_str().unwrap(),
+    )
+    .await;
+    assert_eq!(disabled["state"], "succeeded");
+
+    let login_disabled = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/auth/login",
+            Some(json!({
+                "username": "alice",
+                "password": "alice-initial-password"
+            })),
+            peer,
+            None,
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(login_disabled.status(), StatusCode::UNAUTHORIZED);
+
+    let enable = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/v1/users/{user_id}"),
+            Some(json!({"role": "user", "enabled": true})),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("user-enable-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(enable.status(), StatusCode::ACCEPTED);
+    let enable = json_body(enable).await;
+    assert_eq!(
+        wait_operation(
+            &app,
+            peer,
+            &cookie,
+            enable["operation_id"].as_str().unwrap(),
+        )
+        .await["state"],
+        "succeeded"
+    );
+
+    let login_enabled = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/auth/login",
+            Some(json!({
+                "username": "alice",
+                "password": "alice-initial-password"
+            })),
+            peer,
+            None,
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(login_enabled.status(), StatusCode::OK);
+
+    let reset = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            &format!("/api/v1/users/{user_id}/password"),
+            Some(json!({"password": "alice-replacement-password"})),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("user-password-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(reset.status(), StatusCode::ACCEPTED);
+    let reset = json_body(reset).await;
+    assert_eq!(
+        wait_operation(
+            &app,
+            peer,
+            &cookie,
+            reset["operation_id"].as_str().unwrap(),
+        )
+        .await["state"],
+        "succeeded"
+    );
+
+    let old_login = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/auth/login",
+            Some(json!({
+                "username": "alice",
+                "password": "alice-initial-password"
+            })),
+            peer,
+            None,
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(old_login.status(), StatusCode::UNAUTHORIZED);
+
+    let new_login = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/auth/login",
+            Some(json!({
+                "username": "alice",
+                "password": "alice-replacement-password"
+            })),
+            peer,
+            None,
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(new_login.status(), StatusCode::OK);
+
+    let delete = app
+        .clone()
+        .oneshot(request(
+            Method::DELETE,
+            &format!("/api/v1/users/{user_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("user-delete-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::ACCEPTED);
+    let delete = json_body(delete).await;
+    assert_eq!(
+        wait_operation(
+            &app,
+            peer,
+            &cookie,
+            delete["operation_id"].as_str().unwrap(),
+        )
+        .await["state"],
+        "succeeded"
+    );
+
+    let missing = app
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/users/{user_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

@@ -27,6 +27,27 @@ pub mod auth {
         pub new_password: String,
     }
 
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct UserCreateRequest {
+        pub username: String,
+        pub password: String,
+        pub role: String,
+        pub enabled: bool,
+        #[serde(default)]
+        pub group_ids: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct UserUpdateRequest {
+        pub role: String,
+        pub enabled: bool,
+    }
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct AdminPasswordResetRequest {
+        pub password: String,
+    }
+
     #[derive(Debug, Clone, Serialize, ToSchema)]
     pub struct UserDto {
         pub id: String,

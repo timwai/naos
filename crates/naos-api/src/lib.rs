@@ -5,6 +5,7 @@ mod files_api;
 mod nfs_api;
 mod operation_api;
 mod share_api;
+mod user_api;
 
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
@@ -51,6 +52,8 @@ pub struct AppState {
     pub nfs_bindings: Arc<naos_core::nfs::NfsBindingService>,
     pub nfs_principals: Arc<naos_core::nfs::NfsKrbPrincipalService>,
     pub shares: Arc<naos_core::share::ShareCatalogService>,
+    pub user_mutations: Arc<naos_core::user::UserMutationService>,
+    pub user_reconcile_factory: Arc<dyn naos_core::user::UserReconcileDriverFactory>,
     pub reconciler: Arc<naos_core::reconcile::Reconciler>,
     pub smb_doctor: Arc<dyn naos_core::doctor::SmbDoctorProbe>,
 }
@@ -75,6 +78,7 @@ pub fn router(state: AppState) -> Router {
         .merge(files_api::routes())
         .merge(nfs_api::routes())
         .merge(share_api::routes())
+        .merge(user_api::routes())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -609,5 +613,6 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     document.merge(files_api::openapi());
     document.merge(nfs_api::openapi());
     document.merge(share_api::openapi());
+    document.merge(user_api::openapi());
     document
 }

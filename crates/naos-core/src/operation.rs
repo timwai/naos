@@ -37,6 +37,22 @@ impl OperationKind {
         Self::new("acl.replace")
     }
 
+    pub fn user_create() -> Self {
+        Self::new("user.create")
+    }
+
+    pub fn user_update() -> Self {
+        Self::new("user.update")
+    }
+
+    pub fn user_password_reset() -> Self {
+        Self::new("user.password_reset")
+    }
+
+    pub fn user_delete() -> Self {
+        Self::new("user.delete")
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
