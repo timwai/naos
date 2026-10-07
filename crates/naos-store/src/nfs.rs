@@ -460,10 +460,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO users (id, enabled) VALUES ('usr_enabled', 1), ('usr_disabled', 0)")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, enabled) VALUES ('usr_enabled', 1), ('usr_disabled', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO nfs_krb_principals (id, principal, user_id)
              VALUES
