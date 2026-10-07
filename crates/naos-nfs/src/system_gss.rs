@@ -25,11 +25,11 @@ pub enum SystemGssProviderError {
     Gss(#[from] GssError),
 }
 
-#[derive(Clone)]
 const RFC4121_WRAP_TOKEN_ID: [u8; 2] = [0x05, 0x04];
 const RFC4121_WRAP_TOKEN_HEADER_LEN: usize = 16;
 const RFC4121_FLAG_SEALED: u8 = 0x02;
 
+#[derive(Clone)]
 pub struct SystemGssHandshakeProvider {
     credential: Cred,
 }
