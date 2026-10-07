@@ -728,9 +728,11 @@ mod tests {
             &self,
             share_id: &str,
         ) -> Result<Vec<NfsBinding>, NfsRepositoryError> {
-            Ok((share_id == self.export.id)
-                .then(|| vec![self.binding.clone()])
-                .unwrap_or_default())
+            Ok(if share_id == self.export.id {
+                vec![self.binding.clone()]
+            } else {
+                Vec::new()
+            })
         }
 
         async fn insert_nfs_binding(&self, _: &NfsBinding) -> Result<(), NfsRepositoryError> {
