@@ -322,12 +322,7 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
             panic!("wire client completed before RPCSEC_GSS context creation");
         };
 
-        let call = context_call(
-            100 + step,
-            gss_proc,
-            &wire_handle,
-            &client_token,
-        );
+        let call = context_call(100 + step, gss_proc, &wire_handle, &client_token);
         let reply = accept_context_call(&registry, &wire_acceptor, &call)
             .await
             .unwrap_or_else(|error| panic!("RPCSEC_GSS context step {step}: {error}"));
@@ -360,10 +355,7 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
                 }
                 assert!(wire_client.is_complete());
                 wire_client
-                    .verify_mic(
-                        &rpcsec_gss_u32_mic_input(result.seq_window),
-                        &verifier.body,
-                    )
+                    .verify_mic(&rpcsec_gss_u32_mic_input(result.seq_window), &verifier.body)
                     .expect("verify RPCSEC_GSS init reply verifier");
                 completed_verifier = Some(verifier);
                 break;
@@ -375,7 +367,10 @@ async fn real_kerberos_context_establishes_and_round_trips_mic() {
         }
     }
 
-    assert!(completed_verifier.is_some(), "RPCSEC_GSS context did not complete");
+    assert!(
+        completed_verifier.is_some(),
+        "RPCSEC_GSS context did not complete"
+    );
     let registered = registry
         .get(&wire_handle)
         .await
