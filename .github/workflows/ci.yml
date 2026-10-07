@@ -56,8 +56,8 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libkrb5-dev libclang-dev pkg-config
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p naos-nfs --features system-gss --all-targets
-      - run: cargo clippy -p naos-nfs --features system-gss --all-targets -- -D warnings
+      - run: cargo check -p naosd --features system-gss --all-targets
+      - run: cargo clippy -p naosd --features system-gss --all-targets -- -D warnings
       - run: cargo test -p naos-nfs --features system-gss
 
 
