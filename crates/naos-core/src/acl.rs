@@ -365,6 +365,7 @@ pub struct NewAclRule {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AclApplySubject {
     User {
+        user_id: String,
         username: String,
     },
     Group {
@@ -375,6 +376,13 @@ pub enum AclApplySubject {
 }
 
 impl AclApplySubject {
+    pub fn user_id(&self) -> Option<&str> {
+        match self {
+            Self::User { user_id, .. } => Some(user_id),
+            Self::Group { .. } => None,
+        }
+    }
+
     pub fn group_id(&self) -> Option<&str> {
         match self {
             Self::User { .. } => None,
@@ -744,6 +752,9 @@ impl ReconcileDriver for DatabaseAclReconcileDriver {
 pub fn acl_lock_keys(target: &AclMutationTarget) -> Vec<String> {
     let mut keys = vec![format!("share:{}", target.share_id)];
     for rule in target.previous.iter().chain(target.desired.iter()) {
+        if let Some(user_id) = rule.subject.user_id() {
+            keys.push(format!("user:{user_id}"));
+        }
         if let Some(group_id) = rule.subject.group_id() {
             keys.push(format!("group:{group_id}"));
         }
