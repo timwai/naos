@@ -10,8 +10,7 @@ use libgssapi::{
 };
 use naos_nfs::{
     rpcsec_gss::{
-        RpcSecGssAcceptRequest, RpcSecGssAcceptResult, RpcSecGssAcceptor,
-        StatefulRpcSecGssAcceptor,
+        RpcSecGssAcceptRequest, RpcSecGssAcceptResult, RpcSecGssAcceptor, StatefulRpcSecGssAcceptor,
     },
     system_gss::SystemGssHandshakeProvider,
 };
@@ -26,31 +25,18 @@ fn real_kerberos_context_negotiates_and_exchanges_mics() {
         .expect("real Kerberos test requires NAOS_GSS_TEST_CLIENT_PRINCIPAL");
 
     let mechanisms = OidSet::singleton(GSS_MECH_KRB5).expect("build Kerberos mechanism set");
-    let credential = Cred::acquire(
-        None,
-        None,
-        CredUsage::Initiate,
-        Some(&mechanisms),
-    )
-    .expect("acquire Kerberos initiator credential from the configured ccache");
-    let target = Name::new(
-        service_principal.as_bytes(),
-        Some(GSS_NT_KRB5_PRINCIPAL),
-    )
-    .expect("import Kerberos service principal")
-    .canonicalize(Some(GSS_MECH_KRB5))
-    .expect("canonicalize Kerberos service principal");
+    let credential = Cred::acquire(None, None, CredUsage::Initiate, Some(&mechanisms))
+        .expect("acquire Kerberos initiator credential from the configured ccache");
+    let target = Name::new(service_principal.as_bytes(), Some(GSS_NT_KRB5_PRINCIPAL))
+        .expect("import Kerberos service principal")
+        .canonicalize(Some(GSS_MECH_KRB5))
+        .expect("canonicalize Kerberos service principal");
 
     let flags = CtxFlags::GSS_C_MUTUAL_FLAG
         | CtxFlags::GSS_C_REPLAY_FLAG
         | CtxFlags::GSS_C_SEQUENCE_FLAG
         | CtxFlags::GSS_C_INTEG_FLAG;
-    let mut client = ClientCtx::new(
-        Some(credential),
-        target,
-        flags,
-        Some(GSS_MECH_KRB5),
-    );
+    let mut client = ClientCtx::new(Some(credential), target, flags, Some(GSS_MECH_KRB5));
     let provider = Arc::new(
         SystemGssHandshakeProvider::new(&service_principal)
             .expect("acquire Kerberos acceptor credential from the configured keytab"),
@@ -75,7 +61,10 @@ fn real_kerberos_context_negotiates_and_exchanges_mics() {
             },
         };
 
-        match acceptor.accept(request).expect("run Kerberos acceptor step") {
+        match acceptor
+            .accept(request)
+            .expect("run Kerberos acceptor step")
+        {
             RpcSecGssAcceptResult::Continue {
                 handle: next_handle,
                 token,
@@ -99,9 +88,15 @@ fn real_kerberos_context_negotiates_and_exchanges_mics() {
                 security,
                 ..
             } => {
-                assert!(!completed_handle.is_empty(), "complete handle must not be empty");
+                assert!(
+                    !completed_handle.is_empty(),
+                    "complete handle must not be empty"
+                );
                 if let Some(current) = handle.as_ref() {
-                    assert_eq!(&completed_handle, current, "complete handle must stay stable");
+                    assert_eq!(
+                        &completed_handle, current,
+                        "complete handle must stay stable"
+                    );
                 }
                 if !token.is_empty() {
                     let final_token = client
@@ -112,16 +107,17 @@ fn real_kerberos_context_negotiates_and_exchanges_mics() {
                         "Kerberos initiator unexpectedly produced a token after server completion"
                     );
                 }
-                assert!(client.is_complete(), "Kerberos initiator context must complete");
+                assert!(
+                    client.is_complete(),
+                    "Kerberos initiator context must complete"
+                );
                 break security;
             }
             RpcSecGssAcceptResult::Failure {
                 gss_major,
                 gss_minor,
             } => {
-                panic!(
-                    "Kerberos acceptor failed: major=0x{gss_major:08x} minor={gss_minor}"
-                );
+                panic!("Kerberos acceptor failed: major=0x{gss_major:08x} minor={gss_minor}");
             }
         }
     };
@@ -142,9 +138,7 @@ fn real_kerberos_context_negotiates_and_exchanges_mics() {
         .expect("server verifies client MIC");
 
     let server_message = b"rpcsec-gss server mic";
-    let server_mic = security
-        .get_mic(server_message)
-        .expect("create server MIC");
+    let server_mic = security.get_mic(server_message).expect("create server MIC");
     client
         .verify_mic(server_message, &server_mic)
         .expect("client verifies server MIC");
