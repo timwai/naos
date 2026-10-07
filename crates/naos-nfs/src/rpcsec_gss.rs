@@ -1037,30 +1037,33 @@ mod tests {
 
     #[test]
     fn request_error_mapping_matches_rpcsec_gss_error_classes() {
-        let mut reader = XdrReader::new(&rpcsec_gss_request_error_reply(
+        let reply = rpcsec_gss_request_error_reply(
             90,
             RpcSecGssDataError::Registry(RpcSecGssRegistryError::InvalidHandle),
-        ));
+        );
+        let mut reader = XdrReader::new(&reply);
         assert_eq!(reader.u32().unwrap(), 90);
         assert_eq!(reader.u32().unwrap(), REPLY);
         assert_eq!(reader.u32().unwrap(), 1);
         assert_eq!(reader.u32().unwrap(), 1);
         assert_eq!(reader.u32().unwrap(), RPCSEC_GSS_CREDPROBLEM);
 
-        let mut reader = XdrReader::new(&rpcsec_gss_request_error_reply(
+        let reply = rpcsec_gss_request_error_reply(
             91,
             RpcSecGssDataError::Registry(RpcSecGssRegistryError::SequenceOutOfRange),
-        ));
+        );
+        let mut reader = XdrReader::new(&reply);
         assert_eq!(reader.u32().unwrap(), 91);
         assert_eq!(reader.u32().unwrap(), REPLY);
         assert_eq!(reader.u32().unwrap(), 1);
         assert_eq!(reader.u32().unwrap(), 1);
         assert_eq!(reader.u32().unwrap(), RPCSEC_GSS_CTXPROBLEM);
 
-        let mut reader = XdrReader::new(&rpcsec_gss_request_error_reply(
+        let reply = rpcsec_gss_request_error_reply(
             92,
             RpcSecGssDataError::BodySecurity(RpcSecGssSecurityError::BadMic),
-        ));
+        );
+        let mut reader = XdrReader::new(&reply);
         assert_eq!(reader.u32().unwrap(), 92);
         assert_eq!(reader.u32().unwrap(), REPLY);
         assert_eq!(reader.u32().unwrap(), MSG_ACCEPTED);
