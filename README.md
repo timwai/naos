@@ -25,3 +25,19 @@
 - **WebDAV 服务**：基于 `dav-server` crate 注入 `acl-engine`
 - **NFS 服务**：自研 ONC-RPC/XDR + NFSv3/MOUNT/NLM（带 L1 客户端 CIDR 绑定 / L2 UID 映射 / L3 Kerberos）
 - **SMB 适配**：现阶段不自研 SMB Server；Linux 复用 Samba，Windows 复用系统 SMB Server，macOS 优先复用可管理的系统 SMB provider；启动/Apply 前检测 TCP/445 归属并拒绝未知冲突
+
+
+## 🔐 NFS Kerberos（Unix 可选）
+
+Linux / macOS 可使用 `system-gss` feature 将 NFS RPCSEC_GSS 接到系统 Kerberos/GSS：
+
+```bash
+cargo build -p naosd --features system-gss
+NAOS_NFS_ENABLED=true \
+NAOS_NFS_KERBEROS_SERVICE_PRINCIPAL='nfs/server.example.com@EXAMPLE.COM' \
+./target/debug/naosd
+```
+
+服务 principal 必须能从系统 GSS acceptor 的凭据来源取得对应密钥；MIT/Heimdal 环境可在启动 `naosd` 前通过 `KRB5_KTNAME` 指定 keytab。若配置了 Kerberos principal 但当前构建不支持 system GSS，或 acceptor credential 无法取得，NFS 数据面会拒绝启动而不会降级认证。
+
+当前系统 GSS provider 支持 `krb5` / `krb5i` 所需的认证与 MIC；`krb5p` 暂时 fail-closed，待底层适配能够验证每个 token 的 GSS confidentiality state 后再启用。
