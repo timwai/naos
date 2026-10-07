@@ -618,7 +618,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn auth_error_status(reply: &[u8]) -> u32 {
         let mut reader = XdrReader::new(reply);
         reader.u32().unwrap();
