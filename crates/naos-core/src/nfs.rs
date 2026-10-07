@@ -241,6 +241,13 @@ pub struct NfsFileHandleRecord {
     pub relative_path: RelativePath,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfsKrbPrincipal {
+    pub id: String,
+    pub principal: String,
+    pub user_id: String,
+}
+
 #[derive(Debug, Error)]
 pub enum NfsRepositoryError {
     #[error("nfs repository is unavailable")]
@@ -274,6 +281,44 @@ pub trait NfsBindingRepository: Send + Sync {
         share_id: &str,
         binding_id: &str,
     ) -> Result<bool, NfsRepositoryError>;
+
+    async fn find_nfs_krb_principal(
+        &self,
+        principal: &str,
+    ) -> Result<Option<NfsKrbPrincipal>, NfsRepositoryError> {
+        let _ = principal;
+        Ok(None)
+    }
+
+    async fn list_nfs_krb_principals(
+        &self,
+    ) -> Result<Vec<NfsKrbPrincipal>, NfsRepositoryError> {
+        Ok(Vec::new())
+    }
+
+    async fn insert_nfs_krb_principal(
+        &self,
+        principal: &NfsKrbPrincipal,
+    ) -> Result<(), NfsRepositoryError> {
+        let _ = principal;
+        Err(NfsRepositoryError::Unavailable)
+    }
+
+    async fn update_nfs_krb_principal(
+        &self,
+        principal: &NfsKrbPrincipal,
+    ) -> Result<bool, NfsRepositoryError> {
+        let _ = principal;
+        Err(NfsRepositoryError::Unavailable)
+    }
+
+    async fn delete_nfs_krb_principal(
+        &self,
+        principal_id: &str,
+    ) -> Result<bool, NfsRepositoryError> {
+        let _ = principal_id;
+        Err(NfsRepositoryError::Unavailable)
+    }
 
     async fn get_or_create_nfs_handle_secret(
         &self,
@@ -326,6 +371,170 @@ pub trait NfsAccessRepository: Send + Sync {
         &self,
         user_id: &str,
     ) -> Result<Vec<String>, NfsRepositoryError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfsKrbPrincipalInput {
+    pub principal: String,
+    pub user_id: String,
+}
+
+#[derive(Debug, Error)]
+pub enum NfsKrbPrincipalServiceError {
+    #[error("NFS Kerberos principal validation failed for {field}: {message}")]
+    Validation {
+        field: &'static str,
+        message: &'static str,
+    },
+    #[error("NFS Kerberos principal mapping was not found")]
+    NotFound,
+    #[error("NFS Kerberos principal is already mapped")]
+    Conflict,
+    #[error(transparent)]
+    Repository(#[from] NfsRepositoryError),
+}
+
+#[derive(Clone)]
+pub struct NfsKrbPrincipalService {
+    repository: Arc<dyn NfsBindingRepository>,
+}
+
+impl NfsKrbPrincipalService {
+    pub fn new(repository: Arc<dyn NfsBindingRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn list(&self) -> Result<Vec<NfsKrbPrincipal>, NfsKrbPrincipalServiceError> {
+        Ok(self.repository.list_nfs_krb_principals().await?)
+    }
+
+    pub async fn create(
+        &self,
+        input: NfsKrbPrincipalInput,
+    ) -> Result<NfsKrbPrincipal, NfsKrbPrincipalServiceError> {
+        validate_krb_principal(&input.principal)?;
+        self.ensure_enabled_user(&input.user_id).await?;
+        if self
+            .repository
+            .find_nfs_krb_principal(&input.principal)
+            .await?
+            .is_some()
+        {
+            return Err(NfsKrbPrincipalServiceError::Conflict);
+        }
+
+        let mapping = NfsKrbPrincipal {
+            id: format!("nkp_{}", Ulid::new()),
+            principal: input.principal,
+            user_id: input.user_id,
+        };
+        self.repository.insert_nfs_krb_principal(&mapping).await?;
+        Ok(mapping)
+    }
+
+    pub async fn update(
+        &self,
+        id: &str,
+        input: NfsKrbPrincipalInput,
+    ) -> Result<NfsKrbPrincipal, NfsKrbPrincipalServiceError> {
+        if id.trim().is_empty() {
+            return Err(NfsKrbPrincipalServiceError::Validation {
+                field: "id",
+                message: "must not be empty",
+            });
+        }
+        validate_krb_principal(&input.principal)?;
+        self.ensure_enabled_user(&input.user_id).await?;
+
+        if let Some(existing) = self
+            .repository
+            .find_nfs_krb_principal(&input.principal)
+            .await?
+            && existing.id != id
+        {
+            return Err(NfsKrbPrincipalServiceError::Conflict);
+        }
+
+        let mapping = NfsKrbPrincipal {
+            id: id.to_owned(),
+            principal: input.principal,
+            user_id: input.user_id,
+        };
+        if !self.repository.update_nfs_krb_principal(&mapping).await? {
+            return Err(NfsKrbPrincipalServiceError::NotFound);
+        }
+        Ok(mapping)
+    }
+
+    pub async fn delete(&self, id: &str) -> Result<(), NfsKrbPrincipalServiceError> {
+        if id.trim().is_empty() {
+            return Err(NfsKrbPrincipalServiceError::Validation {
+                field: "id",
+                message: "must not be empty",
+            });
+        }
+        if !self.repository.delete_nfs_krb_principal(id).await? {
+            return Err(NfsKrbPrincipalServiceError::NotFound);
+        }
+        Ok(())
+    }
+
+    pub async fn resolve_user_id(
+        &self,
+        principal: &str,
+    ) -> Result<Option<String>, NfsKrbPrincipalServiceError> {
+        validate_krb_principal(principal)?;
+        let Some(mapping) = self.repository.find_nfs_krb_principal(principal).await? else {
+            return Ok(None);
+        };
+        if self.repository.nfs_user_exists(&mapping.user_id).await? {
+            Ok(Some(mapping.user_id))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn ensure_enabled_user(
+        &self,
+        user_id: &str,
+    ) -> Result<(), NfsKrbPrincipalServiceError> {
+        if user_id.trim().is_empty() {
+            return Err(NfsKrbPrincipalServiceError::Validation {
+                field: "user_id",
+                message: "must not be empty",
+            });
+        }
+        if self.repository.nfs_user_exists(user_id).await? {
+            Ok(())
+        } else {
+            Err(NfsKrbPrincipalServiceError::Validation {
+                field: "user_id",
+                message: "does not identify an enabled user",
+            })
+        }
+    }
+}
+
+fn validate_krb_principal(principal: &str) -> Result<(), NfsKrbPrincipalServiceError> {
+    if principal.is_empty() {
+        return Err(NfsKrbPrincipalServiceError::Validation {
+            field: "principal",
+            message: "must not be empty",
+        });
+    }
+    if principal.len() > 1024 {
+        return Err(NfsKrbPrincipalServiceError::Validation {
+            field: "principal",
+            message: "must not exceed 1024 bytes",
+        });
+    }
+    if principal.chars().any(char::is_control) {
+        return Err(NfsKrbPrincipalServiceError::Validation {
+            field: "principal",
+            message: "must not contain control characters",
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
