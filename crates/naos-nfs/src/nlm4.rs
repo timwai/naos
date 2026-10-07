@@ -1,20 +1,31 @@
-use std::{io, net::IpAddr, path::Path, sync::Arc};
+use std::{
+    io,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    path::Path,
+    sync::Arc,
+};
 
 use naos_core::{
     acl::{AclEngine, Permission, Principal},
     nfs::{NfsAccessRepository, NfsBindingPermission, NfsBindingRepository, resolve_nfs_identity},
     path::SafePathResolver,
 };
+use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
-use tokio::{fs, sync::Mutex};
+use tokio::{
+    fs,
+    net::UdpSocket,
+    sync::Mutex,
+};
 
 use crate::{
     handle::FileHandleTable,
     rpc::{
-        RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
+        AUTH_NONE, RPC_VERSION, RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
         accepted_success, decode_call, denied_rpc_mismatch,
     },
+    rpcbind::{RpcTransport, lookup_port},
     transport::{read_record, write_record},
     xdr::{XdrReader, XdrWriter},
 };
@@ -27,6 +38,14 @@ const NLMPROC4_TEST: u32 = 1;
 const NLMPROC4_LOCK: u32 = 2;
 const NLMPROC4_CANCEL: u32 = 3;
 const NLMPROC4_UNLOCK: u32 = 4;
+const NLMPROC4_TEST_MSG: u32 = 6;
+const NLMPROC4_LOCK_MSG: u32 = 7;
+const NLMPROC4_CANCEL_MSG: u32 = 8;
+const NLMPROC4_UNLOCK_MSG: u32 = 9;
+const NLMPROC4_TEST_RES: u32 = 11;
+const NLMPROC4_LOCK_RES: u32 = 12;
+const NLMPROC4_CANCEL_RES: u32 = 13;
+const NLMPROC4_UNLOCK_RES: u32 = 14;
 const NLMPROC4_NM_LOCK: u32 = 22;
 const NLMPROC4_FREE_ALL: u32 = 23;
 
@@ -114,6 +133,7 @@ pub struct NlmV4Service {
     access_repository: Arc<dyn NfsAccessRepository>,
     handles: FileHandleTable,
     locks: Arc<Mutex<Vec<HeldLock>>>,
+    callback_rpcbind_port: u16,
 }
 
 impl NlmV4Service {
@@ -127,6 +147,79 @@ impl NlmV4Service {
             access_repository,
             handles,
             locks: Arc::new(Mutex::new(Vec::new())),
+            callback_rpcbind_port: 111,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_callback_rpcbind_port(mut self, port: u16) -> Self {
+        self.callback_rpcbind_port = port;
+        self
+    }
+
+    async fn send_callback(&self, client_ip: IpAddr, procedure: u32, body: &[u8]) -> bool {
+        let rpcbind_address = SocketAddr::new(client_ip, self.callback_rpcbind_port);
+        let port = match lookup_port(
+            rpcbind_address,
+            NLM_PROGRAM,
+            NLM_VERSION,
+            RpcTransport::Udp,
+        )
+        .await
+        {
+            Ok(Some(port)) => port,
+            Ok(None) => {
+                trace_callback_failure(client_ip, procedure, "client NLMv4 UDP port is not registered");
+                return false;
+            }
+            Err(error) => {
+                if std::env::var_os("NAOS_NFS_TRACE_RPC").is_some() {
+                    eprintln!(
+                        "NLM4_CALLBACK peer={client_ip} procedure={procedure} rpcbind_error={error}"
+                    );
+                }
+                return false;
+            }
+        };
+
+        let bind_ip = if client_ip.is_ipv4() {
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        } else {
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+        };
+        let socket = match UdpSocket::bind(SocketAddr::new(bind_ip, 0)).await {
+            Ok(socket) => socket,
+            Err(error) => {
+                if std::env::var_os("NAOS_NFS_TRACE_RPC").is_some() {
+                    eprintln!(
+                        "NLM4_CALLBACK peer={client_ip} procedure={procedure} bind_error={error}"
+                    );
+                }
+                return false;
+            }
+        };
+
+        let payload = callback_rpc_call(procedure, body);
+        let target = SocketAddr::new(client_ip, port);
+        match socket.send_to(&payload, target).await {
+            Ok(sent) if sent == payload.len() => true,
+            Ok(sent) => {
+                if std::env::var_os("NAOS_NFS_TRACE_RPC").is_some() {
+                    eprintln!(
+                        "NLM4_CALLBACK peer={client_ip} procedure={procedure} short_send={sent}/{}",
+                        payload.len()
+                    );
+                }
+                false
+            }
+            Err(error) => {
+                if std::env::var_os("NAOS_NFS_TRACE_RPC").is_some() {
+                    eprintln!(
+                        "NLM4_CALLBACK peer={client_ip} procedure={procedure} send_error={error}"
+                    );
+                }
+                false
+            }
         }
     }
 
@@ -523,6 +616,10 @@ pub async fn dispatch_nlm4_rpc(
         NLMPROC4_LOCK | NLMPROC4_NM_LOCK => lock_reply(service, client_ip, &call).await,
         NLMPROC4_CANCEL => cancel_reply(service, client_ip, &call).await,
         NLMPROC4_UNLOCK => unlock_reply(service, client_ip, &call).await,
+        NLMPROC4_TEST_MSG => test_msg_reply(service, client_ip, &call).await,
+        NLMPROC4_LOCK_MSG => lock_msg_reply(service, client_ip, &call).await,
+        NLMPROC4_CANCEL_MSG => cancel_msg_reply(service, client_ip, &call).await,
+        NLMPROC4_UNLOCK_MSG => unlock_msg_reply(service, client_ip, &call).await,
         NLMPROC4_FREE_ALL => free_all_reply(service, client_ip, &call).await,
         _ => accepted_procedure_unavailable(call.xid),
     }
@@ -633,6 +730,135 @@ async fn unlock_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall)
     accepted_success(call.xid, &encode_result(&result))
 }
 
+async fn test_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let cookie = match reader.opaque(MAX_NETOBJ_BYTES) {
+        Ok(cookie) => cookie,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let exclusive = match decode_bool(&mut reader) {
+        Ok(value) => value,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let lock = match decode_lock(&mut reader) {
+        Ok(lock) => lock,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let result = service
+        .test(client_ip, &call.credential, cookie, exclusive, lock)
+        .await;
+    let _ = service
+        .send_callback(client_ip, NLMPROC4_TEST_RES, &encode_test_result(&result))
+        .await;
+    accepted_success(call.xid, &[])
+}
+
+async fn lock_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let cookie = match reader.opaque(MAX_NETOBJ_BYTES) {
+        Ok(cookie) => cookie,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if decode_bool(&mut reader).is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+    let exclusive = match decode_bool(&mut reader) {
+        Ok(value) => value,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let lock = match decode_lock(&mut reader) {
+        Ok(lock) => lock,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let reclaim = match decode_bool(&mut reader) {
+        Ok(value) => value,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.u32().is_err() || reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let rollback_lock = lock.clone();
+    let rollback_cookie = cookie.clone();
+    let result = service
+        .lock(
+            client_ip,
+            &call.credential,
+            cookie,
+            exclusive,
+            lock,
+            reclaim,
+        )
+        .await;
+    let callback_sent = service
+        .send_callback(client_ip, NLMPROC4_LOCK_RES, &encode_result(&result))
+        .await;
+    if !callback_sent && result.status == NLM4_GRANTED {
+        let _ = service
+            .unlock(
+                client_ip,
+                &call.credential,
+                rollback_cookie,
+                rollback_lock,
+            )
+            .await;
+    }
+    accepted_success(call.xid, &[])
+}
+
+async fn cancel_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let cookie = match reader.opaque(MAX_NETOBJ_BYTES) {
+        Ok(cookie) => cookie,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if decode_bool(&mut reader).is_err() || decode_bool(&mut reader).is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+    let lock = match decode_lock(&mut reader) {
+        Ok(lock) => lock,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let result = service
+        .cancel(client_ip, &call.credential, cookie, lock)
+        .await;
+    let _ = service
+        .send_callback(client_ip, NLMPROC4_CANCEL_RES, &encode_result(&result))
+        .await;
+    accepted_success(call.xid, &[])
+}
+
+async fn unlock_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let cookie = match reader.opaque(MAX_NETOBJ_BYTES) {
+        Ok(cookie) => cookie,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let lock = match decode_lock(&mut reader) {
+        Ok(lock) => lock,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let result = service
+        .unlock(client_ip, &call.credential, cookie, lock)
+        .await;
+    let _ = service
+        .send_callback(client_ip, NLMPROC4_UNLOCK_RES, &encode_result(&result))
+        .await;
+    accepted_success(call.xid, &[])
+}
+
 async fn free_all_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
     let mut reader = XdrReader::new(&call.body);
     let caller_name = match reader.string(MAX_NOTIFY_NAME_BYTES) {
@@ -646,6 +872,32 @@ async fn free_all_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCal
         .free_all(client_ip, &call.credential, &caller_name)
         .await;
     accepted_success(call.xid, &[])
+}
+
+fn callback_rpc_call(procedure: u32, body: &[u8]) -> Vec<u8> {
+    let mut xid = [0u8; 4];
+    OsRng.fill_bytes(&mut xid);
+
+    let mut writer = XdrWriter::new();
+    writer.u32(u32::from_be_bytes(xid));
+    writer.u32(0);
+    writer.u32(RPC_VERSION);
+    writer.u32(NLM_PROGRAM);
+    writer.u32(NLM_VERSION);
+    writer.u32(procedure);
+    writer.u32(AUTH_NONE);
+    writer.u32(0);
+    writer.u32(AUTH_NONE);
+    writer.u32(0);
+    let mut output = writer.into_bytes();
+    output.extend_from_slice(body);
+    output
+}
+
+fn trace_callback_failure(client_ip: IpAddr, procedure: u32, reason: &str) {
+    if std::env::var_os("NAOS_NFS_TRACE_RPC").is_some() {
+        eprintln!("NLM4_CALLBACK peer={client_ip} procedure={procedure} failure={reason}");
+    }
 }
 
 fn decode_bool(reader: &mut XdrReader<'_>) -> Result<bool, ()> {
@@ -783,7 +1035,7 @@ mod tests {
             binding: NfsBinding {
                 id: "bind".to_owned(),
                 share_id: export.id.clone(),
-                cidr: "192.168.1.0/24".parse::<NfsCidr>().unwrap(),
+                cidr: "0.0.0.0/0".parse::<NfsCidr>().unwrap(),
                 uid: None,
                 user_id: "usr_alice".to_owned(),
                 permission: NfsBindingPermission::ReadWrite,
@@ -823,6 +1075,176 @@ mod tests {
             offset,
             length,
         }
+    }
+
+    fn encode_lock(writer: &mut XdrWriter, lock: &NlmLock) {
+        writer.string(&lock.caller_name).unwrap();
+        writer.opaque(&lock.file_handle).unwrap();
+        writer.opaque(&lock.owner_handle).unwrap();
+        writer.u32(lock.svid as u32);
+        writer.u64(lock.offset);
+        writer.u64(lock.length);
+    }
+
+    fn rpc_call(
+        xid: u32,
+        procedure: u32,
+        credential: RpcCredential,
+        body: &[u8],
+    ) -> Vec<u8> {
+        let mut writer = XdrWriter::new();
+        writer.u32(xid);
+        writer.u32(0);
+        writer.u32(RPC_VERSION);
+        writer.u32(NLM_PROGRAM);
+        writer.u32(NLM_VERSION);
+        writer.u32(procedure);
+        match credential {
+            RpcCredential::AuthSys(credential) => {
+                let mut auth = XdrWriter::new();
+                auth.u32(credential.stamp);
+                auth.string(&credential.machine_name).unwrap();
+                auth.u32(credential.uid);
+                auth.u32(credential.gid);
+                auth.u32_array(&credential.auxiliary_gids).unwrap();
+                writer.u32(crate::rpc::AUTH_SYS);
+                writer.opaque(&auth.into_bytes()).unwrap();
+            }
+            _ => {
+                writer.u32(AUTH_NONE);
+                writer.opaque(&[]).unwrap();
+            }
+        }
+        writer.u32(AUTH_NONE);
+        writer.opaque(&[]).unwrap();
+        let mut output = writer.into_bytes();
+        output.extend_from_slice(body);
+        output
+    }
+
+    async fn fake_callback_endpoints(
+        callback_port: u16,
+    ) -> (tokio::net::TcpListener, u16) {
+        let portmapper = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        (portmapper, callback_port)
+    }
+
+    async fn serve_one_port_lookup(portmapper: tokio::net::TcpListener, callback_port: u16) {
+        let (mut stream, _) = portmapper.accept().await.unwrap();
+        let request = read_record(&mut stream).await.unwrap().unwrap();
+        let call = decode_call(&request).unwrap();
+        assert_eq!(call.program, 100000);
+        assert_eq!(call.version, 2);
+        assert_eq!(call.procedure, 3);
+        let mut mapping = XdrReader::new(&call.body);
+        assert_eq!(mapping.u32().unwrap(), NLM_PROGRAM);
+        assert_eq!(mapping.u32().unwrap(), NLM_VERSION);
+        assert_eq!(mapping.u32().unwrap(), 17);
+        assert_eq!(mapping.u32().unwrap(), 0);
+        mapping.finish().unwrap();
+
+        let mut body = XdrWriter::new();
+        body.u32(u32::from(callback_port));
+        let reply = accepted_success(call.xid, &body.into_bytes());
+        write_record(&mut stream, &reply).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn lock_msg_sends_granted_lock_res_callback() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+
+        let callback = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let callback_port = callback.local_addr().unwrap().port();
+        let (portmapper, _) = fake_callback_endpoints(callback_port).await;
+        let rpcbind_port = portmapper.local_addr().unwrap().port();
+        let portmapper_task = tokio::spawn(serve_one_port_lookup(portmapper, callback_port));
+        let service = service.with_callback_rpcbind_port(rpcbind_port);
+
+        let requested_lock = lock(handle, "client-a", 10, 0, 100);
+        let mut body = XdrWriter::new();
+        body.opaque(&[9]).unwrap();
+        body.u32(0);
+        body.u32(1);
+        encode_lock(&mut body, &requested_lock);
+        body.u32(0);
+        body.u32(0);
+        let request = rpc_call(77, NLMPROC4_LOCK_MSG, credential(1000), &body.into_bytes());
+
+        let reply =
+            dispatch_nlm4_rpc(&service, "127.0.0.1".parse().unwrap(), &request).await;
+        let mut reply_reader = XdrReader::new(&reply);
+        assert_eq!(reply_reader.u32().unwrap(), 77);
+        assert_eq!(reply_reader.u32().unwrap(), 1);
+        assert_eq!(reply_reader.u32().unwrap(), 0);
+        assert_eq!(reply_reader.u32().unwrap(), AUTH_NONE);
+        assert!(reply_reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reply_reader.u32().unwrap(), 0);
+        reply_reader.finish().unwrap();
+
+        let mut datagram = vec![0u8; 4096];
+        let (length, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            callback.recv_from(&mut datagram),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let callback_call = decode_call(&datagram[..length]).unwrap();
+        assert_eq!(callback_call.program, NLM_PROGRAM);
+        assert_eq!(callback_call.version, NLM_VERSION);
+        assert_eq!(callback_call.procedure, NLMPROC4_LOCK_RES);
+        let mut result = XdrReader::new(&callback_call.body);
+        assert_eq!(result.opaque(16).unwrap(), vec![9]);
+        assert_eq!(result.u32().unwrap(), NLM4_GRANTED);
+        result.finish().unwrap();
+
+        portmapper_task.await.unwrap();
+        assert_eq!(service.locks.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn granted_lock_msg_rolls_back_when_callback_is_unavailable() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+
+        let portmapper = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let rpcbind_port = portmapper.local_addr().unwrap().port();
+        let portmapper_task = tokio::spawn(async move {
+            let (mut stream, _) = portmapper.accept().await.unwrap();
+            let request = read_record(&mut stream).await.unwrap().unwrap();
+            let call = decode_call(&request).unwrap();
+            let mut body = XdrWriter::new();
+            body.u32(0);
+            write_record(&mut stream, &accepted_success(call.xid, &body.into_bytes()))
+                .await
+                .unwrap();
+        });
+        let service = service.with_callback_rpcbind_port(rpcbind_port);
+
+        let requested_lock = lock(handle, "client-a", 10, 0, 100);
+        let mut body = XdrWriter::new();
+        body.opaque(&[8]).unwrap();
+        body.u32(0);
+        body.u32(1);
+        encode_lock(&mut body, &requested_lock);
+        body.u32(0);
+        body.u32(0);
+        let request = rpc_call(78, NLMPROC4_LOCK_MSG, credential(1000), &body.into_bytes());
+
+        let reply =
+            dispatch_nlm4_rpc(&service, "127.0.0.1".parse().unwrap(), &request).await;
+        assert!(!reply.is_empty());
+        portmapper_task.await.unwrap();
+        assert!(service.locks.lock().await.is_empty());
     }
 
     #[tokio::test]
