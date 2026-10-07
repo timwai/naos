@@ -2,6 +2,7 @@ export const queryKeys = {
   auth: {
     session: () => ["auth", "session"] as const,
     setup: () => ["auth", "setup"] as const,
+    sessions: () => ["auth", "sessions"] as const,
   },
   health: {
     ready: () => ["health", "ready"] as const,

@@ -5,6 +5,10 @@ export type AuthSessionResponse =
   components["schemas"]["AuthSessionResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
+export type PasswordChangeRequest =
+  components["schemas"]["PasswordChangeRequest"];
+export type SessionDto = components["schemas"]["SessionDto"];
+export type SessionsResponse = components["schemas"]["SessionsResponse"];
 export type SetupAdminRequest =
   components["schemas"]["SetupAdminRequest"];
 export type SetupStatusResponse =
@@ -104,6 +108,24 @@ export async function login(input: LoginRequest) {
 export async function logout() {
   await requestJson<void>("/api/v1/auth/logout", { method: "POST" });
   csrfToken = null;
+}
+
+export async function changePassword(input: PasswordChangeRequest) {
+  return requestJson<void>("/api/v1/auth/password", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listSessions() {
+  return requestJson<SessionsResponse>("/api/v1/auth/sessions");
+}
+
+export async function revokeSession(sessionId: string) {
+  return requestJson<void>(
+    `/api/v1/auth/sessions/${encodeURIComponent(sessionId)}`,
+    { method: "DELETE" },
+  );
 }
 
 export async function getReadiness(): Promise<HealthResponse> {

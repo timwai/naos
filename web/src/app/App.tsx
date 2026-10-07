@@ -5,6 +5,7 @@ import { AppShell } from "./layout/AppShell";
 import { DashboardPage } from "../pages/DashboardPage";
 import { LoginPage } from "../pages/LoginPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
+import { ProfilePage } from "../pages/ProfilePage";
 
 function RequireAuth() {
   const session = useSession();
@@ -59,10 +60,7 @@ export function App() {
             path="settings"
             element={<PlaceholderPage title="设置" description="Doctor / Verify 会通过 Operation 模型接入。" />}
           />
-          <Route
-            path="profile"
-            element={<PlaceholderPage title="个人安全" description="会话与密码管理将复用现有认证 API。" />}
-          />
+          <Route path="profile" element={<ProfilePage />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -358,3 +358,110 @@ input:focus {
     padding-right: 18px;
   }
 }
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.4fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.profile-panel {
+  margin-top: 0;
+}
+
+.panel-heading > div > p {
+  margin: 5px 0 0;
+  color: var(--tx-muted);
+}
+
+.success-box {
+  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border));
+  background: color-mix(in srgb, var(--success) 8%, var(--card));
+  color: var(--success);
+  border-radius: 10px;
+  padding: 11px 12px;
+}
+
+.session-list {
+  margin-top: 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.session-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+}
+
+.session-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.session-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.session-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.session-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin: 10px 0 0;
+}
+
+.session-meta div {
+  display: grid;
+  gap: 2px;
+}
+
+.session-meta dt {
+  color: var(--tx-muted);
+  font-size: 12px;
+}
+
+.session-meta dd {
+  margin: 0;
+  font-size: 13px;
+}
+
+.button.danger {
+  background: color-mix(in srgb, var(--danger) 8%, var(--card));
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--border));
+  color: var(--danger);
+}
+
+.session-error {
+  margin-top: 12px;
+}
+
+@media (max-width: 960px) {
+  .profile-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .session-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .session-row .button {
+    width: 100%;
+  }
+}
