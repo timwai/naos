@@ -42,9 +42,14 @@ on:
     branches: [main]
     paths:
       - "crates/naos-nfs/**"
+      - "crates/naos-core/src/nfs.rs"
       - "crates/naos-core/src/path.rs"
+      - "crates/naos-store/src/nfs.rs"
+      - "crates/naos-store/migrations/*nfs*.sql"
+      - "crates/naosd/src/main.rs"
       - "scripts/ci/nfs-real-smoke.sh"
       - "scripts/ci/nfs-remote-lock-smoke.sh"
+      - "scripts/ci/windows-nfs-real-smoke.ps1"
       - ".github/workflows/nfs-real-smoke.yml"
 
 jobs:
