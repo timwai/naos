@@ -9,7 +9,8 @@ use thiserror::Error;
 use crate::{
     handle::FileHandleTable,
     rpc::{
-        AUTH_NONE, AUTH_SYS, RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
+        AUTH_NONE, AUTH_SYS, RPCSEC_GSS, RpcCall, RpcCredential, RpcDecodeError,
+        accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
         accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch,
         rpcsec_gss_unavailable_reply,
@@ -122,6 +123,7 @@ impl MountService {
         let auth_flavors = match identity.level {
             NfsBindingLevel::L1 => vec![AUTH_SYS, AUTH_NONE],
             NfsBindingLevel::L2 => vec![AUTH_SYS],
+            NfsBindingLevel::L3 => vec![RPCSEC_GSS],
         };
         let (file_handle, record) = self.handles.issue_root_with_record(&export);
         if let Some(record) = record {
@@ -572,6 +574,9 @@ mod tests {
                 body.opaque(&credential.handle).unwrap();
                 writer.u32(crate::rpc::RPCSEC_GSS);
                 writer.opaque(&body.into_bytes()).unwrap();
+            }
+            RpcCredential::RpcSecGssAuthenticated { .. } => {
+                unreachable!("authenticated RPCSEC_GSS credentials are internal-only")
             }
             RpcCredential::Unsupported { flavor } => {
                 writer.u32(flavor);

@@ -13,8 +13,9 @@ use filetime::FileTime;
 use naos_core::{
     acl::{AclEngine, FileOperation, Permission, Principal},
     nfs::{
-        NfsAccessRepository, NfsBindingPermission, NfsBindingRepository, NfsExport,
-        NfsIdentityError, NfsRepositoryError, ResolvedNfsIdentity, resolve_nfs_identity,
+        NfsAccessRepository, NfsBindingLevel, NfsBindingPermission, NfsBindingRepository,
+        NfsExport, NfsIdentityError, NfsRepositoryError, ResolvedNfsIdentity,
+        resolve_nfs_identity,
     },
     path::{PathError, RelativePath, SafePathResolver},
 };
@@ -30,10 +31,15 @@ use tokio::{
 use crate::{
     handle::{FileHandleChanges, FileHandleError, FileHandleTable},
     rpc::{
-        RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
+        AUTH_BADCRED, AUTH_BADVERF, RPCSEC_GSS_CREDPROBLEM, RPCSEC_GSS_CTXPROBLEM,
+        RPCSEC_GSS_DATA, RpcCall, RpcCredential, RpcDecodeError, accepted_garbage_args,
         accepted_procedure_unavailable, accepted_program_mismatch, accepted_program_unavailable,
-        accepted_success, accepted_system_error, decode_call, denied_rpc_mismatch,
-        rpcsec_gss_unavailable_reply,
+        accepted_success, accepted_system_error, decode_call, denied_auth_error,
+        denied_rpc_mismatch, rpcsec_gss_unavailable_reply,
+    },
+    rpcsec_gss::{
+        RpcSecGssContextRegistry, RpcSecGssDataError, RpcSecGssRegistryError,
+        authenticate_data_call,
     },
     transport::{read_record, write_record},
     xdr::{XdrReader, XdrWriter},
@@ -333,6 +339,7 @@ pub struct NfsV3Service {
     access_repository: Arc<dyn NfsAccessRepository>,
     handles: FileHandleTable,
     write_verifier: [u8; 8],
+    rpcsec_gss_registry: Option<RpcSecGssContextRegistry>,
 }
 
 struct HandleContext {
@@ -354,6 +361,7 @@ impl NfsV3Service {
             access_repository,
             handles,
             write_verifier,
+            rpcsec_gss_registry: None,
         }
     }
 
@@ -368,7 +376,13 @@ impl NfsV3Service {
             access_repository,
             handles,
             write_verifier,
+            rpcsec_gss_registry: None,
         }
+    }
+
+    pub fn with_rpcsec_gss_registry(mut self, registry: RpcSecGssContextRegistry) -> Self {
+        self.rpcsec_gss_registry = Some(registry);
+        self
     }
 
     pub async fn getattr(
@@ -1165,27 +1179,45 @@ impl NfsV3Service {
         credential: &RpcCredential,
         handle: &[u8],
     ) -> Result<HandleContext, NfsV3Error> {
-        if !matches!(
-            credential,
-            RpcCredential::AuthNone | RpcCredential::AuthSys(_)
-        ) {
-            return Err(NfsV3Error::AccessDenied);
-        }
-
         let exports = self.identity_repository.list_enabled_nfs_exports().await?;
         let resolved = self.handles.resolve(handle, &exports)?;
-        let bindings = self
-            .identity_repository
-            .list_nfs_bindings(&resolved.export.id)
-            .await?;
-        let identity = resolve_nfs_identity(&bindings, client_ip, credential.uid())?
-            .ok_or(NfsV3Error::AccessDenied)?;
+        let identity = match credential {
+            RpcCredential::AuthNone | RpcCredential::AuthSys(_) => {
+                let bindings = self
+                    .identity_repository
+                    .list_nfs_bindings(&resolved.export.id)
+                    .await?;
+                resolve_nfs_identity(&bindings, client_ip, credential.uid())?
+                    .ok_or(NfsV3Error::AccessDenied)?
+            }
+            RpcCredential::RpcSecGssAuthenticated { principal, user_id } => {
+                ResolvedNfsIdentity {
+                    binding_id: format!("krb:{principal}"),
+                    user_id: user_id.clone(),
+                    permission: NfsBindingPermission::ReadWrite,
+                    level: NfsBindingLevel::L3,
+                }
+            }
+            RpcCredential::RpcSecGss(_) | RpcCredential::Unsupported { .. } => {
+                return Err(NfsV3Error::AccessDenied);
+            }
+        };
 
         Ok(HandleContext {
             export: resolved.export,
             relative_path: resolved.relative_path,
             identity,
         })
+    }
+
+    async fn resolve_rpcsec_gss_user(
+        &self,
+        principal: &str,
+    ) -> Result<Option<String>, NfsV3Error> {
+        Ok(self
+            .identity_repository
+            .resolve_nfs_krb_principal(principal)
+            .await?)
     }
 
     async fn authorize(
@@ -1535,10 +1567,27 @@ pub async fn dispatch_nfs3_rpc(
         Err(RpcDecodeError::Xdr(_)) => return Vec::new(),
     };
 
+    if matches!(
+        &call.credential,
+        RpcCredential::RpcSecGss(credential) if credential.gss_proc == RPCSEC_GSS_DATA
+    ) {
+        if let Some(registry) = service.rpcsec_gss_registry.as_ref() {
+            return dispatch_rpcsec_gss_data(service, registry, client_ip, &call).await;
+        }
+    }
+
     if let Some(reply) = rpcsec_gss_unavailable_reply(&call) {
         return reply;
     }
 
+    dispatch_nfs3_call(service, client_ip, &call).await
+}
+
+async fn dispatch_nfs3_call(
+    service: &NfsV3Service,
+    client_ip: IpAddr,
+    call: &RpcCall,
+) -> Vec<u8> {
     if call.program != NFS_PROGRAM {
         return accepted_program_unavailable(call.xid);
     }
@@ -1570,6 +1619,66 @@ pub async fn dispatch_nfs3_rpc(
         NFSPROC3_PATHCONF => pathconf_reply(service, client_ip, &call).await,
         NFSPROC3_COMMIT => commit_reply(service, client_ip, &call).await,
         _ => accepted_procedure_unavailable(call.xid),
+    }
+}
+
+async fn dispatch_rpcsec_gss_data(
+    service: &NfsV3Service,
+    registry: &RpcSecGssContextRegistry,
+    client_ip: IpAddr,
+    call: &RpcCall,
+) -> Vec<u8> {
+    let authenticated = match authenticate_data_call(registry, call).await {
+        Ok(authenticated) => authenticated,
+        Err(error) => return rpcsec_gss_data_error_reply(call.xid, error),
+    };
+
+    let user_id = match service
+        .resolve_rpcsec_gss_user(authenticated.principal())
+        .await
+    {
+        Ok(Some(user_id)) => user_id,
+        Ok(None) | Err(_) => {
+            return denied_auth_error(call.xid, RPCSEC_GSS_CREDPROBLEM);
+        }
+    };
+
+    let mut trusted_call = call.clone();
+    trusted_call.credential = RpcCredential::RpcSecGssAuthenticated {
+        principal: authenticated.principal().to_owned(),
+        user_id,
+    };
+    trusted_call.body = authenticated.arguments().to_vec();
+
+    let reply = dispatch_nfs3_call(service, client_ip, &trusted_call).await;
+    authenticated
+        .protect_accepted_reply(&reply)
+        .unwrap_or_default()
+}
+
+fn rpcsec_gss_data_error_reply(xid: u32, error: RpcSecGssDataError) -> Vec<u8> {
+    match error {
+        RpcSecGssDataError::Registry(
+            RpcSecGssRegistryError::Replay | RpcSecGssRegistryError::TooOld,
+        )
+        | RpcSecGssDataError::InvalidReply => Vec::new(),
+        RpcSecGssDataError::Registry(RpcSecGssRegistryError::InvalidHandle) => {
+            denied_auth_error(xid, RPCSEC_GSS_CTXPROBLEM)
+        }
+        RpcSecGssDataError::InvalidVerifier => denied_auth_error(xid, AUTH_BADVERF),
+        RpcSecGssDataError::NotDataCall
+        | RpcSecGssDataError::InvalidCredential
+        | RpcSecGssDataError::InvalidService
+        | RpcSecGssDataError::Registry(RpcSecGssRegistryError::SequenceOutOfRange) => {
+            denied_auth_error(xid, AUTH_BADCRED)
+        }
+        RpcSecGssDataError::Registry(
+            RpcSecGssRegistryError::DuplicateHandle
+            | RpcSecGssRegistryError::InvalidSequenceWindow,
+        )
+        | RpcSecGssDataError::Security(_)
+        | RpcSecGssDataError::Body(_)
+        | RpcSecGssDataError::Xdr(_) => denied_auth_error(xid, RPCSEC_GSS_CREDPROBLEM),
     }
 }
 
@@ -2489,6 +2598,7 @@ mod tests {
         exports: BTreeMap<String, NfsExport>,
         bindings: BTreeMap<String, Vec<NfsBinding>>,
         rules: BTreeMap<String, Vec<AclRule>>,
+        krb_principals: BTreeMap<String, String>,
     }
 
     #[async_trait]
@@ -2510,6 +2620,13 @@ mod tests {
 
         async fn nfs_user_exists(&self, _user_id: &str) -> Result<bool, NfsRepositoryError> {
             Ok(true)
+        }
+
+        async fn resolve_nfs_krb_principal(
+            &self,
+            principal: &str,
+        ) -> Result<Option<String>, NfsRepositoryError> {
+            Ok(self.krb_principals.get(principal).cloned())
         }
 
         async fn list_nfs_bindings(
@@ -2559,6 +2676,49 @@ mod tests {
         }
     }
 
+    struct FakeGssContext {
+        principal: String,
+    }
+
+    impl crate::rpcsec_gss::RpcSecGssSecurityContext for FakeGssContext {
+        fn principal(&self) -> &str {
+            &self.principal
+        }
+
+        fn verify_mic(
+            &self,
+            message: &[u8],
+            mic: &[u8],
+        ) -> Result<(), crate::rpcsec_gss::RpcSecGssSecurityError> {
+            if message == mic {
+                Ok(())
+            } else {
+                Err(crate::rpcsec_gss::RpcSecGssSecurityError::BadMic)
+            }
+        }
+
+        fn get_mic(
+            &self,
+            message: &[u8],
+        ) -> Result<Vec<u8>, crate::rpcsec_gss::RpcSecGssSecurityError> {
+            Ok(message.to_vec())
+        }
+
+        fn unwrap(
+            &self,
+            ciphertext: &[u8],
+        ) -> Result<Vec<u8>, crate::rpcsec_gss::RpcSecGssSecurityError> {
+            Ok(ciphertext.to_vec())
+        }
+
+        fn wrap(
+            &self,
+            plaintext: &[u8],
+        ) -> Result<Vec<u8>, crate::rpcsec_gss::RpcSecGssSecurityError> {
+            Ok(plaintext.to_vec())
+        }
+    }
+
     fn auth_sys(uid: u32) -> RpcCredential {
         RpcCredential::AuthSys(crate::rpc::AuthSysCredential {
             stamp: 1,
@@ -2601,6 +2761,10 @@ mod tests {
                     inherit: true,
                 }],
             )]),
+            krb_principals: BTreeMap::from([(
+                "alice@EXAMPLE.COM".to_owned(),
+                "usr_alice".to_owned(),
+            )]),
         })
     }
 
@@ -2618,6 +2782,51 @@ mod tests {
             [7; 8],
         );
         (service, handles, export)
+    }
+
+    #[tokio::test]
+    async fn rpcsec_gss_data_dispatch_maps_principal_to_l3_acl_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("report.txt"), b"hello").unwrap();
+        let (service, handles, export) = service(temp.path(), NfsBindingPermission::ReadOnly);
+        let file_handle = handles.issue(&export, &RelativePath::parse("/report.txt").unwrap());
+        let registry = RpcSecGssContextRegistry::new();
+        registry
+            .insert(
+                b"ctx".to_vec(),
+                8,
+                Arc::new(FakeGssContext {
+                    principal: "alice@EXAMPLE.COM".to_owned(),
+                }),
+            )
+            .await
+            .unwrap();
+        let service = service.with_rpcsec_gss_registry(registry);
+
+        let mut body = XdrWriter::new();
+        body.opaque(&file_handle).unwrap();
+        let request = rpcsec_gss_call(
+            501,
+            NFSPROC3_GETATTR,
+            10,
+            crate::rpc::RPCSEC_GSS_SVC_NONE,
+            &body.into_bytes(),
+        );
+        let reply =
+            dispatch_nfs3_rpc(&service, "203.0.113.77".parse().unwrap(), &request).await;
+
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 501);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), crate::rpc::RPCSEC_GSS);
+        assert_eq!(reader.opaque(64).unwrap(), 10u32.to_be_bytes());
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), NFS3_OK);
+
+        let replay =
+            dispatch_nfs3_rpc(&service, "203.0.113.77".parse().unwrap(), &request).await;
+        assert!(replay.is_empty());
     }
 
     #[tokio::test]
@@ -3131,6 +3340,41 @@ mod tests {
         writer.u32(0);
     }
 
+    fn rpcsec_gss_call(
+        xid: u32,
+        procedure: u32,
+        seq_num: u32,
+        service: u32,
+        body: &[u8],
+    ) -> Vec<u8> {
+        let mut writer = XdrWriter::new();
+        writer.u32(xid);
+        writer.u32(0);
+        writer.u32(crate::rpc::RPC_VERSION);
+        writer.u32(NFS_PROGRAM);
+        writer.u32(NFS_VERSION);
+        writer.u32(procedure);
+
+        let mut credential = XdrWriter::new();
+        credential.u32(crate::rpc::RPCSEC_GSS_VERSION_1);
+        credential.u32(crate::rpc::RPCSEC_GSS_DATA);
+        credential.u32(seq_num);
+        credential.u32(service);
+        credential.opaque(b"ctx").unwrap();
+        writer.u32(crate::rpc::RPCSEC_GSS);
+        writer.opaque(&credential.into_bytes()).unwrap();
+
+        let header = writer.into_bytes();
+        let mut tail = XdrWriter::new();
+        tail.u32(crate::rpc::RPCSEC_GSS);
+        tail.opaque(&header).unwrap();
+
+        let mut output = header;
+        output.extend_from_slice(&tail.into_bytes());
+        output.extend_from_slice(body);
+        output
+    }
+
     fn rpc_call(xid: u32, procedure: u32, credential: RpcCredential, body: &[u8]) -> Vec<u8> {
         let mut writer = XdrWriter::new();
         writer.u32(xid);
@@ -3172,6 +3416,9 @@ mod tests {
                 body.opaque(&credential.handle).unwrap();
                 writer.u32(crate::rpc::RPCSEC_GSS);
                 writer.opaque(&body.into_bytes()).unwrap();
+            }
+            RpcCredential::RpcSecGssAuthenticated { .. } => {
+                unreachable!("authenticated RPCSEC_GSS credentials are internal-only")
             }
             RpcCredential::Unsupported { flavor } => {
                 writer.u32(flavor);

@@ -5,11 +5,13 @@ use tokio::sync::Mutex;
 
 use crate::{
     rpc::{
-        MAX_AUTH_BYTES, MAX_RPC_RECORD_BYTES, RPCSEC_GSS, RPCSEC_GSS_DATA, RPCSEC_GSS_MAXSEQ,
-        RPCSEC_GSS_SVC_INTEGRITY, RPCSEC_GSS_SVC_NONE, RPCSEC_GSS_SVC_PRIVACY, RpcCall,
-        RpcCredential, RpcSecGssBodyError, RpcSecGssSequenceDecision, RpcSecGssSequenceWindow,
-        RpcVerifier, decode_rpcsec_gss_integrity_body, decode_rpcsec_gss_unwrapped_body,
-        encode_rpcsec_gss_integrity_body, encode_rpcsec_gss_plaintext, rpcsec_gss_u32_mic_input,
+        MAX_AUTH_BYTES, MAX_RPC_RECORD_BYTES, MSG_ACCEPTED, PROG_MISMATCH, REPLY, RPCSEC_GSS,
+        RPCSEC_GSS_DATA, RPCSEC_GSS_MAXSEQ, RPCSEC_GSS_SVC_INTEGRITY, RPCSEC_GSS_SVC_NONE,
+        RPCSEC_GSS_SVC_PRIVACY, RPCSEC_GSS_VERSION_1, SUCCESS, RpcCall, RpcCredential,
+        RpcSecGssBodyError, RpcSecGssSequenceDecision, RpcSecGssSequenceWindow, RpcVerifier,
+        accepted_reply_with_verifier, decode_rpcsec_gss_integrity_body,
+        decode_rpcsec_gss_unwrapped_body, encode_rpcsec_gss_integrity_body,
+        encode_rpcsec_gss_plaintext, rpcsec_gss_u32_mic_input,
     },
     xdr::{XdrError, XdrReader, XdrWriter},
 };
@@ -168,8 +170,12 @@ pub enum RpcSecGssDataError {
     NotDataCall,
     #[error("RPCSEC_GSS verifier is invalid")]
     InvalidVerifier,
+    #[error("RPCSEC_GSS credential is invalid")]
+    InvalidCredential,
     #[error("RPCSEC_GSS service is invalid")]
     InvalidService,
+    #[error("RPCSEC_GSS reply shape is invalid")]
+    InvalidReply,
     #[error(transparent)]
     Registry(#[from] RpcSecGssRegistryError),
     #[error(transparent)]
@@ -181,6 +187,7 @@ pub enum RpcSecGssDataError {
 }
 
 pub struct RpcSecGssAuthenticatedCall {
+    xid: u32,
     principal: String,
     seq_num: u32,
     service: u32,
@@ -205,16 +212,24 @@ impl RpcSecGssAuthenticatedCall {
         &self.arguments
     }
 
+    fn reply_verifier(&self) -> Result<RpcVerifier, RpcSecGssDataError> {
+        let body = self
+            .security
+            .get_mic(&rpcsec_gss_u32_mic_input(self.seq_num))?;
+        if body.len() > MAX_AUTH_BYTES {
+            return Err(XdrError::LimitExceeded.into());
+        }
+        Ok(RpcVerifier {
+            flavor: RPCSEC_GSS,
+            body,
+        })
+    }
+
     pub fn protect_reply(
         &self,
         arguments: &[u8],
     ) -> Result<RpcSecGssProtectedReply, RpcSecGssDataError> {
-        let verifier_body = self
-            .security
-            .get_mic(&rpcsec_gss_u32_mic_input(self.seq_num))?;
-        if verifier_body.len() > MAX_AUTH_BYTES {
-            return Err(XdrError::LimitExceeded.into());
-        }
+        let verifier = self.reply_verifier()?;
 
         let body = match self.service {
             RPCSEC_GSS_SVC_NONE => arguments.to_vec(),
@@ -234,13 +249,41 @@ impl RpcSecGssAuthenticatedCall {
             _ => return Err(RpcSecGssDataError::InvalidService),
         };
 
-        Ok(RpcSecGssProtectedReply {
-            verifier: RpcVerifier {
-                flavor: RPCSEC_GSS,
-                body: verifier_body,
-            },
-            body,
-        })
+        Ok(RpcSecGssProtectedReply { verifier, body })
+    }
+
+    pub fn protect_accepted_reply(&self, reply: &[u8]) -> Result<Vec<u8>, RpcSecGssDataError> {
+        let mut reader = XdrReader::new(reply);
+        let xid = reader.u32()?;
+        if xid != self.xid || reader.u32()? != REPLY || reader.u32()? != MSG_ACCEPTED {
+            return Err(RpcSecGssDataError::InvalidReply);
+        }
+
+        let _previous_verifier_flavor = reader.u32()?;
+        let _previous_verifier_body = reader.opaque(MAX_AUTH_BYTES)?;
+        let status = reader.u32()?;
+        let mismatch = if status == PROG_MISMATCH {
+            Some((reader.u32()?, reader.u32()?))
+        } else {
+            None
+        };
+        let body = reader.remaining();
+
+        if status == SUCCESS {
+            let protected = self.protect_reply(body)?;
+            Ok(accepted_reply_with_verifier(
+                xid,
+                status,
+                mismatch,
+                &protected.verifier,
+                &protected.body,
+            )?)
+        } else {
+            let verifier = self.reply_verifier()?;
+            Ok(accepted_reply_with_verifier(
+                xid, status, mismatch, &verifier, body,
+            )?)
+        }
     }
 }
 
@@ -259,6 +302,12 @@ pub async fn authenticate_data_call(
     };
     if credential.gss_proc != RPCSEC_GSS_DATA {
         return Err(RpcSecGssDataError::NotDataCall);
+    }
+    if credential.version != RPCSEC_GSS_VERSION_1
+        || credential.handle.is_empty()
+        || credential.seq_num >= RPCSEC_GSS_MAXSEQ
+    {
+        return Err(RpcSecGssDataError::InvalidCredential);
     }
     if call.verifier.flavor != RPCSEC_GSS || call.verifier.body.is_empty() {
         return Err(RpcSecGssDataError::InvalidVerifier);
@@ -288,6 +337,7 @@ pub async fn authenticate_data_call(
         .await?;
 
     Ok(RpcSecGssAuthenticatedCall {
+        xid: call.xid,
         principal: security.principal().to_owned(),
         seq_num: credential.seq_num,
         service: credential.service,
@@ -499,6 +549,7 @@ mod tests {
             RPCSEC_GSS_SVC_PRIVACY,
         ] {
             let authenticated = RpcSecGssAuthenticatedCall {
+                xid: 77,
                 principal: "alice@EXAMPLE.COM".to_owned(),
                 seq_num: 33,
                 service,

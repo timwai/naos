@@ -26,14 +26,14 @@ pub const MAX_AUTH_BYTES: usize = 400;
 pub const MAX_RPC_RECORD_BYTES: usize = 16 * 1024 * 1024;
 
 const CALL: u32 = 0;
-const REPLY: u32 = 1;
-const MSG_ACCEPTED: u32 = 0;
+pub(crate) const REPLY: u32 = 1;
+pub(crate) const MSG_ACCEPTED: u32 = 0;
 const MSG_DENIED: u32 = 1;
 const RPC_MISMATCH: u32 = 0;
 const AUTH_ERROR: u32 = 1;
-const SUCCESS: u32 = 0;
+pub(crate) const SUCCESS: u32 = 0;
 const PROG_UNAVAIL: u32 = 1;
-const PROG_MISMATCH: u32 = 2;
+pub(crate) const PROG_MISMATCH: u32 = 2;
 const PROC_UNAVAIL: u32 = 3;
 const GARBAGE_ARGS: u32 = 4;
 const SYSTEM_ERR: u32 = 5;
@@ -61,6 +61,10 @@ pub enum RpcCredential {
     AuthNone,
     AuthSys(AuthSysCredential),
     RpcSecGss(RpcSecGssCredential),
+    RpcSecGssAuthenticated {
+        principal: String,
+        user_id: String,
+    },
     Unsupported { flavor: u32 },
 }
 
@@ -172,7 +176,10 @@ impl RpcCredential {
     pub const fn uid(&self) -> Option<u32> {
         match self {
             Self::AuthSys(credential) => Some(credential.uid),
-            Self::AuthNone | Self::RpcSecGss(_) | Self::Unsupported { .. } => None,
+            Self::AuthNone
+            | Self::RpcSecGss(_)
+            | Self::RpcSecGssAuthenticated { .. }
+            | Self::Unsupported { .. } => None,
         }
     }
 
@@ -180,7 +187,7 @@ impl RpcCredential {
         match self {
             Self::AuthNone => AUTH_NONE,
             Self::AuthSys(_) => AUTH_SYS,
-            Self::RpcSecGss(_) => RPCSEC_GSS,
+            Self::RpcSecGss(_) | Self::RpcSecGssAuthenticated { .. } => RPCSEC_GSS,
             Self::Unsupported { flavor } => *flavor,
         }
     }
@@ -537,7 +544,7 @@ fn accepted_reply(xid: u32, status: u32, mismatch: Option<(u32, u32)>, body: &[u
     .expect("AUTH_NONE verifier is always encodable")
 }
 
-fn accepted_reply_with_verifier(
+pub(crate) fn accepted_reply_with_verifier(
     xid: u32,
     status: u32,
     mismatch: Option<(u32, u32)>,

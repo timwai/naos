@@ -137,6 +137,7 @@ pub enum NfsBindingParseError {
 pub enum NfsBindingLevel {
     L1,
     L2,
+    L3,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

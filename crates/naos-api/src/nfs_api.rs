@@ -152,6 +152,7 @@ fn binding_dto(binding: NfsBinding) -> NfsBindingDto {
     let level = match binding.level() {
         NfsBindingLevel::L1 => "l1",
         NfsBindingLevel::L2 => "l2",
+        NfsBindingLevel::L3 => "l3",
     }
     .to_owned();
 
