@@ -2,9 +2,7 @@ use std::{io, net::IpAddr, path::Path, sync::Arc};
 
 use naos_core::{
     acl::{AclEngine, Permission, Principal},
-    nfs::{
-        NfsAccessRepository, NfsBindingPermission, NfsBindingRepository, resolve_nfs_identity,
-    },
+    nfs::{NfsAccessRepository, NfsBindingPermission, NfsBindingRepository, resolve_nfs_identity},
     path::SafePathResolver,
 };
 use sha2::{Digest, Sha256};
@@ -140,22 +138,36 @@ impl NlmV4Service {
         exclusive: bool,
         lock: NlmLock,
     ) -> NlmTestResult {
-        let validated = match self.validate_lock(client_ip, credential, &lock, exclusive).await {
+        let validated = match self
+            .validate_lock(client_ip, credential, &lock, exclusive)
+            .await
+        {
             Ok(validated) => validated,
-            Err(status) => return NlmTestResult { cookie, status, holder: None },
+            Err(status) => {
+                return NlmTestResult {
+                    cookie,
+                    status,
+                    holder: None,
+                };
+            }
         };
 
         let locks = self.locks.lock().await;
-        if let Some(conflict) = locks.iter().find(|held| {
-            lock_conflicts(held, &validated, exclusive, lock.offset, lock.length)
-        }) {
+        if let Some(conflict) = locks
+            .iter()
+            .find(|held| lock_conflicts(held, &validated, exclusive, lock.offset, lock.length))
+        {
             NlmTestResult {
                 cookie,
                 status: NLM4_DENIED,
                 holder: Some(conflict.into()),
             }
         } else {
-            NlmTestResult { cookie, status: NLM4_GRANTED, holder: None }
+            NlmTestResult {
+                cookie,
+                status: NLM4_GRANTED,
+                holder: None,
+            }
         }
     }
 
@@ -169,19 +181,29 @@ impl NlmV4Service {
         reclaim: bool,
     ) -> NlmResult {
         if reclaim {
-            return NlmResult { cookie, status: NLM4_DENIED_GRACE_PERIOD };
+            return NlmResult {
+                cookie,
+                status: NLM4_DENIED_GRACE_PERIOD,
+            };
         }
 
-        let validated = match self.validate_lock(client_ip, credential, &lock, exclusive).await {
+        let validated = match self
+            .validate_lock(client_ip, credential, &lock, exclusive)
+            .await
+        {
             Ok(validated) => validated,
             Err(status) => return NlmResult { cookie, status },
         };
 
         let mut locks = self.locks.lock().await;
-        if locks.iter().any(|held| {
-            lock_conflicts(held, &validated, exclusive, lock.offset, lock.length)
-        }) {
-            return NlmResult { cookie, status: NLM4_DENIED };
+        if locks
+            .iter()
+            .any(|held| lock_conflicts(held, &validated, exclusive, lock.offset, lock.length))
+        {
+            return NlmResult {
+                cookie,
+                status: NLM4_DENIED,
+            };
         }
 
         replace_owner_range(
@@ -198,7 +220,10 @@ impl NlmV4Service {
             offset: lock.offset,
             length: lock.length,
         });
-        NlmResult { cookie, status: NLM4_GRANTED }
+        NlmResult {
+            cookie,
+            status: NLM4_GRANTED,
+        }
     }
 
     async fn unlock(
@@ -208,7 +233,10 @@ impl NlmV4Service {
         cookie: Vec<u8>,
         lock: NlmLock,
     ) -> NlmResult {
-        let validated = match self.validate_lock(client_ip, credential, &lock, false).await {
+        let validated = match self
+            .validate_lock(client_ip, credential, &lock, false)
+            .await
+        {
             Ok(validated) => validated,
             Err(status) => return NlmResult { cookie, status },
         };
@@ -221,7 +249,10 @@ impl NlmV4Service {
             lock.offset,
             lock.length,
         );
-        NlmResult { cookie, status: NLM4_GRANTED }
+        NlmResult {
+            cookie,
+            status: NLM4_GRANTED,
+        }
     }
 
     async fn cancel(
@@ -231,7 +262,10 @@ impl NlmV4Service {
         cookie: Vec<u8>,
         lock: NlmLock,
     ) -> NlmResult {
-        let status = match self.validate_lock(client_ip, credential, &lock, false).await {
+        let status = match self
+            .validate_lock(client_ip, credential, &lock, false)
+            .await
+        {
             Ok(_) => NLM4_GRANTED,
             Err(status) => status,
         };
@@ -298,7 +332,11 @@ impl NlmV4Service {
             },
             &resolved.relative_path,
         );
-        let required = if exclusive { Permission::ReadWrite } else { Permission::ReadOnly };
+        let required = if exclusive {
+            Permission::ReadWrite
+        } else {
+            Permission::ReadOnly
+        };
         if !permission.allows(required) {
             return Err(NLM4_DENIED);
         }
@@ -352,7 +390,12 @@ fn range_end(offset: u64, length: u64) -> u128 {
     }
 }
 
-fn ranges_overlap(left_offset: u64, left_length: u64, right_offset: u64, right_length: u64) -> bool {
+fn ranges_overlap(
+    left_offset: u64,
+    left_length: u64,
+    right_offset: u64,
+    right_length: u64,
+) -> bool {
     u128::from(left_offset) < range_end(right_offset, right_length)
         && u128::from(right_offset) < range_end(left_offset, left_length)
 }
@@ -528,7 +571,14 @@ async fn lock_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -
     }
 
     let result = service
-        .lock(client_ip, &call.credential, cookie, exclusive, lock, reclaim)
+        .lock(
+            client_ip,
+            &call.credential,
+            cookie,
+            exclusive,
+            lock,
+            reclaim,
+        )
         .await;
     accepted_success(call.xid, &encode_result(&result))
 }
@@ -550,7 +600,9 @@ async fn cancel_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall)
         return accepted_garbage_args(call.xid);
     }
 
-    let result = service.cancel(client_ip, &call.credential, cookie, lock).await;
+    let result = service
+        .cancel(client_ip, &call.credential, cookie, lock)
+        .await;
     accepted_success(call.xid, &encode_result(&result))
 }
 
@@ -568,7 +620,9 @@ async fn unlock_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall)
         return accepted_garbage_args(call.xid);
     }
 
-    let result = service.unlock(client_ip, &call.credential, cookie, lock).await;
+    let result = service
+        .unlock(client_ip, &call.credential, cookie, lock)
+        .await;
     accepted_success(call.xid, &encode_result(&result))
 }
 
@@ -581,7 +635,9 @@ async fn free_all_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCal
     if reader.u32().is_err() || reader.finish().is_err() {
         return accepted_garbage_args(call.xid);
     }
-    service.free_all(client_ip, &call.credential, &caller_name).await;
+    service
+        .free_all(client_ip, &call.credential, &caller_name)
+        .await;
     accepted_success(call.xid, &[])
 }
 
@@ -635,9 +691,7 @@ mod tests {
     use async_trait::async_trait;
     use naos_core::{
         acl::{AclRule, Permission, Subject},
-        nfs::{
-            NfsBinding, NfsBindingPermission, NfsCidr, NfsExport, NfsRepositoryError,
-        },
+        nfs::{NfsBinding, NfsBindingPermission, NfsCidr, NfsExport, NfsRepositoryError},
         path::RelativePath,
     };
 
@@ -687,11 +741,7 @@ mod tests {
             Err(NfsRepositoryError::Unavailable)
         }
 
-        async fn delete_nfs_binding(
-            &self,
-            _: &str,
-            _: &str,
-        ) -> Result<bool, NfsRepositoryError> {
+        async fn delete_nfs_binding(&self, _: &str, _: &str) -> Result<bool, NfsRepositoryError> {
             Err(NfsRepositoryError::Unavailable)
         }
     }
@@ -705,10 +755,7 @@ mod tests {
             Ok(self.rules.get(share_id).cloned().unwrap_or_default())
         }
 
-        async fn nfs_group_ids_for_user(
-            &self,
-            _: &str,
-        ) -> Result<Vec<String>, NfsRepositoryError> {
+        async fn nfs_group_ids_for_user(&self, _: &str) -> Result<Vec<String>, NfsRepositoryError> {
             Ok(Vec::new())
         }
     }
@@ -878,11 +925,7 @@ mod tests {
     async fn hard_link_aliases_share_lock_identity() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
-        std::fs::hard_link(
-            temp.path().join("data.bin"),
-            temp.path().join("alias.bin"),
-        )
-        .unwrap();
+        std::fs::hard_link(temp.path().join("data.bin"), temp.path().join("alias.bin")).unwrap();
         let (service, handles, export) = service(temp.path());
         let source = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
         let alias = handles.issue(&export, &RelativePath::parse("/alias.bin").unwrap());
@@ -938,7 +981,15 @@ mod tests {
         }];
         replace_owner_range(&mut locks, &owner, key, 25, 50);
         assert_eq!(locks.len(), 2);
-        assert!(locks.iter().any(|lock| lock.offset == 0 && lock.length == 25));
-        assert!(locks.iter().any(|lock| lock.offset == 75 && lock.length == 25));
+        assert!(
+            locks
+                .iter()
+                .any(|lock| lock.offset == 0 && lock.length == 25)
+        );
+        assert!(
+            locks
+                .iter()
+                .any(|lock| lock.offset == 75 && lock.length == 25)
+        );
     }
 }
