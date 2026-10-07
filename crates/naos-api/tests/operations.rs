@@ -1079,13 +1079,8 @@ async fn group_crud_and_atomic_membership_are_visible_from_user_relationships() 
     assert_eq!(clear.status(), StatusCode::ACCEPTED);
     let clear = json_body(clear).await;
     assert_eq!(
-        wait_operation(
-            &app,
-            peer,
-            &cookie,
-            clear["operation_id"].as_str().unwrap(),
-        )
-        .await["state"],
+        wait_operation(&app, peer, &cookie, clear["operation_id"].as_str().unwrap()).await
+            ["state"],
         "succeeded"
     );
 
