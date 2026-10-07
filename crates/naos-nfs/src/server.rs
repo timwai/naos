@@ -567,7 +567,10 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        assert!(released, "NSM reboot notification did not release the NLM lock");
+        assert!(
+            released,
+            "NSM reboot notification did not release the NLM lock"
+        );
 
         shutdown_tx.send(true).unwrap();
         server_task.await.unwrap().unwrap();
@@ -612,12 +615,7 @@ mod tests {
         rpc_call(xid, NLM_PROGRAM, NLM_VERSION, 1, &body.into_bytes())
     }
 
-    fn encode_nlm_lock(
-        writer: &mut XdrWriter,
-        file_handle: &[u8],
-        owner: &[u8],
-        svid: u32,
-    ) {
+    fn encode_nlm_lock(writer: &mut XdrWriter, file_handle: &[u8], owner: &[u8], svid: u32) {
         writer.string("loopback-client").unwrap();
         writer.opaque(file_handle).unwrap();
         writer.opaque(owner).unwrap();
