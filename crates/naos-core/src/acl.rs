@@ -1,9 +1,19 @@
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
+use serde_json::{Value, json};
 use thiserror::Error;
+use ulid::Ulid;
 
-use crate::path::RelativePath;
+use crate::{
+    operation::{
+        NewOperation, NewOperationEvent, Operation, OperationError, OperationEvent, OperationKind,
+        OperationRequest, OperationService,
+    },
+    path::RelativePath,
+    reconcile::{ReconcileDriver, ReconcileFailure},
+    share::{ShareApplyRepository, ShareApplyRepositoryError},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Permission {
@@ -334,6 +344,356 @@ impl AclService {
             explanation,
         })
     }
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AclRuleWriteInput {
+    pub rel_path: String,
+    pub subject_type: String,
+    pub subject_id: String,
+    pub permission: String,
+    pub inherit: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAclRule {
+    pub id: String,
+    pub share_id: String,
+    pub rule: AclRule,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AclApplyRule {
+    pub path: RelativePath,
+    pub username: String,
+    pub permission: Permission,
+    pub inherit: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AclMutationTarget {
+    pub share_id: String,
+    pub canonical_path: String,
+    pub generation: u64,
+    pub previous: Vec<AclApplyRule>,
+    pub desired: Vec<AclApplyRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AclMutationCommit {
+    pub operation: Operation,
+    pub event: Option<OperationEvent>,
+    pub created_operation: bool,
+    pub target: Option<AclMutationTarget>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AclMutationResult {
+    pub operation: Operation,
+    pub created_operation: bool,
+    pub target: Option<AclMutationTarget>,
+}
+
+#[derive(Debug, Error)]
+pub enum AclMutationRepositoryError {
+    #[error("share was not found")]
+    ShareNotFound,
+    #[error("ACL user was not found or is disabled")]
+    UserNotFound,
+    #[error("ACL mutation conflicts with current state")]
+    Conflict,
+    #[error("ACL mutation store is unavailable")]
+    Unavailable,
+}
+
+#[derive(Debug, Error)]
+pub enum AclMutationError {
+    #[error("share was not found")]
+    ShareNotFound,
+    #[error("ACL user was not found or is disabled")]
+    UserNotFound,
+    #[error("ACL mutation conflicts with current state")]
+    Conflict,
+    #[error("group ACL filesystem mapping is not supported yet")]
+    GroupUnsupported,
+    #[error("{message}")]
+    Validation {
+        field: &'static str,
+        message: String,
+    },
+    #[error("ACL mutation store failure")]
+    Repository,
+    #[error("operation failure")]
+    Operation(#[from] OperationError),
+}
+
+#[async_trait]
+pub trait AclMutationRepository: Send + Sync {
+    async fn replace_acl_with_operation(
+        &self,
+        share_id: &str,
+        rules: &[NewAclRule],
+        updated_at: &str,
+        operation: &NewOperation,
+        queued_event: &NewOperationEvent,
+    ) -> Result<AclMutationCommit, AclMutationRepositoryError>;
+}
+
+pub struct AclMutationService {
+    repository: Arc<dyn AclMutationRepository>,
+    operations: Arc<OperationService>,
+}
+
+impl AclMutationService {
+    pub fn new(
+        repository: Arc<dyn AclMutationRepository>,
+        operations: Arc<OperationService>,
+    ) -> Self {
+        Self {
+            repository,
+            operations,
+        }
+    }
+
+    pub async fn replace(
+        &self,
+        share_id: &str,
+        inputs: Vec<AclRuleWriteInput>,
+        actor_user_id: String,
+        idempotency_key: String,
+    ) -> Result<AclMutationResult, AclMutationError> {
+        if inputs.len() > 500 {
+            return Err(AclMutationError::Validation {
+                field: "items",
+                message: "单次 ACL 替换最多允许 500 条规则".to_owned(),
+            });
+        }
+
+        let mut seen = HashSet::new();
+        let mut rules = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let subject_type = input.subject_type.trim();
+            if subject_type != "user" {
+                if subject_type == "group" {
+                    return Err(AclMutationError::GroupUnsupported);
+                }
+                return Err(AclMutationError::Validation {
+                    field: "subject.type",
+                    message: "ACL subject type 仅支持 user 或 group".to_owned(),
+                });
+            }
+
+            let user_id = input.subject_id.trim().to_owned();
+            if user_id.is_empty() || user_id.len() > 128 {
+                return Err(AclMutationError::Validation {
+                    field: "subject.id",
+                    message: "ACL user id 无效".to_owned(),
+                });
+            }
+
+            let path = RelativePath::parse(input.rel_path.trim()).map_err(|_| {
+                AclMutationError::Validation {
+                    field: "rel_path",
+                    message: "ACL 相对路径无效".to_owned(),
+                }
+            })?;
+            let permission = match input.permission.trim() {
+                "none" => Permission::None,
+                "ro" => Permission::ReadOnly,
+                "rw" => Permission::ReadWrite,
+                _ => {
+                    return Err(AclMutationError::Validation {
+                        field: "permission",
+                        message: "ACL permission 必须是 none、ro 或 rw".to_owned(),
+                    });
+                }
+            };
+
+            let key = (path.as_slash_path(), user_id.clone());
+            if !seen.insert(key) {
+                return Err(AclMutationError::Validation {
+                    field: "items",
+                    message: "同一路径不能重复配置同一用户".to_owned(),
+                });
+            }
+
+            rules.push(NewAclRule {
+                id: format!("acl_{}", Ulid::new()),
+                share_id: share_id.to_owned(),
+                rule: AclRule {
+                    path,
+                    subject: Subject::User(user_id),
+                    permission,
+                    inherit: input.inherit,
+                },
+            });
+        }
+
+        let prepared = self.operations.prepare(OperationRequest {
+            kind: OperationKind::acl_replace(),
+            actor_user_id: Some(actor_user_id),
+            resource_type: Some("share".to_owned()),
+            resource_id: Some(share_id.to_owned()),
+            request_id: None,
+            idempotency_key: Some(idempotency_key),
+        })?;
+        let commit = self
+            .repository
+            .replace_acl_with_operation(
+                share_id,
+                &rules,
+                &prepared.operation.created_at,
+                &prepared.operation,
+                &prepared.queued_event,
+            )
+            .await
+            .map_err(map_acl_mutation_repository_error)?;
+
+        if let Some(event) = commit.event {
+            self.operations.publish_persisted_event(event);
+        }
+
+        Ok(AclMutationResult {
+            operation: commit.operation,
+            created_operation: commit.created_operation,
+            target: commit.target,
+        })
+    }
+}
+
+fn map_acl_mutation_repository_error(
+    error: AclMutationRepositoryError,
+) -> AclMutationError {
+    match error {
+        AclMutationRepositoryError::ShareNotFound => AclMutationError::ShareNotFound,
+        AclMutationRepositoryError::UserNotFound => AclMutationError::UserNotFound,
+        AclMutationRepositoryError::Conflict => AclMutationError::Conflict,
+        AclMutationRepositoryError::Unavailable => AclMutationError::Repository,
+    }
+}
+
+
+pub trait AclReconcileDriverFactory: Send + Sync {
+    fn driver(&self, target: AclMutationTarget) -> Arc<dyn ReconcileDriver>;
+}
+
+pub struct DatabaseAclReconcileDriverFactory {
+    shares: Arc<dyn ShareApplyRepository>,
+}
+
+impl DatabaseAclReconcileDriverFactory {
+    pub fn new(shares: Arc<dyn ShareApplyRepository>) -> Self {
+        Self { shares }
+    }
+}
+
+impl AclReconcileDriverFactory for DatabaseAclReconcileDriverFactory {
+    fn driver(&self, target: AclMutationTarget) -> Arc<dyn ReconcileDriver> {
+        Arc::new(DatabaseAclReconcileDriver {
+            shares: self.shares.clone(),
+            target,
+        })
+    }
+}
+
+struct DatabaseAclReconcileDriver {
+    shares: Arc<dyn ShareApplyRepository>,
+    target: AclMutationTarget,
+}
+
+#[async_trait]
+impl ReconcileDriver for DatabaseAclReconcileDriver {
+    fn lock_keys(&self) -> Vec<String> {
+        vec![format!("share:{}", self.target.share_id)]
+    }
+
+    fn target_type(&self) -> &str {
+        "share_acl"
+    }
+
+    fn target_id(&self) -> Option<String> {
+        Some(self.target.share_id.clone())
+    }
+
+    fn desired_generation(&self) -> Option<u64> {
+        Some(self.target.generation)
+    }
+
+    async fn validate(&self) -> Result<(), ReconcileFailure> {
+        let updated = self
+            .shares
+            .set_apply_state_if_generation(
+                &self.target.share_id,
+                self.target.generation,
+                "applying",
+            )
+            .await
+            .map_err(acl_share_repository_failure)?;
+        if updated {
+            Ok(())
+        } else {
+            Err(ReconcileFailure::new(
+                "ACL_GENERATION_CONFLICT",
+                "share generation changed before ACL apply",
+            ))
+        }
+    }
+
+    async fn render_plan(&self) -> Result<Value, ReconcileFailure> {
+        Ok(json!({
+            "share_id": self.target.share_id,
+            "generation": self.target.generation,
+            "rules": self.target.desired.len(),
+            "filesystem_apply": false,
+        }))
+    }
+
+    async fn snapshot(&self) -> Result<Value, ReconcileFailure> {
+        Ok(Value::Null)
+    }
+
+    async fn apply(&self, _plan: &Value) -> Result<(), ReconcileFailure> {
+        Ok(())
+    }
+
+    async fn verify(&self) -> Result<Value, ReconcileFailure> {
+        let applied = self
+            .shares
+            .mark_applied_if_generation(&self.target.share_id, self.target.generation)
+            .await
+            .map_err(acl_share_repository_failure)?;
+        if !applied {
+            return Err(ReconcileFailure::new(
+                "ACL_GENERATION_CONFLICT",
+                "share generation changed before ACL verify commit",
+            ));
+        }
+
+        Ok(json!({
+            "database_state": "in_sync",
+            "generation": self.target.generation,
+        }))
+    }
+
+    async fn rollback(&self, _snapshot: &Value) -> Result<Value, ReconcileFailure> {
+        let _ = self
+            .shares
+            .set_apply_state_if_generation(
+                &self.target.share_id,
+                self.target.generation,
+                "degraded",
+            )
+            .await;
+        Err(ReconcileFailure::new(
+            "ACL_ROLLBACK_UNAVAILABLE",
+            "ACL filesystem rollback is not available",
+        ))
+    }
+}
+
+fn acl_share_repository_failure(_error: ShareApplyRepositoryError) -> ReconcileFailure {
+    ReconcileFailure::new("SHARE_STORE_UNAVAILABLE", "share store is unavailable")
 }
 
 fn subject_matches(subject: &Subject, principal: &Principal<'_>) -> bool {

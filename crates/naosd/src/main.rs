@@ -7,7 +7,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use naos_api::AppState;
 use naos_core::{
-    acl::AclService,
+    acl::{AclMutationService, AclService},
     audit::AuditService,
     auth::{AuthConfig, AuthService},
     doctor::SmbDoctorProbe,
@@ -30,8 +30,10 @@ use tokio::{net::TcpListener, sync::watch};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+mod acl_reconcile;
 mod share_reconcile;
 
+use acl_reconcile::PlatformAclReconcileDriverFactory;
 use share_reconcile::PlatformShareReconcileDriverFactory;
 
 #[derive(Debug, Parser)]
@@ -120,6 +122,11 @@ async fn main() -> anyhow::Result<()> {
     let acl = Arc::new(AclService::new(store.clone()));
     let audit = Arc::new(AuditService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
+    let acl_mutations = Arc::new(AclMutationService::new(
+        store.clone(),
+        operations.clone(),
+    ));
+    let acl_reconcile_factory = Arc::new(PlatformAclReconcileDriverFactory::new(store.clone()));
     let share_mutations = Arc::new(ShareMutationService::new(
         store.clone(),
         operations.clone(),
@@ -137,6 +144,8 @@ async fn main() -> anyhow::Result<()> {
         readiness: store.clone(),
         auth: auth.clone(),
         acl,
+        acl_mutations,
+        acl_reconcile_factory,
         audit,
         operations,
         share_mutations,

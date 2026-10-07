@@ -12,6 +12,7 @@ system-gss = ["naos-nfs/system-gss"]
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 clap.workspace = true
 naos-api = { path = "../naos-api" }

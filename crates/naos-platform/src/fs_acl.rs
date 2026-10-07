@@ -51,6 +51,8 @@ pub enum FsAclError {
     },
     #[error("filesystem ACL command could not be started")]
     Command(#[from] CommandError),
+    #[error("filesystem ACL verification failed")]
+    VerifyFailed,
 }
 
 #[derive(Clone)]
@@ -190,6 +192,185 @@ impl FsAclManager {
             "unsupported operating system".to_owned(),
         ))
     }
+
+    pub async fn remove(
+        &self,
+        target: &Path,
+        account: &SystemAccountName,
+    ) -> Result<(), FsAclError> {
+        let canonical = canonical_target(target)?;
+        let path = path_text(&canonical);
+
+        #[cfg(target_os = "linux")]
+        {
+            let query = CommandSpec::new("getfacl").args(["-cp".to_owned(), path.clone()]);
+            let output = self.runner.run(query.clone()).await?;
+            require_success(&query, &output)?;
+
+            if linux_has_entry(&output.stdout, account.as_str(), false) {
+                let spec = CommandSpec::new("setfacl").args([
+                    "-x".to_owned(),
+                    format!("u:{}", account.as_str()),
+                    path.clone(),
+                ]);
+                let output = self.runner.run(spec.clone()).await?;
+                require_success(&spec, &output)?;
+            }
+            if canonical.is_dir() && linux_has_entry(&output.stdout, account.as_str(), true) {
+                let spec = CommandSpec::new("setfacl").args([
+                    "-x".to_owned(),
+                    format!("d:u:{}", account.as_str()),
+                    path,
+                ]);
+                let output = self.runner.run(spec.clone()).await?;
+                require_success(&spec, &output)?;
+            }
+            return Ok(());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let list = CommandSpec::new("/bin/ls").args(["-lde".to_owned(), path.clone()]);
+            let output = self.runner.run(list.clone()).await?;
+            require_success(&list, &output)?;
+            for index in macos_account_indexes(&output.stdout, account.as_str())
+                .into_iter()
+                .rev()
+            {
+                let spec = CommandSpec::new("/bin/chmod").args([
+                    "-a#".to_owned(),
+                    index.to_string(),
+                    path.clone(),
+                ]);
+                let output = self.runner.run(spec.clone()).await?;
+                require_success(&spec, &output)?;
+            }
+            return Ok(());
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            for mode in ["/remove:g", "/remove:d"] {
+                let spec = CommandSpec::new("icacls.exe").args([
+                    path.clone(),
+                    mode.to_owned(),
+                    account.as_str().to_owned(),
+                ]);
+                let output = self.runner.run(spec.clone()).await?;
+                require_success(&spec, &output)?;
+            }
+            return Ok(());
+        }
+
+        #[allow(unreachable_code)]
+        Err(FsAclError::Unsupported(
+            "unsupported operating system".to_owned(),
+        ))
+    }
+
+    pub async fn verify(
+        &self,
+        target: &Path,
+        entry: &EffectiveAclEntry,
+    ) -> Result<(), FsAclError> {
+        let canonical = canonical_target(target)?;
+        let path = path_text(&canonical);
+
+        #[cfg(target_os = "linux")]
+        {
+            let spec = CommandSpec::new("getfacl").args(["-cp".to_owned(), path]);
+            let output = self.runner.run(spec.clone()).await?;
+            require_success(&spec, &output)?;
+            return if linux_entry_matches(&output.stdout, entry, canonical.is_dir()) {
+                Ok(())
+            } else {
+                Err(FsAclError::VerifyFailed)
+            };
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let spec = CommandSpec::new("/bin/ls").args(["-lde".to_owned(), path]);
+            let output = self.runner.run(spec.clone()).await?;
+            require_success(&spec, &output)?;
+            return if macos_entry_matches(&output.stdout, entry) {
+                Ok(())
+            } else {
+                Err(FsAclError::VerifyFailed)
+            };
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let spec = CommandSpec::new("icacls.exe").args([path]);
+            let output = self.runner.run(spec.clone()).await?;
+            require_success(&spec, &output)?;
+            let account = entry.account.as_str().to_ascii_lowercase();
+            return if output.stdout.to_ascii_lowercase().contains(&account) {
+                Ok(())
+            } else {
+                Err(FsAclError::VerifyFailed)
+            };
+        }
+
+        #[allow(unreachable_code)]
+        Err(FsAclError::Unsupported(
+            "unsupported operating system".to_owned(),
+        ))
+    }
+
+    pub async fn verify_absent(
+        &self,
+        target: &Path,
+        account: &SystemAccountName,
+    ) -> Result<(), FsAclError> {
+        let canonical = canonical_target(target)?;
+        let path = path_text(&canonical);
+
+        #[cfg(target_os = "linux")]
+        {
+            let spec = CommandSpec::new("getfacl").args(["-cp".to_owned(), path]);
+            let output = self.runner.run(spec.clone()).await?;
+            require_success(&spec, &output)?;
+            let present = linux_has_entry(&output.stdout, account.as_str(), false)
+                || linux_has_entry(&output.stdout, account.as_str(), true);
+            return if present {
+                Err(FsAclError::VerifyFailed)
+            } else {
+                Ok(())
+            };
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let spec = CommandSpec::new("/bin/ls").args(["-lde".to_owned(), path]);
+            let output = self.runner.run(spec.clone()).await?;
+            require_success(&spec, &output)?;
+            return if macos_account_indexes(&output.stdout, account.as_str()).is_empty() {
+                Ok(())
+            } else {
+                Err(FsAclError::VerifyFailed)
+            };
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let spec = CommandSpec::new("icacls.exe").args([path]);
+            let output = self.runner.run(spec.clone()).await?;
+            require_success(&spec, &output)?;
+            let account = account.as_str().to_ascii_lowercase();
+            return if output.stdout.to_ascii_lowercase().contains(&account) {
+                Err(FsAclError::VerifyFailed)
+            } else {
+                Ok(())
+            };
+        }
+
+        #[allow(unreachable_code)]
+        Err(FsAclError::Unsupported(
+            "unsupported operating system".to_owned(),
+        ))
+    }
 }
 
 fn canonical_target(target: &Path) -> Result<PathBuf, FsAclError> {
@@ -198,6 +379,69 @@ fn canonical_target(target: &Path) -> Result<PathBuf, FsAclError> {
 
 fn path_text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_has_entry(output: &str, account: &str, default: bool) -> bool {
+    let prefix = if default { "default:user:" } else { "user:" };
+    let marker = format!("{prefix}{account}:");
+    output.lines().any(|line| line.trim() == marker || line.trim().starts_with(&marker))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_entry_matches(output: &str, entry: &EffectiveAclEntry, is_dir: bool) -> bool {
+    let permission = match entry.permission {
+        FsAclPermission::None => "---",
+        FsAclPermission::ReadOnly => "r-x",
+        FsAclPermission::ReadWrite => "rwx",
+    };
+    let current = format!("user:{}:{permission}", entry.account.as_str());
+    if !output.lines().any(|line| line.trim() == current) {
+        return false;
+    }
+
+    let default = format!("default:user:{}:{permission}", entry.account.as_str());
+    let has_default = output.lines().any(|line| line.trim() == default);
+    if is_dir {
+        has_default == entry.inherit
+    } else {
+        !entry.inherit
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_entry_matches(output: &str, entry: &EffectiveAclEntry) -> bool {
+    let marker = format!("user:{} ", entry.account.as_str());
+    let lines = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains(&marker))
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return false;
+    }
+
+    let inheritance_matches = |line: &&str| {
+        let inherited = line.contains("file_inherit") && line.contains("directory_inherit");
+        inherited == entry.inherit
+    };
+
+    match entry.permission {
+        FsAclPermission::None => lines
+            .iter()
+            .any(|line| line.contains(" deny ") && inheritance_matches(line)),
+        FsAclPermission::ReadOnly => {
+            lines
+                .iter()
+                .any(|line| line.contains(" deny ") && line.contains("write") && inheritance_matches(line))
+                && lines
+                    .iter()
+                    .any(|line| line.contains(" allow ") && line.contains("read") && inheritance_matches(line))
+        }
+        FsAclPermission::ReadWrite => lines
+            .iter()
+            .any(|line| line.contains(" allow ") && line.contains("write") && inheritance_matches(line)),
+    }
 }
 
 #[cfg(any(target_os = "linux", test))]

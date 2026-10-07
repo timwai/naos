@@ -1,27 +1,34 @@
 use axum::{
     Json, Router,
     extract::{Extension, Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use naos_contract::{
     acl::{
-        AclMatchedRuleDto, AclRuleDto, AclRulesResponse, AclSimulateRequest, AclSimulationResponse,
-        AclSubjectDto,
+        AclMatchedRuleDto, AclReplaceRequest, AclRuleDto, AclRuleWriteDto, AclRulesResponse,
+        AclSimulateRequest, AclSimulationResponse, AclSubjectDto, AclSubjectInput,
     },
     auth::ErrorResponse,
+    operation::AcceptedOperation,
 };
 use naos_core::{
-    acl::{AclRule, AclRuleRecord, AclServiceError},
+    acl::{
+        AclMutationError, AclMutationResult, AclRule, AclRuleRecord, AclRuleWriteInput,
+        AclServiceError,
+    },
     auth::{AuthService, AuthenticatedSession},
 };
 use utoipa::OpenApi;
 
-use super::{ApiError, AppState};
+use super::{ApiError, AppState, header_text};
+
+const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/shares/{share_id}/acl", get(list_acl))
+        .route("/shares/{share_id}/acl", get(list_acl).put(replace_acl))
         .route("/shares/{share_id}/acl/simulate", post(simulate_acl))
 }
 
@@ -47,6 +54,52 @@ async fn list_acl(
     Ok(Json(AclRulesResponse {
         items: rules.into_iter().map(rule_dto).collect(),
     }))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/shares/{share_id}/acl",
+    params(("share_id" = String, Path, description = "Share ID")),
+    request_body = AclReplaceRequest,
+    responses(
+        (status = 202, body = AcceptedOperation),
+        (status = 401, body = ErrorResponse),
+        (status = 403, body = ErrorResponse),
+        (status = 404, body = ErrorResponse),
+        (status = 409, body = ErrorResponse),
+        (status = 422, body = ErrorResponse)
+    ),
+    tag = "acl"
+)]
+async fn replace_acl(
+    State(state): State<AppState>,
+    Extension(session): Extension<AuthenticatedSession>,
+    Path(share_id): Path<String>,
+    headers: HeaderMap,
+    Json(input): Json<AclReplaceRequest>,
+) -> Result<Response, ApiError> {
+    AuthService::ensure_admin(&session)?;
+    let result = state
+        .acl_mutations
+        .replace(
+            &share_id,
+            input
+                .items
+                .into_iter()
+                .map(|rule| AclRuleWriteInput {
+                    rel_path: rule.rel_path,
+                    subject_type: rule.subject.subject_type,
+                    subject_id: rule.subject.id,
+                    permission: rule.permission,
+                    inherit: rule.inherit,
+                })
+                .collect(),
+            session.user.id.clone(),
+            idempotency_key(&headers)?,
+        )
+        .await?;
+    launch_reconcile(&state, &result)?;
+    accepted(result)
 }
 
 #[utoipa::path(
@@ -90,6 +143,46 @@ async fn simulate_acl(
     }))
 }
 
+fn launch_reconcile(state: &AppState, result: &AclMutationResult) -> Result<(), ApiError> {
+    if !result.created_operation {
+        return Ok(());
+    }
+    let target = result.target.clone().ok_or_else(ApiError::internal)?;
+    let driver = state.acl_reconcile_factory.driver(target);
+    let operation_id = result.operation.id.clone();
+    let reconciler = state.reconciler.clone();
+
+    tokio::spawn(async move {
+        if let Err(error) = reconciler.run(&operation_id, driver).await {
+            tracing::error!(operation_id, error = %error, "ACL reconcile operation failed");
+        }
+    });
+    Ok(())
+}
+
+fn accepted(result: AclMutationResult) -> Result<Response, ApiError> {
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(AcceptedOperation {
+            operation_id: result.operation.id,
+            state: result.operation.state.as_str().to_owned(),
+        }),
+    )
+        .into_response())
+}
+
+fn idempotency_key(headers: &HeaderMap) -> Result<String, ApiError> {
+    header_text(headers, IDEMPOTENCY_KEY_HEADER)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty() && value.len() <= 200)
+        .ok_or_else(|| {
+            ApiError::validation(
+                "idempotency-key",
+                "替换 ACL 必须提供有效的 Idempotency-Key",
+            )
+        })
+}
+
 fn rule_dto(record: AclRuleRecord) -> AclRuleDto {
     AclRuleDto {
         id: record.id,
@@ -130,19 +223,52 @@ impl From<AclServiceError> for ApiError {
     }
 }
 
+impl From<AclMutationError> for ApiError {
+    fn from(error: AclMutationError) -> Self {
+        match error {
+            AclMutationError::ShareNotFound => {
+                ApiError::new(StatusCode::NOT_FOUND, "SHARE_NOT_FOUND", "共享不存在")
+            }
+            AclMutationError::UserNotFound => ApiError::new(
+                StatusCode::NOT_FOUND,
+                "USER_NOT_FOUND",
+                "ACL 用户不存在或已禁用",
+            ),
+            AclMutationError::Conflict => ApiError::new(
+                StatusCode::CONFLICT,
+                "ACL_CONFLICT",
+                "ACL 与当前共享状态冲突，或仍包含尚不支持落盘的 group 规则",
+            ),
+            AclMutationError::GroupUnsupported => ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "ACL_GROUP_UNSUPPORTED",
+                "当前版本尚未实现 naos group 到系统组的安全映射；ACL 写入暂只支持 user subject",
+            ),
+            AclMutationError::Validation { field, message } => {
+                ApiError::validation(field, &message)
+            }
+            AclMutationError::Repository | AclMutationError::Operation(_) => ApiError::internal(),
+        }
+    }
+}
+
 #[derive(OpenApi)]
 #[openapi(
-    paths(list_acl, simulate_acl),
+    paths(list_acl, replace_acl, simulate_acl),
     components(schemas(
+        AclSubjectInput,
+        AclRuleWriteDto,
+        AclReplaceRequest,
         AclSubjectDto,
         AclRuleDto,
         AclRulesResponse,
         AclSimulateRequest,
         AclMatchedRuleDto,
         AclSimulationResponse,
+        AcceptedOperation,
         ErrorResponse
     )),
-    tags((name = "acl", description = "Share ACL inspection and permission simulation"))
+    tags((name = "acl", description = "Share ACL inspection, mutation and permission simulation"))
 )]
 struct AclApiDoc;
 

@@ -33,6 +33,10 @@ impl OperationKind {
         Self::new("share.delete")
     }
 
+    pub fn acl_replace() -> Self {
+        Self::new("acl.replace")
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

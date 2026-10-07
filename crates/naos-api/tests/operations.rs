@@ -39,6 +39,13 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
     let acl = Arc::new(naos_core::acl::AclService::new(store.clone()));
     let audit = Arc::new(naos_core::audit::AuditService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
+    let acl_mutations = Arc::new(naos_core::acl::AclMutationService::new(
+        store.clone(),
+        operations.clone(),
+    ));
+    let acl_reconcile_factory = Arc::new(
+        naos_core::acl::DatabaseAclReconcileDriverFactory::new(store.clone()),
+    );
     let share_mutations = Arc::new(naos_core::share::ShareMutationService::new(
         store.clone(),
         operations.clone(),
@@ -74,6 +81,8 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
         readiness: store.clone(),
         auth,
         acl,
+        acl_mutations,
+        acl_reconcile_factory,
         audit,
         operations,
         share_mutations,
@@ -495,6 +504,167 @@ async fn share_mutation_requires_idempotency_key() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn acl_replace_is_operation_backed_idempotent_and_bumps_share_generation() {
+    let (app, _store, dir) = test_app().await;
+    let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 33003);
+    let (cookie, csrf) = login_admin(&app, peer).await;
+    let share_root = dir.path().join("acl-share");
+    tokio::fs::create_dir_all(&share_root).await.unwrap();
+
+    let create = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/shares",
+            Some(json!({
+                "name": "acl-docs",
+                "path": share_root.to_string_lossy(),
+                "comment": null,
+                "enabled": true,
+                "smb_enabled": false,
+                "webdav_enabled": true,
+                "nfs_enabled": false
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("acl-share-create-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::ACCEPTED);
+    let create = json_body(create).await;
+    let create_operation = create["operation_id"].as_str().unwrap();
+    let created = wait_operation(&app, peer, &cookie, create_operation).await;
+    assert_eq!(created["state"], "succeeded");
+    let share_id = created["resource_id"].as_str().unwrap().to_owned();
+
+    let users = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/users",
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(users.status(), StatusCode::OK);
+    let users = json_body(users).await;
+    let admin_id = users["items"][0]["id"].as_str().unwrap().to_owned();
+
+    let body = json!({
+        "items": [{
+            "rel_path": "/",
+            "subject": {"type": "user", "id": admin_id},
+            "permission": "rw",
+            "inherit": true
+        }]
+    });
+    let first = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/v1/shares/{share_id}/acl"),
+            Some(body.clone()),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("acl-replace-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::ACCEPTED);
+    let first = json_body(first).await;
+    let operation_id = first["operation_id"].as_str().unwrap().to_owned();
+
+    let replay = app
+        .clone()
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/v1/shares/{share_id}/acl"),
+            Some(body),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("acl-replace-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::ACCEPTED);
+    assert_eq!(json_body(replay).await["operation_id"], operation_id);
+
+    let terminal = wait_operation(&app, peer, &cookie, &operation_id).await;
+    assert_eq!(terminal["state"], "succeeded");
+    assert_eq!(terminal["kind"], "acl.replace");
+
+    let acl = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/shares/{share_id}/acl"),
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(acl.status(), StatusCode::OK);
+    let acl = json_body(acl).await;
+    assert_eq!(acl["items"].as_array().unwrap().len(), 1);
+    assert_eq!(acl["items"][0]["rel_path"], "/");
+    assert_eq!(acl["items"][0]["permission"], "rw");
+
+    let share = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/shares/{share_id}"),
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    let share = json_body(share).await;
+    assert_eq!(share["generation"], 2);
+    assert_eq!(share["applied_generation"], 2);
+    assert_eq!(share["apply_state"], "in_sync");
+
+    let group = app
+        .oneshot(request(
+            Method::PUT,
+            &format!("/api/v1/shares/{share_id}/acl"),
+            Some(json!({
+                "items": [{
+                    "rel_path": "/",
+                    "subject": {"type": "group", "id": "grp_family"},
+                    "permission": "ro",
+                    "inherit": true
+                }]
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+            Some("acl-group-unsupported-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(group.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json_body(group).await["code"],
+        "ACL_GROUP_UNSUPPORTED"
+    );
 }
 
 struct VerifyFailDriver {

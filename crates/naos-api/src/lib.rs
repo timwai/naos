@@ -40,6 +40,8 @@ pub struct AppState {
     pub readiness: Arc<dyn ReadinessProbe>,
     pub auth: Arc<AuthService>,
     pub acl: Arc<naos_core::acl::AclService>,
+    pub acl_mutations: Arc<naos_core::acl::AclMutationService>,
+    pub acl_reconcile_factory: Arc<dyn naos_core::acl::AclReconcileDriverFactory>,
     pub audit: Arc<naos_core::audit::AuditService>,
     pub operations: Arc<naos_core::operation::OperationService>,
     pub share_mutations: Arc<naos_core::share::ShareMutationService>,

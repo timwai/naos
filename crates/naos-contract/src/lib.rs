@@ -282,6 +282,26 @@ pub mod acl {
     }
 
     #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct AclSubjectInput {
+        #[serde(rename = "type")]
+        pub subject_type: String,
+        pub id: String,
+    }
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct AclRuleWriteDto {
+        pub rel_path: String,
+        pub subject: AclSubjectInput,
+        pub permission: String,
+        pub inherit: bool,
+    }
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct AclReplaceRequest {
+        pub items: Vec<AclRuleWriteDto>,
+    }
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
     pub struct AclSimulateRequest {
         pub user_id: String,
         pub rel_path: String,
