@@ -123,6 +123,12 @@ done
 
 if [[ "$READY" -ne 1 ]]; then
   echo "$OS kernel NFSv3 client could not mount the naos export" >&2
+  if [[ "$LOCKS" -eq 1 ]]; then
+    echo "----- rpcbind registrations -----" >&2
+    rpcinfo -p 127.0.0.1 >&2 || true
+  fi
+  echo "----- final mount attempt -----" >&2
+  mount_export >&2 || true
   exit 6
 fi
 
