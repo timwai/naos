@@ -365,6 +365,18 @@ impl NlmV4Service {
             Err(status) => return NlmResult { cookie, status },
         };
 
+        if self
+            .identity_repository
+            .remember_nfs_nsm_peer(client_ip)
+            .await
+            .is_err()
+        {
+            return NlmResult {
+                cookie,
+                status: NLM4_FAILED,
+            };
+        }
+
         let _state = self.state_guard.lock().await;
         let mut locks = self.locks.lock().await;
         if locks.iter().any(|held| {
