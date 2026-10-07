@@ -12,6 +12,7 @@ import {
   getOperation,
   getSmbDoctor,
   listNfsPrincipals,
+  listUsers,
   startSystemVerify,
 } from "../lib/api/client";
 import { queryKeys } from "../lib/api/queryKeys";
@@ -47,6 +48,11 @@ export function SettingsPage() {
   const principals = useQuery({
     queryKey: queryKeys.nfs.principals(),
     queryFn: listNfsPrincipals,
+  });
+
+  const users = useQuery({
+    queryKey: queryKeys.users.list(),
+    queryFn: listUsers,
   });
 
   const verify = useMutation({
@@ -269,13 +275,28 @@ export function SettingsPage() {
               />
             </label>
             <label>
-              User ID
-              <input
-                placeholder="usr_..."
+              User
+              <select
                 value={userId}
                 onChange={(event) => setUserId(event.target.value)}
                 required
-              />
+                disabled={users.isPending || users.isError}
+              >
+                <option value="">
+                  {users.isPending
+                    ? "正在加载用户…"
+                    : users.isError
+                      ? "用户列表不可用"
+                      : "选择已启用用户"}
+                </option>
+                {users.data?.items
+                  .filter((user) => user.enabled)
+                  .map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.username} · {user.role}
+                    </option>
+                  ))}
+              </select>
             </label>
             <button
               className="button primary"

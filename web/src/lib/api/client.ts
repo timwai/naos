@@ -22,6 +22,7 @@ export type SetupStatusResponse =
   components["schemas"]["SetupStatusResponse"];
 export type SmbDoctorResponse =
   components["schemas"]["SmbDoctorResponse"];
+export type UsersResponse = components["schemas"]["UsersResponse"];
 
 export class ApiError extends Error {
   readonly status: number;
@@ -187,4 +188,8 @@ export async function deleteNfsPrincipal(principalId: string) {
     `/api/v1/nfs/principals/${encodeURIComponent(principalId)}`,
     { method: "DELETE" },
   );
+}
+
+export async function listUsers() {
+  return requestJson<UsersResponse>("/api/v1/users");
 }

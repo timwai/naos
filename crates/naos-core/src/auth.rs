@@ -200,6 +200,8 @@ pub trait AuthRepository: Send + Sync {
         user_id: &str,
     ) -> Result<Option<UserAuthRecord>, AuthRepositoryError>;
 
+    async fn list_users(&self) -> Result<Vec<UserSummary>, AuthRepositoryError>;
+
     async fn create_session(&self, session: &NewSession) -> Result<(), AuthRepositoryError>;
 
     async fn find_session_by_token_hash(
@@ -303,6 +305,14 @@ impl AuthService {
             role: user.role,
             enabled: user.enabled,
         })
+    }
+
+    pub async fn list_users(
+        &self,
+        session: &AuthenticatedSession,
+    ) -> Result<Vec<UserSummary>, AuthError> {
+        Self::ensure_admin(session)?;
+        self.repository.list_users().await.map_err(Into::into)
     }
 
     pub async fn login(

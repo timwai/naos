@@ -36,6 +36,11 @@ pub mod auth {
     }
 
     #[derive(Serialize, ToSchema)]
+    pub struct UsersResponse {
+        pub items: Vec<UserDto>,
+    }
+
+    #[derive(Serialize, ToSchema)]
     pub struct AuthSessionResponse {
         pub authenticated: bool,
         pub user: Option<UserDto>,

@@ -628,3 +628,85 @@ input:focus {
     flex-direction: column;
   }
 }
+
+select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--tx-main);
+  padding: 11px 12px;
+  outline: none;
+}
+
+select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+select:disabled {
+  opacity: 0.65;
+}
+
+.user-metrics {
+  margin-bottom: 20px;
+}
+
+.user-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.user-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+}
+
+.user-avatar {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--primary) 14%, var(--card));
+  color: var(--primary);
+  font-weight: 800;
+}
+
+.user-copy {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.user-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.status-pill {
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-pill.enabled {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 9%, var(--card));
+}
+
+.status-pill.disabled {
+  color: var(--tx-muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+}

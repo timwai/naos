@@ -230,6 +230,24 @@ async fn bootstrap_login_csrf_and_logout_flow() {
         .clone()
         .oneshot(request(
             Method::GET,
+            "/api/v1/users",
+            None,
+            loopback,
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let users = json_body(response).await;
+    assert_eq!(users["items"].as_array().unwrap().len(), 1);
+    assert_eq!(users["items"][0]["username"], "admin");
+    assert_eq!(users["items"][0]["role"], "admin");
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
             "/api/v1/system/smb/doctor",
             None,
             loopback,

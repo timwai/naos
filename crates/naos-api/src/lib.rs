@@ -18,7 +18,7 @@ use axum::{
 use naos_contract::{
     auth::{
         AuthSessionResponse, ErrorResponse, LoginRequest, PasswordChangeRequest, SessionDto,
-        SessionsResponse, SetupAdminRequest, SetupStatusResponse, UserDto,
+        SessionsResponse, SetupAdminRequest, SetupStatusResponse, UserDto, UsersResponse,
     },
     health::HealthResponse,
 };
@@ -55,6 +55,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/password", post(change_password))
         .route("/auth/sessions", get(list_sessions))
         .route("/auth/sessions/{id}", delete(revoke_session))
+        .route("/users", get(list_users))
         .merge(operation_api::routes())
         .merge(doctor_api::routes())
         .merge(nfs_api::routes())
@@ -305,6 +306,26 @@ async fn list_sessions(
 }
 
 #[utoipa::path(
+    get,
+    path = "/api/v1/users",
+    responses(
+        (status = 200, body = UsersResponse),
+        (status = 401, body = ErrorResponse),
+        (status = 403, body = ErrorResponse)
+    ),
+    tag = "users"
+)]
+async fn list_users(
+    State(state): State<AppState>,
+    Extension(session): Extension<AuthenticatedSession>,
+) -> Result<Json<UsersResponse>, ApiError> {
+    let users = state.auth.list_users(&session).await?;
+    Ok(Json(UsersResponse {
+        items: users.into_iter().map(user_dto).collect(),
+    }))
+}
+
+#[utoipa::path(
     delete,
     path = "/api/v1/auth/sessions/{id}",
     params(("id" = String, Path, description = "Session ID")),
@@ -539,7 +560,8 @@ impl IntoResponse for ApiError {
         logout,
         change_password,
         list_sessions,
-        revoke_session
+        revoke_session,
+        list_users
     ),
     components(schemas(
         HealthResponse,
@@ -548,6 +570,7 @@ impl IntoResponse for ApiError {
         LoginRequest,
         PasswordChangeRequest,
         UserDto,
+        UsersResponse,
         AuthSessionResponse,
         SessionDto,
         SessionsResponse,
@@ -555,7 +578,8 @@ impl IntoResponse for ApiError {
     )),
     tags(
         (name = "health", description = "Process liveness and dependency readiness"),
-        (name = "auth", description = "Bootstrap, authentication, sessions and CSRF")
+        (name = "auth", description = "Bootstrap, authentication, sessions and CSRF"),
+        (name = "users", description = "User administration")
     )
 )]
 struct ApiDoc;

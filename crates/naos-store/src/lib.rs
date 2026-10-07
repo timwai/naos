@@ -163,6 +163,29 @@ impl AuthRepository for Store {
         row.map(user_from_row).transpose()
     }
 
+    async fn list_users(&self) -> Result<Vec<UserSummary>, AuthRepositoryError> {
+        let rows = sqlx::query(
+            "SELECT id, username, role, enabled
+             FROM users
+             ORDER BY lower(username), id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(auth_store_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let role_text = row.try_get::<String, _>("role").map_err(auth_store_error)?;
+                Ok(UserSummary {
+                    id: row.try_get("id").map_err(auth_store_error)?,
+                    username: row.try_get("username").map_err(auth_store_error)?,
+                    role: parse_role(role_text)?,
+                    enabled: row.try_get("enabled").map_err(auth_store_error)?,
+                })
+            })
+            .collect()
+    }
+
     async fn create_session(&self, session: &NewSession) -> Result<(), AuthRepositoryError> {
         sqlx::query(
             "INSERT INTO sessions

@@ -16,4 +16,7 @@ export const queryKeys = {
   system: {
     smbDoctor: () => ["system", "smb-doctor"] as const,
   },
+  users: {
+    list: () => ["users", "list"] as const,
+  },
 };

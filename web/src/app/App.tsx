@@ -7,6 +7,7 @@ import { LoginPage } from "../pages/LoginPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
 import { ProfilePage } from "../pages/ProfilePage";
 import { SettingsPage } from "../pages/SettingsPage";
+import { UsersPage } from "../pages/UsersPage";
 
 function RequireAuth() {
   const session = useSession();
@@ -68,15 +69,7 @@ export function App() {
                 />
               }
             />
-            <Route
-              path="users"
-              element={
-                <PlaceholderPage
-                  title="用户与组"
-                  description="不会使用前端 mock 用户数据。"
-                />
-              }
-            />
+            <Route path="users" element={<UsersPage />} />
             <Route
               path="acl-simulator"
               element={
