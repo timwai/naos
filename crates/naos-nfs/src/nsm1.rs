@@ -146,10 +146,7 @@ fn empty_args_reply(call: &RpcCall) -> Vec<u8> {
 
 fn notify_reply(call: &RpcCall) -> Vec<u8> {
     let mut reader = XdrReader::new(&call.body);
-    if reader.string(SM_MAXSTRLEN).is_err()
-        || reader.u32().is_err()
-        || reader.finish().is_err()
-    {
+    if reader.string(SM_MAXSTRLEN).is_err() || reader.u32().is_err() || reader.finish().is_err() {
         return accepted_garbage_args(call.xid);
     }
     accepted_success(call.xid, &[])
@@ -189,8 +186,7 @@ mod tests {
         body.string("client.example").unwrap();
         let call = rpc_call(31, SM_STAT, &body.into_bytes());
 
-        let reply =
-            dispatch_nsm1_rpc(&service, "127.0.0.1".parse().unwrap(), &call).await;
+        let reply = dispatch_nsm1_rpc(&service, "127.0.0.1".parse().unwrap(), &call).await;
         let mut reader = XdrReader::new(&reply);
         assert_rpc_success_prefix(&mut reader, 31);
         assert_eq!(reader.u32().unwrap(), STAT_SUCC);
@@ -210,8 +206,7 @@ mod tests {
         body.fixed_opaque(&[7; SM_PRIV_SIZE]);
         let call = rpc_call(32, SM_MON, &body.into_bytes());
 
-        let reply =
-            dispatch_nsm1_rpc(&service, "127.0.0.1".parse().unwrap(), &call).await;
+        let reply = dispatch_nsm1_rpc(&service, "127.0.0.1".parse().unwrap(), &call).await;
         let mut reader = XdrReader::new(&reply);
         assert_rpc_success_prefix(&mut reader, 32);
         assert_eq!(reader.u32().unwrap(), STAT_SUCC);
@@ -226,8 +221,7 @@ mod tests {
         body.string("server.example").unwrap();
         let call = rpc_call(33, SM_MON, &body.into_bytes());
 
-        let reply =
-            dispatch_nsm1_rpc(&service, "127.0.0.1".parse().unwrap(), &call).await;
+        let reply = dispatch_nsm1_rpc(&service, "127.0.0.1".parse().unwrap(), &call).await;
         let mut reader = XdrReader::new(&reply);
         assert_eq!(reader.u32().unwrap(), 33);
         assert_eq!(reader.u32().unwrap(), 1);
