@@ -187,7 +187,9 @@ mod tests {
             reply.u32(0);
             reply.u32(0);
             reply.u32(1);
-            write_record(&mut stream, &reply.into_bytes()).await.unwrap();
+            write_record(&mut stream, &reply.into_bytes())
+                .await
+                .unwrap();
         });
 
         register_tcp(address, 100003, 3, 32049).await.unwrap();
