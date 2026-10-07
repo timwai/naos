@@ -1537,6 +1537,176 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn blocked_lock_is_granted_after_conflicting_unlock() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+
+        let callback = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let callback_port = callback.local_addr().unwrap().port();
+        let (portmapper, _) = fake_callback_endpoints(callback_port).await;
+        let rpcbind_port = portmapper.local_addr().unwrap().port();
+        let portmapper_task = tokio::spawn(serve_one_port_lookup(portmapper, callback_port));
+        let service = service.with_callback_rpcbind_port(rpcbind_port);
+        let client_ip = "127.0.0.1".parse().unwrap();
+
+        let first_lock = lock(handle.clone(), "client-a", 10, 0, 100);
+        assert_eq!(
+            service
+                .lock(
+                    client_ip,
+                    &credential(1000),
+                    vec![1],
+                    true,
+                    first_lock.clone(),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+
+        let blocked_lock = lock(handle, "client-b", 20, 0, 100);
+        assert_eq!(
+            service
+                .lock_with_block(
+                    client_ip,
+                    &credential(1000),
+                    vec![2],
+                    true,
+                    true,
+                    blocked_lock,
+                    false,
+                )
+                .await
+                .status,
+            NLM4_BLOCKED
+        );
+        assert_eq!(service.waiters.lock().await.len(), 1);
+
+        let callback_task = tokio::spawn(async move {
+            let mut datagram = vec![0u8; 4096];
+            let (length, peer) = callback.recv_from(&mut datagram).await.unwrap();
+            let callback_call = decode_call(&datagram[..length]).unwrap();
+            assert_eq!(callback_call.program, NLM_PROGRAM);
+            assert_eq!(callback_call.version, NLM_VERSION);
+            assert_eq!(callback_call.procedure, NLMPROC4_GRANTED);
+            assert_eq!(callback_call.credential.flavor(), AUTH_SYS);
+
+            let mut args = XdrReader::new(&callback_call.body);
+            let cookie = args.opaque(16).unwrap();
+            assert_eq!(cookie, vec![2]);
+            assert_eq!(args.u32().unwrap(), 1);
+            assert_eq!(args.string(MAX_CALLER_NAME_BYTES).unwrap(), "client-b");
+            assert!(!args.opaque(MAX_HANDLE_BYTES).unwrap().is_empty());
+            assert_eq!(args.opaque(MAX_NETOBJ_BYTES).unwrap(), b"client-b");
+            assert_eq!(args.u32().unwrap() as i32, 20);
+            assert_eq!(args.u64().unwrap(), 0);
+            assert_eq!(args.u64().unwrap(), 100);
+            args.finish().unwrap();
+
+            let mut body = XdrWriter::new();
+            body.opaque(&cookie).unwrap();
+            body.u32(NLM4_GRANTED);
+            let reply = accepted_success(callback_call.xid, &body.into_bytes());
+            callback.send_to(&reply, peer).await.unwrap();
+        });
+
+        assert_eq!(
+            service
+                .unlock(
+                    client_ip,
+                    &credential(1000),
+                    vec![3],
+                    first_lock,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+
+        callback_task.await.unwrap();
+        portmapper_task.await.unwrap();
+        assert!(service.waiters.lock().await.is_empty());
+        let locks = service.locks.lock().await;
+        assert_eq!(locks.len(), 1);
+        assert_eq!(locks[0].owner.caller_name, "client-b");
+        assert_eq!(locks[0].owner.svid, 20);
+    }
+
+    #[tokio::test]
+    async fn cancel_removes_blocked_lock_before_unlock() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let client_ip = "127.0.0.1".parse().unwrap();
+
+        let first_lock = lock(handle.clone(), "client-a", 10, 0, 100);
+        assert_eq!(
+            service
+                .lock(
+                    client_ip,
+                    &credential(1000),
+                    vec![1],
+                    true,
+                    first_lock.clone(),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+
+        let blocked_lock = lock(handle, "client-b", 20, 0, 100);
+        assert_eq!(
+            service
+                .lock_with_block(
+                    client_ip,
+                    &credential(1000),
+                    vec![2],
+                    true,
+                    true,
+                    blocked_lock.clone(),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_BLOCKED
+        );
+        assert_eq!(service.waiters.lock().await.len(), 1);
+
+        assert_eq!(
+            service
+                .cancel(
+                    client_ip,
+                    &credential(1000),
+                    vec![2],
+                    blocked_lock,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+        assert!(service.waiters.lock().await.is_empty());
+
+        assert_eq!(
+            service
+                .unlock(
+                    client_ip,
+                    &credential(1000),
+                    vec![3],
+                    first_lock,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+        assert!(service.locks.lock().await.is_empty());
+    }
+
+    #[tokio::test]
     async fn conflict_and_partial_unlock_are_range_aware() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
