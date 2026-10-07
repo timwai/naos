@@ -843,9 +843,9 @@ impl NfsV3Service {
         fs::rename(&source_path, &target_path)
             .await
             .map_err(io_error)?;
-        let changes =
-            self.handles
-                .rename_subtree(&source_context.export.id, &source, &target)?;
+        let changes = self
+            .handles
+            .rename_subtree(&source_context.export.id, &source, &target)?;
         self.persist_handle_changes(changes).await?;
 
         Ok(RenameResult {
@@ -1143,10 +1143,7 @@ impl NfsV3Service {
         Ok(handle)
     }
 
-    async fn persist_handle_changes(
-        &self,
-        changes: FileHandleChanges,
-    ) -> Result<(), NfsV3Error> {
+    async fn persist_handle_changes(&self, changes: FileHandleChanges) -> Result<(), NfsV3Error> {
         if changes.is_empty() {
             return Ok(());
         }
