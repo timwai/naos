@@ -321,11 +321,7 @@ fn parse_universal_address_port(address: &str) -> Result<Option<u16>, RpcBindErr
         .and_then(|value| value.parse::<u8>().ok())
         .ok_or_else(|| RpcBindError::InvalidUniversalAddress(address.to_owned()))?;
     let port = (u16::from(high) << 8) | u16::from(low);
-    if port == 0 {
-        Ok(None)
-    } else {
-        Ok(Some(port))
-    }
+    if port == 0 { Ok(None) } else { Ok(Some(port)) }
 }
 
 fn random_xid() -> u32 {
@@ -457,7 +453,9 @@ mod tests {
             reply.u32(0);
             reply.u32(0);
             reply.string("127.0.0.1.125.47").unwrap();
-            write_record(&mut stream, &reply.into_bytes()).await.unwrap();
+            write_record(&mut stream, &reply.into_bytes())
+                .await
+                .unwrap();
         });
 
         assert_eq!(
@@ -503,7 +501,9 @@ mod tests {
             reply.u32(0);
             reply.u32(0);
             reply.u32(32047);
-            write_record(&mut stream, &reply.into_bytes()).await.unwrap();
+            write_record(&mut stream, &reply.into_bytes())
+                .await
+                .unwrap();
         });
 
         assert_eq!(
