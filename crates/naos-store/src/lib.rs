@@ -1,3 +1,4 @@
+mod acl_admin;
 mod nfs;
 mod operation;
 mod share_apply;

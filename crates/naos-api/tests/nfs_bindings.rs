@@ -34,6 +34,7 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
             .unwrap(),
     );
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
+    let acl = Arc::new(naos_core::acl::AclService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
     let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
     let nfs_principals = Arc::new(naos_core::nfs::NfsKrbPrincipalService::new(store.clone()));
@@ -61,6 +62,7 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
     let app = router(AppState {
         readiness: store.clone(),
         auth,
+        acl,
         operations,
         nfs_bindings,
         nfs_principals,
@@ -209,6 +211,77 @@ async fn nfs_binding_crud_normalizes_and_rejects_duplicates() {
     assert_eq!(shares["items"][0]["id"], "shr_nfs");
     assert_eq!(shares["items"][0]["nfs_enabled"], true);
     assert_eq!(shares["items"][0]["apply_state"], "in_sync");
+
+    sqlx::query(
+        "INSERT INTO share_acl
+            (id, share_id, rel_path, subject_type, subject_id, perm, inherit)
+         VALUES ('acl_root', 'shr_nfs', '/', 'user', ?, 'rw', 1)",
+    )
+    .bind(&admin_id)
+    .execute(store.pool())
+    .await
+    .unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/shares/shr_nfs/acl",
+            None,
+            peer,
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let rules = json_body(response).await;
+    assert_eq!(rules["items"].as_array().unwrap().len(), 1);
+    assert_eq!(rules["items"][0]["rel_path"], "/");
+    assert_eq!(rules["items"][0]["subject"]["type"], "user");
+    assert_eq!(rules["items"][0]["subject"]["name"], "admin");
+    assert_eq!(rules["items"][0]["permission"], "rw");
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/shares/shr_nfs/acl/simulate",
+            Some(json!({
+                "user_id": admin_id,
+                "rel_path": "/docs/report.txt",
+                "operation": "read"
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let simulated = json_body(response).await;
+    assert_eq!(simulated["permission"], "rw");
+    assert_eq!(simulated["allowed"], true);
+    assert_eq!(simulated["matched_depth"], 0);
+    assert_eq!(simulated["matched_rules"].as_array().unwrap().len(), 1);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/shares/shr_nfs/acl/simulate",
+            Some(json!({
+                "user_id": admin_id,
+                "rel_path": "/docs/../secret",
+                "operation": "read"
+            })),
+            peer,
+            Some(&cookie),
+            Some(&csrf),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
     let response = app
         .clone()

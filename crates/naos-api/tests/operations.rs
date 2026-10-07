@@ -36,6 +36,7 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
             .unwrap(),
     );
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
+    let acl = Arc::new(naos_core::acl::AclService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
     let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
     let nfs_principals = Arc::new(naos_core::nfs::NfsKrbPrincipalService::new(store.clone()));
@@ -63,6 +64,7 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
     let app = router(AppState {
         readiness: store.clone(),
         auth,
+        acl,
         operations,
         nfs_bindings,
         nfs_principals,

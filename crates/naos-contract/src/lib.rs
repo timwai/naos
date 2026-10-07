@@ -243,3 +243,55 @@ pub mod share {
         pub items: Vec<ShareDto>,
     }
 }
+
+
+pub mod acl {
+    use serde::{Deserialize, Serialize};
+    use utoipa::ToSchema;
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct AclSubjectDto {
+        #[serde(rename = "type")]
+        pub subject_type: String,
+        pub id: String,
+        pub name: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct AclRuleDto {
+        pub id: String,
+        pub rel_path: String,
+        pub subject: AclSubjectDto,
+        pub permission: String,
+        pub inherit: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct AclRulesResponse {
+        pub items: Vec<AclRuleDto>,
+    }
+
+    #[derive(Debug, Clone, Deserialize, ToSchema)]
+    pub struct AclSimulateRequest {
+        pub user_id: String,
+        pub rel_path: String,
+        pub operation: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct AclMatchedRuleDto {
+        pub rel_path: String,
+        pub subject: String,
+        pub permission: String,
+        pub inherit: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct AclSimulationResponse {
+        pub permission: String,
+        pub allowed: bool,
+        pub matched_depth: Option<u32>,
+        pub matched_rules: Vec<AclMatchedRuleDto>,
+        pub explanation: String,
+    }
+}

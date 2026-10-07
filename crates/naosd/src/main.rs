@@ -7,6 +7,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use naos_api::AppState;
 use naos_core::{
+    acl::AclService,
     auth::{AuthConfig, AuthService},
     doctor::SmbDoctorProbe,
     nfs::NfsBindingService,
@@ -111,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
         AuthService::new(store.clone(), AuthConfig::default())
             .context("initialize authentication service")?,
     );
+    let acl = Arc::new(AclService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
     let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
     let nfs_principals = Arc::new(naos_core::nfs::NfsKrbPrincipalService::new(store.clone()));
@@ -122,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
     let app = naos_api::router(AppState {
         readiness: store.clone(),
         auth: auth.clone(),
+        acl,
         operations,
         nfs_bindings,
         nfs_principals,

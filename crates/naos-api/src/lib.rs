@@ -1,3 +1,4 @@
+mod acl_api;
 mod doctor_api;
 mod nfs_api;
 mod operation_api;
@@ -37,6 +38,7 @@ const CSRF_HEADER: &str = "x-csrf-token";
 pub struct AppState {
     pub readiness: Arc<dyn ReadinessProbe>,
     pub auth: Arc<AuthService>,
+    pub acl: Arc<naos_core::acl::AclService>,
     pub operations: Arc<naos_core::operation::OperationService>,
     pub nfs_bindings: Arc<naos_core::nfs::NfsBindingService>,
     pub nfs_principals: Arc<naos_core::nfs::NfsKrbPrincipalService>,
@@ -58,6 +60,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/sessions", get(list_sessions))
         .route("/auth/sessions/{id}", delete(revoke_session))
         .route("/users", get(list_users))
+        .merge(acl_api::routes())
         .merge(operation_api::routes())
         .merge(doctor_api::routes())
         .merge(nfs_api::routes())
@@ -589,6 +592,7 @@ struct ApiDoc;
 
 pub fn openapi() -> utoipa::openapi::OpenApi {
     let mut document = ApiDoc::openapi();
+    document.merge(acl_api::openapi());
     document.merge(operation_api::openapi());
     document.merge(doctor_api::openapi());
     document.merge(nfs_api::openapi());
