@@ -333,12 +333,19 @@ async fn register_rpc_services(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, path::Path};
+    use std::{
+        collections::BTreeMap,
+        path::Path,
+        sync::Mutex,
+    };
 
     use async_trait::async_trait;
     use naos_core::{
         acl::{AclRule, Permission, Subject},
-        nfs::{NfsBinding, NfsBindingPermission, NfsCidr, NfsExport, NfsRepositoryError},
+        nfs::{
+            NFS_HANDLE_NONCE_BYTES, NfsBinding, NfsBindingPermission, NfsCidr, NfsExport,
+            NfsFileHandleRecord, NfsRepositoryError,
+        },
         path::RelativePath,
     };
     use tokio::net::TcpStream;
@@ -354,6 +361,8 @@ mod tests {
         exports: BTreeMap<String, NfsExport>,
         bindings: BTreeMap<String, Vec<NfsBinding>>,
         rules: BTreeMap<String, Vec<AclRule>>,
+        handle_secret: Mutex<Option<[u8; 32]>>,
+        file_handles: Mutex<Vec<NfsFileHandleRecord>>,
     }
 
     #[async_trait]
@@ -404,6 +413,47 @@ mod tests {
             _binding_id: &str,
         ) -> Result<bool, NfsRepositoryError> {
             Err(NfsRepositoryError::Unavailable)
+        }
+
+        async fn get_or_create_nfs_handle_secret(
+            &self,
+            candidate: [u8; 32],
+        ) -> Result<[u8; 32], NfsRepositoryError> {
+            let mut secret = self
+                .handle_secret
+                .lock()
+                .map_err(|_| NfsRepositoryError::Unavailable)?;
+            Ok(*secret.get_or_insert(candidate))
+        }
+
+        async fn list_nfs_file_handles(
+            &self,
+        ) -> Result<Vec<NfsFileHandleRecord>, NfsRepositoryError> {
+            self.file_handles
+                .lock()
+                .map(|handles| handles.clone())
+                .map_err(|_| NfsRepositoryError::Unavailable)
+        }
+
+        async fn apply_nfs_file_handle_changes(
+            &self,
+            upserts: Vec<NfsFileHandleRecord>,
+            deletes: Vec<[u8; NFS_HANDLE_NONCE_BYTES]>,
+        ) -> Result<(), NfsRepositoryError> {
+            let mut handles = self
+                .file_handles
+                .lock()
+                .map_err(|_| NfsRepositoryError::Unavailable)?;
+            handles.retain(|record| !deletes.contains(&record.nonce));
+            for record in upserts {
+                handles.retain(|current| {
+                    current.nonce != record.nonce
+                        && (current.share_id != record.share_id
+                            || current.relative_path != record.relative_path)
+                });
+                handles.push(record);
+            }
+            Ok(())
         }
     }
 
@@ -456,6 +506,8 @@ mod tests {
                     inherit: true,
                 }],
             )]),
+            handle_secret: Mutex::new(None),
+            file_handles: Mutex::new(Vec::new()),
         })
     }
 
@@ -513,6 +565,65 @@ mod tests {
 
         shutdown_tx.send(true).unwrap();
         server_task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn persisted_child_handle_survives_server_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let repository = repository(temp.path());
+
+        let first = NfsServer::bind(
+            repository.clone(),
+            NfsServerConfig {
+                listen: "127.0.0.1".parse().unwrap(),
+                nfs_port: 0,
+                mount_port: 0,
+                nlm_port: 0,
+                nsm_port: 0,
+                rpcbind_address: None,
+            },
+        )
+        .await
+        .unwrap();
+        let first_nfs = first.nfs_address().unwrap();
+        let first_mount = first.mount_address().unwrap();
+        let (first_shutdown_tx, first_shutdown_rx) = watch::channel(false);
+        let first_task = tokio::spawn(first.run(first_shutdown_rx));
+
+        let mount_reply = rpc_round_trip(first_mount, mount_call(60, "/media")).await;
+        let root_handle = parse_mount_handle(&mount_reply, 60);
+        let lookup_reply =
+            rpc_round_trip(first_nfs, lookup_call(61, &root_handle, "data.bin")).await;
+        let child_handle = parse_lookup_handle(&lookup_reply, 61);
+
+        first_shutdown_tx.send(true).unwrap();
+        first_task.await.unwrap().unwrap();
+
+        let second = NfsServer::bind(
+            repository,
+            NfsServerConfig {
+                listen: "127.0.0.1".parse().unwrap(),
+                nfs_port: 0,
+                mount_port: 0,
+                nlm_port: 0,
+                nsm_port: 0,
+                rpcbind_address: None,
+            },
+        )
+        .await
+        .unwrap();
+        let second_nfs = second.nfs_address().unwrap();
+        let (second_shutdown_tx, second_shutdown_rx) = watch::channel(false);
+        let second_task = tokio::spawn(second.run(second_shutdown_rx));
+
+        let getattr_reply = rpc_round_trip(second_nfs, getattr_call(62, &child_handle)).await;
+        assert_rpc_success_prefix(&getattr_reply, 62);
+        let mut reader = XdrReader::new(&getattr_reply[24..]);
+        assert_eq!(reader.u32().unwrap(), 0);
+
+        second_shutdown_tx.send(true).unwrap();
+        second_task.await.unwrap().unwrap();
     }
 
     #[tokio::test]
