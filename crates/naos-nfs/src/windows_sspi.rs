@@ -179,7 +179,7 @@ impl RpcSecGssHandshake for WindowsSspiHandshake {
             BufferType: SECBUFFER_TOKEN,
             pvBuffer: output.as_mut_ptr().cast(),
         };
-        let output_desc = SecBufferDesc {
+        let mut output_desc = SecBufferDesc {
             ulVersion: SECBUFFER_VERSION,
             cBuffers: 1,
             pBuffers: &mut output_buffer,
