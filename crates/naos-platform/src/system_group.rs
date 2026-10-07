@@ -6,10 +6,13 @@ use std::collections::HashSet;
 use thiserror::Error;
 
 use crate::{
-    account::{AccountError, SystemAccountManager, SystemAccountName, SystemGroupName},
+    account::{AccountError, SystemAccountName, SystemGroupName},
     command::{CommandError, CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner},
 };
+#[cfg(target_os = "linux")]
+use crate::account::SystemAccountManager;
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 const GROUP_MARKER: &str = "Managed by naos";
 #[cfg(target_os = "windows")]
 const WINDOWS_GROUP_ENV: &str = "NAOS_GROUP";
