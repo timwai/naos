@@ -180,6 +180,9 @@ async fn target_matches(
     if name != target.group_name || updated_at != target.expected_updated_at {
         return Ok(false);
     }
+    if target.action == GroupMutationAction::Delete {
+        ensure_no_acl_references(tx, &target.group_id).await?;
+    }
 
     Ok(members_for_group(tx, &target.group_id).await? == target.current_members)
 }
@@ -262,8 +265,16 @@ async fn ensure_no_acl_references(
     .fetch_one(&mut **tx)
     .await
     .map_err(store_error)?;
+    let active_acl_operations = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)
+         FROM operations
+         WHERE kind = 'acl.replace' AND state IN ('queued', 'running')",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(store_error)?;
 
-    if count == 0 {
+    if count == 0 && active_acl_operations == 0 {
         Ok(())
     } else {
         Err(GroupMutationRepositoryError::AclReferenced)
