@@ -1860,6 +1860,24 @@ mod tests {
         }
     }
 
+    fn share(handle: Vec<u8>, owner: &str, mode: u32, access: u32) -> NlmShare {
+        NlmShare {
+            caller_name: owner.to_owned(),
+            file_handle: handle,
+            owner_handle: owner.as_bytes().to_vec(),
+            mode,
+            access,
+        }
+    }
+
+    fn encode_share(writer: &mut XdrWriter, share: &NlmShare) {
+        writer.string(&share.caller_name).unwrap();
+        writer.opaque(&share.file_handle).unwrap();
+        writer.opaque(&share.owner_handle).unwrap();
+        writer.u32(share.mode);
+        writer.u32(share.access);
+    }
+
     fn encode_lock(writer: &mut XdrWriter, lock: &NlmLock) {
         writer.string(&lock.caller_name).unwrap();
         writer.opaque(&lock.file_handle).unwrap();
@@ -2294,6 +2312,261 @@ mod tests {
         assert_eq!(locks[0].owner.client_ip, second_ip);
         drop(locks);
         assert!(service.waiters.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn share_reservations_enforce_dos_deny_modes_and_unshare() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let first_ip = "192.168.1.10".parse().unwrap();
+        let second_ip = "192.168.1.11".parse().unwrap();
+
+        let first = share(handle.clone(), "client-a", 2, 1);
+        assert_eq!(
+            service
+                .share(
+                    first_ip,
+                    &credential(1000),
+                    vec![1],
+                    first.clone(),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+
+        assert_eq!(
+            service
+                .share(
+                    second_ip,
+                    &credential(1000),
+                    vec![2],
+                    share(handle.clone(), "client-b", 0, 2),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_DENIED
+        );
+
+        assert_eq!(
+            service
+                .share(
+                    second_ip,
+                    &credential(1000),
+                    vec![3],
+                    share(handle.clone(), "client-b", 0, 1),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+        assert_eq!(service.shares.lock().await.len(), 2);
+
+        assert_eq!(
+            service
+                .unshare(first_ip, &credential(1000), vec![4], first)
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+
+        assert_eq!(
+            service
+                .share(
+                    second_ip,
+                    &credential(1000),
+                    vec![5],
+                    share(handle, "client-b", 0, 2),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+        let shares = service.shares.lock().await;
+        assert_eq!(shares.len(), 1);
+        assert_eq!(shares[0].owner.caller_name, "client-b");
+        assert_eq!(shares[0].access, 2);
+    }
+
+    #[tokio::test]
+    async fn share_grace_accepts_reclaim_and_rejects_unshare() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let service = service.with_grace_period(Duration::from_secs(60));
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let client_ip = "192.168.1.10".parse().unwrap();
+        let requested = share(handle, "client-a", 0, 1);
+
+        assert_eq!(
+            service
+                .share(
+                    client_ip,
+                    &credential(1000),
+                    vec![1],
+                    requested.clone(),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_DENIED_GRACE_PERIOD
+        );
+        assert_eq!(
+            service
+                .share(
+                    client_ip,
+                    &credential(1000),
+                    vec![2],
+                    requested.clone(),
+                    true,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+        assert_eq!(
+            service
+                .unshare(client_ip, &credential(1000), vec![3], requested)
+                .await
+                .status,
+            NLM4_DENIED_GRACE_PERIOD
+        );
+    }
+
+    #[tokio::test]
+    async fn free_all_and_peer_reboot_release_share_reservations() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let first_ip = "192.168.1.10".parse().unwrap();
+        let second_ip = "192.168.1.11".parse().unwrap();
+
+        for (ip, owner) in [(first_ip, "client-a"), (second_ip, "client-b")] {
+            assert_eq!(
+                service
+                    .share(
+                        ip,
+                        &credential(1000),
+                        vec![1],
+                        share(handle.clone(), owner, 0, 1),
+                        false,
+                    )
+                    .await
+                    .status,
+                NLM4_GRANTED
+            );
+        }
+        assert_eq!(service.shares.lock().await.len(), 2);
+
+        service
+            .free_all(first_ip, &credential(1000), "client-a")
+            .await;
+        {
+            let shares = service.shares.lock().await;
+            assert_eq!(shares.len(), 1);
+            assert_eq!(shares[0].owner.client_ip, second_ip);
+        }
+
+        service.release_stale_client_state(second_ip, 3).await;
+        assert!(service.shares.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn wire_share_and_unshare_echo_cookie_status_and_sequence() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let client_ip = "192.168.1.10".parse().unwrap();
+        let requested = share(handle, "client-a", 2, 1);
+
+        let mut body = XdrWriter::new();
+        body.opaque(&[9]).unwrap();
+        encode_share(&mut body, &requested);
+        body.u32(0);
+        let request = rpc_call(91, NLMPROC4_SHARE, credential(1000), &body.into_bytes());
+        let reply = dispatch_nlm4_rpc(&service, client_ip, &request).await;
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 91);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+        assert!(reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.opaque(16).unwrap(), vec![9]);
+        assert_eq!(reader.u32().unwrap(), NLM4_GRANTED);
+        assert_eq!(reader.u32().unwrap(), 0);
+        reader.finish().unwrap();
+        assert_eq!(service.shares.lock().await.len(), 1);
+
+        let mut body = XdrWriter::new();
+        body.opaque(&[10]).unwrap();
+        encode_share(&mut body, &requested);
+        body.u32(1);
+        let request = rpc_call(
+            92,
+            NLMPROC4_UNSHARE,
+            credential(1000),
+            &body.into_bytes(),
+        );
+        let reply = dispatch_nlm4_rpc(&service, client_ip, &request).await;
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 92);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+        assert!(reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.opaque(16).unwrap(), vec![10]);
+        assert_eq!(reader.u32().unwrap(), NLM4_GRANTED);
+        assert_eq!(reader.u32().unwrap(), 0);
+        reader.finish().unwrap();
+        assert!(service.shares.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn wire_share_rejects_invalid_mode_enum_as_garbage_args() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+
+        let mut body = XdrWriter::new();
+        body.opaque(&[1]).unwrap();
+        body.string("client-a").unwrap();
+        body.opaque(&handle).unwrap();
+        body.opaque(b"client-a").unwrap();
+        body.u32(4);
+        body.u32(1);
+        body.u32(0);
+        let request = rpc_call(
+            93,
+            NLMPROC4_SHARE,
+            credential(1000),
+            &body.into_bytes(),
+        );
+        let reply = dispatch_nlm4_rpc(
+            &service,
+            "192.168.1.10".parse().unwrap(),
+            &request,
+        )
+        .await;
+
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 93);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+        assert!(reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reader.u32().unwrap(), 4);
+        reader.finish().unwrap();
     }
 
     #[tokio::test]
