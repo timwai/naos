@@ -48,6 +48,10 @@ pub trait RpcSecGssSecurityContext: Send + Sync {
     fn unwrap(&self, ciphertext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError>;
 
     fn wrap(&self, plaintext: &[u8]) -> Result<Vec<u8>, RpcSecGssSecurityError>;
+
+    fn supports_privacy(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -783,6 +787,9 @@ async fn authenticate_exchange_call(
     }
 
     let security = registry.get(&credential.handle).await?;
+    if credential.service == RPCSEC_GSS_SVC_PRIVACY && !security.supports_privacy() {
+        return Err(RpcSecGssDataError::InvalidService);
+    }
     security
         .verify_mic(&call.header_through_credential, &call.verifier.body)
         .map_err(RpcSecGssDataError::HeaderSecurity)?;
