@@ -298,6 +298,10 @@ pub trait NfsBindingRepository: Send + Sync {
     async fn mark_nfs_lock_manager_started(&self) -> Result<bool, NfsRepositoryError> {
         Ok(false)
     }
+
+    async fn advance_nfs_nsm_state(&self) -> Result<u32, NfsRepositoryError> {
+        Ok(1)
+    }
 }
 
 #[async_trait]

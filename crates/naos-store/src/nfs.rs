@@ -256,6 +256,38 @@ impl NfsBindingRepository for Store {
         .rows_affected();
         Ok(inserted == 0)
     }
+
+    async fn advance_nfs_nsm_state(&self) -> Result<u32, NfsRepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(store_error)?;
+        let previous = sqlx::query_scalar::<_, Vec<u8>>(
+            "SELECT value FROM nfs_runtime_state WHERE key = 'nsm_state'",
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(store_error)?;
+
+        let state = match previous {
+            None => 1,
+            Some(value) => {
+                let bytes: [u8; 4] = value
+                    .try_into()
+                    .map_err(|_| NfsRepositoryError::Unavailable)?;
+                next_nsm_state(u32::from_be_bytes(bytes))
+            }
+        };
+
+        sqlx::query(
+            "INSERT INTO nfs_runtime_state (key, value)
+             VALUES ('nsm_state', ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(state.to_be_bytes().as_slice())
+        .execute(&mut *tx)
+        .await
+        .map_err(store_error)?;
+        tx.commit().await.map_err(store_error)?;
+        Ok(state)
+    }
 }
 
 #[async_trait]
@@ -335,6 +367,11 @@ fn export_from_row(row: sqlx::sqlite::SqliteRow) -> Result<NfsExport, NfsReposit
         canonical_path: row.try_get("canonical_path").map_err(store_error)?,
         generation,
     })
+}
+
+fn next_nsm_state(state: u32) -> u32 {
+    let next = state.wrapping_add(2);
+    if next == 0 { 1 } else { next | 1 }
 }
 
 fn store_error(_: sqlx::Error) -> NfsRepositoryError {
@@ -427,6 +464,29 @@ mod tests {
 
         assert!(!store.mark_nfs_lock_manager_started().await.unwrap());
         assert!(store.mark_nfs_lock_manager_started().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn nfs_nsm_state_advances_across_starts() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE nfs_runtime_state (
+                key TEXT PRIMARY KEY,
+                value BLOB NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let store = Store { pool };
+
+        assert_eq!(store.advance_nfs_nsm_state().await.unwrap(), 1);
+        assert_eq!(store.advance_nfs_nsm_state().await.unwrap(), 3);
+        assert_eq!(store.advance_nfs_nsm_state().await.unwrap(), 5);
     }
 
     #[tokio::test]
