@@ -9,15 +9,16 @@ use thiserror::Error;
 use crate::{
     handle::FileHandleTable,
     rpc::{
-        AUTH_BADCRED, AUTH_BADVERF, AUTH_NONE, AUTH_SYS, RPCSEC_GSS, RPCSEC_GSS_CREDPROBLEM,
-        RPCSEC_GSS_CTXPROBLEM, RPCSEC_GSS_DATA, RpcCall, RpcCredential, RpcDecodeError,
+        AUTH_NONE, AUTH_SYS, RPCSEC_GSS, RPCSEC_GSS_CREDPROBLEM, RPCSEC_GSS_DATA,
+        RPCSEC_GSS_DESTROY, RpcCall, RpcCredential, RpcDecodeError,
         accepted_garbage_args, accepted_procedure_unavailable, accepted_program_mismatch,
         accepted_program_unavailable, accepted_success, accepted_system_error, decode_call,
         denied_auth_error, denied_rpc_mismatch, rpcsec_gss_unavailable_reply,
     },
     rpcsec_gss::{
-        RpcSecGssAcceptor, RpcSecGssContextRegistry, RpcSecGssDataError, RpcSecGssRegistryError,
-        accept_context_call, authenticate_data_call, rpcsec_gss_context_error_reply,
+        RpcSecGssAcceptor, RpcSecGssContextRegistry, accept_context_call,
+        authenticate_data_call, destroy_context_call, rpcsec_gss_context_error_reply,
+        rpcsec_gss_reply_error_reply, rpcsec_gss_request_error_reply,
     },
     transport::{read_record, write_record},
     xdr::{XdrReader, XdrWriter},
@@ -255,6 +256,13 @@ pub async fn dispatch_mount_rpc(
             && let Some(registry) = service.rpcsec_gss_registry.as_ref()
         {
             return dispatch_rpcsec_gss_data(service, registry, client_ip, &call).await;
+        } else if credential.gss_proc == RPCSEC_GSS_DESTROY
+            && let Some(registry) = service.rpcsec_gss_registry.as_ref()
+        {
+            return match destroy_context_call(registry, &call).await {
+                Ok(reply) => reply,
+                Err(error) => rpcsec_gss_request_error_reply(call.xid, error),
+            };
         }
     }
 
@@ -292,7 +300,7 @@ async fn dispatch_rpcsec_gss_data(
 ) -> Vec<u8> {
     let authenticated = match authenticate_data_call(registry, call).await {
         Ok(authenticated) => authenticated,
-        Err(error) => return rpcsec_gss_data_error_reply(call.xid, error),
+        Err(error) => return rpcsec_gss_request_error_reply(call.xid, error),
     };
 
     let user_id = match service
@@ -313,33 +321,9 @@ async fn dispatch_rpcsec_gss_data(
     trusted_call.body = authenticated.arguments().to_vec();
 
     let reply = dispatch_mount_call(service, client_ip, &trusted_call).await;
-    authenticated
-        .protect_accepted_reply(&reply)
-        .unwrap_or_default()
-}
-
-fn rpcsec_gss_data_error_reply(xid: u32, error: RpcSecGssDataError) -> Vec<u8> {
-    match error {
-        RpcSecGssDataError::Registry(
-            RpcSecGssRegistryError::Replay | RpcSecGssRegistryError::TooOld,
-        )
-        | RpcSecGssDataError::InvalidReply => Vec::new(),
-        RpcSecGssDataError::Registry(RpcSecGssRegistryError::InvalidHandle) => {
-            denied_auth_error(xid, RPCSEC_GSS_CTXPROBLEM)
-        }
-        RpcSecGssDataError::InvalidVerifier => denied_auth_error(xid, AUTH_BADVERF),
-        RpcSecGssDataError::NotDataCall
-        | RpcSecGssDataError::InvalidCredential
-        | RpcSecGssDataError::InvalidService
-        | RpcSecGssDataError::Registry(RpcSecGssRegistryError::SequenceOutOfRange) => {
-            denied_auth_error(xid, AUTH_BADCRED)
-        }
-        RpcSecGssDataError::Registry(
-            RpcSecGssRegistryError::DuplicateHandle | RpcSecGssRegistryError::InvalidSequenceWindow,
-        )
-        | RpcSecGssDataError::Security(_)
-        | RpcSecGssDataError::Body(_)
-        | RpcSecGssDataError::Xdr(_) => denied_auth_error(xid, RPCSEC_GSS_CREDPROBLEM),
+    match authenticated.protect_accepted_reply(&reply) {
+        Ok(reply) => reply,
+        Err(error) => rpcsec_gss_reply_error_reply(call.xid, error),
     }
 }
 

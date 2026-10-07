@@ -7,11 +7,13 @@ use crate::{
     rpc::{
         AUTH_BADCRED, AUTH_BADVERF, AUTH_NONE, AUTH_REJECTEDCRED, GSS_S_COMPLETE,
         GSS_S_CONTINUE_NEEDED, MAX_AUTH_BYTES, MAX_RPC_RECORD_BYTES, MSG_ACCEPTED, PROG_MISMATCH,
-        REPLY, RPCSEC_GSS, RPCSEC_GSS_CONTINUE_INIT, RPCSEC_GSS_DATA, RPCSEC_GSS_INIT,
-        RPCSEC_GSS_MAXSEQ, RPCSEC_GSS_SVC_INTEGRITY, RPCSEC_GSS_SVC_NONE, RPCSEC_GSS_SVC_PRIVACY,
+        REPLY, RPCSEC_GSS, RPCSEC_GSS_CONTINUE_INIT, RPCSEC_GSS_CREDPROBLEM, RPCSEC_GSS_DATA,
+        RPCSEC_GSS_DESTROY, RPCSEC_GSS_INIT, RPCSEC_GSS_MAXSEQ, RPCSEC_GSS_CTXPROBLEM,
+        RPCSEC_GSS_SVC_INTEGRITY, RPCSEC_GSS_SVC_NONE, RPCSEC_GSS_SVC_PRIVACY,
         RPCSEC_GSS_VERSION_1, RpcCall, RpcCredential, RpcSecGssBodyError, RpcSecGssInitResult,
         RpcSecGssSequenceDecision, RpcSecGssSequenceWindow, RpcVerifier, SUCCESS,
-        accepted_reply_with_verifier, accepted_success_with_verifier, accepted_system_error,
+        accepted_garbage_args, accepted_reply_with_verifier, accepted_success,
+        accepted_success_with_verifier, accepted_system_error,
         decode_rpcsec_gss_init_token, decode_rpcsec_gss_integrity_body,
         decode_rpcsec_gss_unwrapped_body, denied_auth_error, encode_rpcsec_gss_init_result,
         encode_rpcsec_gss_integrity_body, encode_rpcsec_gss_plaintext, rpcsec_gss_u32_mic_input,
@@ -405,10 +407,18 @@ pub enum RpcSecGssDataError {
     InvalidService,
     #[error("RPCSEC_GSS reply shape is invalid")]
     InvalidReply,
+    #[error("RPCSEC_GSS control call unexpectedly carried procedure arguments")]
+    UnexpectedArguments,
     #[error(transparent)]
     Registry(#[from] RpcSecGssRegistryError),
-    #[error(transparent)]
-    Security(#[from] RpcSecGssSecurityError),
+    #[error("RPCSEC_GSS header MIC verification failed")]
+    HeaderSecurity(#[source] RpcSecGssSecurityError),
+    #[error("RPCSEC_GSS body protection verification failed")]
+    BodySecurity(#[source] RpcSecGssSecurityError),
+    #[error("RPCSEC_GSS reply verifier generation failed")]
+    ReplyVerifierSecurity(#[source] RpcSecGssSecurityError),
+    #[error("RPCSEC_GSS reply body protection failed")]
+    ReplyBodySecurity(#[source] RpcSecGssSecurityError),
     #[error(transparent)]
     Body(#[from] RpcSecGssBodyError),
     #[error(transparent)]
@@ -444,7 +454,8 @@ impl RpcSecGssAuthenticatedCall {
     fn reply_verifier(&self) -> Result<RpcVerifier, RpcSecGssDataError> {
         let body = self
             .security
-            .get_mic(&rpcsec_gss_u32_mic_input(self.seq_num))?;
+            .get_mic(&rpcsec_gss_u32_mic_input(self.seq_num))
+            .map_err(RpcSecGssDataError::ReplyVerifierSecurity)?;
         if body.len() > MAX_AUTH_BYTES {
             return Err(XdrError::LimitExceeded.into());
         }
@@ -464,7 +475,10 @@ impl RpcSecGssAuthenticatedCall {
             RPCSEC_GSS_SVC_NONE => arguments.to_vec(),
             RPCSEC_GSS_SVC_INTEGRITY => {
                 let plaintext = encode_rpcsec_gss_plaintext(self.seq_num, arguments);
-                let checksum = self.security.get_mic(&plaintext)?;
+                let checksum = self
+                    .security
+                    .get_mic(&plaintext)
+                    .map_err(RpcSecGssDataError::ReplyBodySecurity)?;
                 if checksum.len() > MAX_RPC_RECORD_BYTES {
                     return Err(XdrError::LimitExceeded.into());
                 }
@@ -472,7 +486,10 @@ impl RpcSecGssAuthenticatedCall {
             }
             RPCSEC_GSS_SVC_PRIVACY => {
                 let plaintext = encode_rpcsec_gss_plaintext(self.seq_num, arguments);
-                let ciphertext = self.security.wrap(&plaintext)?;
+                let ciphertext = self
+                    .security
+                    .wrap(&plaintext)
+                    .map_err(RpcSecGssDataError::ReplyBodySecurity)?;
                 encode_privacy_body(&ciphertext)?
             }
             _ => return Err(RpcSecGssDataError::InvalidService),
@@ -526,39 +543,121 @@ pub async fn authenticate_data_call(
     registry: &RpcSecGssContextRegistry,
     call: &RpcCall,
 ) -> Result<RpcSecGssAuthenticatedCall, RpcSecGssDataError> {
+    authenticate_exchange_call(registry, call, RPCSEC_GSS_DATA).await
+}
+
+pub async fn destroy_context_call(
+    registry: &RpcSecGssContextRegistry,
+    call: &RpcCall,
+) -> Result<Vec<u8>, RpcSecGssDataError> {
     let RpcCredential::RpcSecGss(credential) = &call.credential else {
         return Err(RpcSecGssDataError::NotDataCall);
     };
-    if credential.gss_proc != RPCSEC_GSS_DATA {
+    if credential.gss_proc != RPCSEC_GSS_DESTROY || call.procedure != 0 {
+        return Err(RpcSecGssDataError::InvalidCredential);
+    }
+    let handle = credential.handle.clone();
+    let authenticated = authenticate_exchange_call(registry, call, RPCSEC_GSS_DESTROY).await?;
+    if !authenticated.arguments().is_empty() {
+        return Err(RpcSecGssDataError::UnexpectedArguments);
+    }
+
+    let reply = authenticated.protect_accepted_reply(&accepted_success(call.xid, &[]))?;
+    registry.remove(&handle).await?;
+    Ok(reply)
+}
+
+pub fn rpcsec_gss_request_error_reply(xid: u32, error: RpcSecGssDataError) -> Vec<u8> {
+    match error {
+        RpcSecGssDataError::Registry(
+            RpcSecGssRegistryError::Replay | RpcSecGssRegistryError::TooOld,
+        ) => Vec::new(),
+        RpcSecGssDataError::Registry(RpcSecGssRegistryError::InvalidHandle)
+        | RpcSecGssDataError::HeaderSecurity(_) => {
+            denied_auth_error(xid, RPCSEC_GSS_CREDPROBLEM)
+        }
+        RpcSecGssDataError::Registry(RpcSecGssRegistryError::SequenceOutOfRange) => {
+            denied_auth_error(xid, RPCSEC_GSS_CTXPROBLEM)
+        }
+        RpcSecGssDataError::InvalidVerifier => denied_auth_error(xid, AUTH_BADVERF),
+        RpcSecGssDataError::NotDataCall
+        | RpcSecGssDataError::InvalidCredential
+        | RpcSecGssDataError::InvalidService => denied_auth_error(xid, AUTH_BADCRED),
+        RpcSecGssDataError::UnexpectedArguments
+        | RpcSecGssDataError::BodySecurity(_)
+        | RpcSecGssDataError::Body(_)
+        | RpcSecGssDataError::Xdr(_) => accepted_garbage_args(xid),
+        RpcSecGssDataError::Registry(
+            RpcSecGssRegistryError::DuplicateHandle | RpcSecGssRegistryError::InvalidSequenceWindow,
+        ) => accepted_system_error(xid),
+        RpcSecGssDataError::ReplyVerifierSecurity(_)
+        | RpcSecGssDataError::ReplyBodySecurity(_)
+        | RpcSecGssDataError::InvalidReply => rpcsec_gss_reply_error_reply(xid, error),
+    }
+}
+
+pub fn rpcsec_gss_reply_error_reply(xid: u32, error: RpcSecGssDataError) -> Vec<u8> {
+    match error {
+        RpcSecGssDataError::ReplyVerifierSecurity(_) => {
+            denied_auth_error(xid, RPCSEC_GSS_CTXPROBLEM)
+        }
+        RpcSecGssDataError::ReplyBodySecurity(_)
+        | RpcSecGssDataError::InvalidReply
+        | RpcSecGssDataError::Xdr(_) => Vec::new(),
+        _ => accepted_system_error(xid),
+    }
+}
+
+async fn authenticate_exchange_call(
+    registry: &RpcSecGssContextRegistry,
+    call: &RpcCall,
+    expected_gss_proc: u32,
+) -> Result<RpcSecGssAuthenticatedCall, RpcSecGssDataError> {
+    let RpcCredential::RpcSecGss(credential) = &call.credential else {
+        return Err(RpcSecGssDataError::NotDataCall);
+    };
+    if credential.gss_proc != expected_gss_proc {
         return Err(RpcSecGssDataError::NotDataCall);
     }
-    if credential.version != RPCSEC_GSS_VERSION_1
-        || credential.handle.is_empty()
-        || credential.seq_num >= RPCSEC_GSS_MAXSEQ
-    {
+    if credential.version != RPCSEC_GSS_VERSION_1 || credential.handle.is_empty() {
         return Err(RpcSecGssDataError::InvalidCredential);
+    }
+    if credential.seq_num >= RPCSEC_GSS_MAXSEQ {
+        return Err(RpcSecGssRegistryError::SequenceOutOfRange.into());
+    }
+    if !matches!(
+        credential.service,
+        RPCSEC_GSS_SVC_NONE | RPCSEC_GSS_SVC_INTEGRITY | RPCSEC_GSS_SVC_PRIVACY
+    ) {
+        return Err(RpcSecGssDataError::InvalidService);
     }
     if call.verifier.flavor != RPCSEC_GSS || call.verifier.body.is_empty() {
         return Err(RpcSecGssDataError::InvalidVerifier);
     }
 
     let security = registry.get(&credential.handle).await?;
-    security.verify_mic(&call.header_through_credential, &call.verifier.body)?;
+    security
+        .verify_mic(&call.header_through_credential, &call.verifier.body)
+        .map_err(RpcSecGssDataError::HeaderSecurity)?;
 
     let arguments = match credential.service {
         RPCSEC_GSS_SVC_NONE => call.body.clone(),
         RPCSEC_GSS_SVC_INTEGRITY => {
             let protected = decode_rpcsec_gss_integrity_body(&call.body, credential.seq_num)?;
             let plaintext = encode_rpcsec_gss_plaintext(credential.seq_num, &protected.arguments);
-            security.verify_mic(&plaintext, &protected.checksum)?;
+            security
+                .verify_mic(&plaintext, &protected.checksum)
+                .map_err(RpcSecGssDataError::BodySecurity)?;
             protected.arguments
         }
         RPCSEC_GSS_SVC_PRIVACY => {
             let ciphertext = decode_privacy_body(&call.body)?;
-            let plaintext = security.unwrap(&ciphertext)?;
+            let plaintext = security
+                .unwrap(&ciphertext)
+                .map_err(RpcSecGssDataError::BodySecurity)?;
             decode_rpcsec_gss_unwrapped_body(&plaintext, credential.seq_num)?
         }
-        _ => return Err(RpcSecGssDataError::InvalidService),
+        _ => unreachable!("RPCSEC_GSS service was validated"),
     };
 
     registry
@@ -847,7 +946,9 @@ mod tests {
         let bad = data_call(RPCSEC_GSS_SVC_NONE, 10, b"args".to_vec(), b"wrong");
         assert_eq!(
             authenticate_data_call(&registry, &bad).await.err(),
-            Some(RpcSecGssDataError::Security(RpcSecGssSecurityError::BadMic))
+            Some(RpcSecGssDataError::HeaderSecurity(
+                RpcSecGssSecurityError::BadMic
+            ))
         );
 
         let good = data_call(RPCSEC_GSS_SVC_NONE, 10, b"args".to_vec(), b"header");
@@ -888,6 +989,86 @@ mod tests {
         );
         let authenticated = authenticate_data_call(&registry, &privacy).await.unwrap();
         assert_eq!(authenticated.arguments(), b"privacy-args");
+    }
+
+    #[tokio::test]
+    async fn destroy_context_requires_protected_empty_call_and_removes_context_after_reply() {
+        let registry = RpcSecGssContextRegistry::new();
+        registry
+            .insert(b"ctx".to_vec(), 8, context("alice@EXAMPLE.COM"))
+            .await
+            .unwrap();
+        let call = RpcCall {
+            xid: 88,
+            program: 100003,
+            version: 3,
+            procedure: 0,
+            credential: RpcCredential::RpcSecGss(RpcSecGssCredential {
+                version: RPCSEC_GSS_VERSION_1,
+                gss_proc: RPCSEC_GSS_DESTROY,
+                seq_num: 30,
+                service: RPCSEC_GSS_SVC_NONE,
+                handle: b"ctx".to_vec(),
+            }),
+            verifier: RpcVerifier {
+                flavor: RPCSEC_GSS,
+                body: b"header".to_vec(),
+            },
+            header_through_credential: b"header".to_vec(),
+            body: Vec::new(),
+        };
+
+        let reply = destroy_context_call(&registry, &call).await.unwrap();
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 88);
+        assert_eq!(reader.u32().unwrap(), REPLY);
+        assert_eq!(reader.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(reader.u32().unwrap(), RPCSEC_GSS);
+        assert_eq!(reader.opaque(MAX_AUTH_BYTES).unwrap(), 30u32.to_be_bytes());
+        assert_eq!(reader.u32().unwrap(), SUCCESS);
+        reader.finish().unwrap();
+        assert!(!registry.contains(b"ctx").await);
+
+        assert_eq!(
+            destroy_context_call(&registry, &call).await.err(),
+            Some(RpcSecGssDataError::Registry(
+                RpcSecGssRegistryError::InvalidHandle
+            ))
+        );
+    }
+
+    #[test]
+    fn request_error_mapping_matches_rpcsec_gss_error_classes() {
+        let mut reader = XdrReader::new(&rpcsec_gss_request_error_reply(
+            90,
+            RpcSecGssDataError::Registry(RpcSecGssRegistryError::InvalidHandle),
+        ));
+        assert_eq!(reader.u32().unwrap(), 90);
+        assert_eq!(reader.u32().unwrap(), REPLY);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), RPCSEC_GSS_CREDPROBLEM);
+
+        let mut reader = XdrReader::new(&rpcsec_gss_request_error_reply(
+            91,
+            RpcSecGssDataError::Registry(RpcSecGssRegistryError::SequenceOutOfRange),
+        ));
+        assert_eq!(reader.u32().unwrap(), 91);
+        assert_eq!(reader.u32().unwrap(), REPLY);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), RPCSEC_GSS_CTXPROBLEM);
+
+        let mut reader = XdrReader::new(&rpcsec_gss_request_error_reply(
+            92,
+            RpcSecGssDataError::BodySecurity(RpcSecGssSecurityError::BadMic),
+        ));
+        assert_eq!(reader.u32().unwrap(), 92);
+        assert_eq!(reader.u32().unwrap(), REPLY);
+        assert_eq!(reader.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+        assert!(reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reader.u32().unwrap(), 4);
     }
 
     #[test]
