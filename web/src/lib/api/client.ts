@@ -1,10 +1,17 @@
 import type { components } from "./generated";
 
+export type AcceptedOperation =
+  components["schemas"]["AcceptedOperation"];
 export type ApiErrorBody = components["schemas"]["ErrorResponse"];
 export type AuthSessionResponse =
   components["schemas"]["AuthSessionResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
+export type NfsKrbPrincipalCreateRequest =
+  components["schemas"]["NfsKrbPrincipalCreateRequest"];
+export type NfsKrbPrincipalsResponse =
+  components["schemas"]["NfsKrbPrincipalsResponse"];
+export type OperationDto = components["schemas"]["OperationDto"];
 export type PasswordChangeRequest =
   components["schemas"]["PasswordChangeRequest"];
 export type SessionDto = components["schemas"]["SessionDto"];
@@ -142,4 +149,42 @@ export async function getReadiness(): Promise<HealthResponse> {
 
 export async function getSmbDoctor() {
   return requestJson<SmbDoctorResponse>("/api/v1/system/smb/doctor");
+}
+
+export async function startSystemVerify() {
+  return requestJson<AcceptedOperation>("/api/v1/system/verify", {
+    method: "POST",
+    headers: {
+      "idempotency-key": crypto.randomUUID(),
+    },
+  });
+}
+
+export async function getOperation(operationId: string) {
+  return requestJson<OperationDto>(
+    `/api/v1/operations/${encodeURIComponent(operationId)}`,
+  );
+}
+
+export async function listNfsPrincipals() {
+  return requestJson<NfsKrbPrincipalsResponse>("/api/v1/nfs/principals");
+}
+
+export async function createNfsPrincipal(
+  input: NfsKrbPrincipalCreateRequest,
+) {
+  return requestJson<components["schemas"]["NfsKrbPrincipalDto"]>(
+    "/api/v1/nfs/principals",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function deleteNfsPrincipal(principalId: string) {
+  return requestJson<void>(
+    `/api/v1/nfs/principals/${encodeURIComponent(principalId)}`,
+    { method: "DELETE" },
+  );
 }

@@ -6,6 +6,7 @@ import { DashboardPage } from "../pages/DashboardPage";
 import { LoginPage } from "../pages/LoginPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
 import { ProfilePage } from "../pages/ProfilePage";
+import { SettingsPage } from "../pages/SettingsPage";
 
 function RequireAuth() {
   const session = useSession();
@@ -29,6 +30,16 @@ function RequireAuth() {
   return <Outlet />;
 }
 
+function RequireAdmin() {
+  const session = useSession();
+
+  if (session.data?.user?.role !== "admin") {
+    return <Navigate to="/files" replace />;
+  }
+
+  return <Outlet />;
+}
+
 export function App() {
   return (
     <Routes>
@@ -38,29 +49,54 @@ export function App() {
           <Route index element={<DashboardPage />} />
           <Route
             path="files"
-            element={<PlaceholderPage title="文件" description="文件浏览 API 接线将在下一步落地。" />}
-          />
-          <Route
-            path="shares"
-            element={<PlaceholderPage title="共享" description="共享、ACL 与 NFS binding 将直接使用后端 API。" />}
-          />
-          <Route
-            path="users"
-            element={<PlaceholderPage title="用户与组" description="不会使用前端 mock 用户数据。" />}
-          />
-          <Route
-            path="acl-simulator"
-            element={<PlaceholderPage title="权限模拟器" description="模拟结果将由后端 acl-engine 返回。" />}
-          />
-          <Route
-            path="audit"
-            element={<PlaceholderPage title="审计" description="等待审计后端 API 接入。" />}
-          />
-          <Route
-            path="settings"
-            element={<PlaceholderPage title="设置" description="Doctor / Verify 会通过 Operation 模型接入。" />}
+            element={
+              <PlaceholderPage
+                title="文件"
+                description="文件浏览 API 接线将在下一步落地。"
+              />
+            }
           />
           <Route path="profile" element={<ProfilePage />} />
+
+          <Route element={<RequireAdmin />}>
+            <Route
+              path="shares"
+              element={
+                <PlaceholderPage
+                  title="共享"
+                  description="共享、ACL 与 NFS binding 将直接使用后端 API。"
+                />
+              }
+            />
+            <Route
+              path="users"
+              element={
+                <PlaceholderPage
+                  title="用户与组"
+                  description="不会使用前端 mock 用户数据。"
+                />
+              }
+            />
+            <Route
+              path="acl-simulator"
+              element={
+                <PlaceholderPage
+                  title="权限模拟器"
+                  description="模拟结果将由后端 acl-engine 返回。"
+                />
+              }
+            />
+            <Route
+              path="audit"
+              element={
+                <PlaceholderPage
+                  title="审计"
+                  description="等待审计后端 API 接入。"
+                />
+              }
+            />
+            <Route path="settings" element={<SettingsPage />} />
+          </Route>
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
