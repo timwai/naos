@@ -36,8 +36,7 @@ async fn test_app() -> (Router, TempDir) {
     let auth = Arc::new(AuthService::new(store.clone(), AuthConfig::default()).unwrap());
     let operations = Arc::new(OperationService::new(store.clone()));
     let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
-    let nfs_principals =
-        Arc::new(naos_core::nfs::NfsKrbPrincipalService::new(store.clone()));
+    let nfs_principals = Arc::new(naos_core::nfs::NfsKrbPrincipalService::new(store.clone()));
     let reconciler = Arc::new(Reconciler::new(operations.clone()));
     let smb_doctor = Arc::new(StaticSmbDoctorProbe::new(SmbDoctorReport {
         status: "ready".to_owned(),
