@@ -19,6 +19,9 @@ pub const AUTH_BADCRED: u32 = 1;
 pub const AUTH_REJECTEDCRED: u32 = 2;
 pub const AUTH_BADVERF: u32 = 3;
 pub const RPCSEC_GSS_CREDPROBLEM: u32 = 13;
+pub const RPCSEC_GSS_CTXPROBLEM: u32 = 14;
+pub const GSS_S_COMPLETE: u32 = 0;
+pub const GSS_S_CONTINUE_NEEDED: u32 = 1;
 pub const MAX_AUTH_BYTES: usize = 400;
 pub const MAX_RPC_RECORD_BYTES: usize = 16 * 1024 * 1024;
 
@@ -72,6 +75,89 @@ pub struct RpcSecGssIntegrityBody {
     pub seq_num: u32,
     pub arguments: Vec<u8>,
     pub checksum: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpcSecGssInitResult {
+    pub handle: Vec<u8>,
+    pub gss_major: u32,
+    pub gss_minor: u32,
+    pub seq_window: u32,
+    pub token: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RpcSecGssSequenceDecision {
+    Accepted,
+    Replay,
+    TooOld,
+    OutOfRange,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpcSecGssSequenceWindow {
+    seen: Vec<bool>,
+    highest: Option<u32>,
+}
+
+impl RpcSecGssSequenceWindow {
+    pub fn new(size: usize) -> Option<Self> {
+        if size == 0 || u32::try_from(size).is_err() {
+            return None;
+        }
+        Some(Self {
+            seen: vec![false; size],
+            highest: None,
+        })
+    }
+
+    pub fn size(&self) -> u32 {
+        u32::try_from(self.seen.len()).expect("RPCSEC_GSS sequence window fits u32")
+    }
+
+    pub const fn highest(&self) -> Option<u32> {
+        self.highest
+    }
+
+    pub fn check_and_mark(&mut self, seq_num: u32) -> RpcSecGssSequenceDecision {
+        if seq_num >= RPCSEC_GSS_MAXSEQ {
+            return RpcSecGssSequenceDecision::OutOfRange;
+        }
+
+        let Some(highest) = self.highest else {
+            self.highest = Some(seq_num);
+            self.seen[0] = true;
+            return RpcSecGssSequenceDecision::Accepted;
+        };
+
+        if seq_num > highest {
+            let advance = usize::try_from(seq_num - highest).expect("u32 difference fits usize");
+            let mut shifted = vec![false; self.seen.len()];
+            if advance < shifted.len() {
+                for (delta, was_seen) in self.seen.iter().copied().enumerate() {
+                    let next = delta + advance;
+                    if next < shifted.len() {
+                        shifted[next] = was_seen;
+                    }
+                }
+            }
+            shifted[0] = true;
+            self.seen = shifted;
+            self.highest = Some(seq_num);
+            return RpcSecGssSequenceDecision::Accepted;
+        }
+
+        let delta = usize::try_from(highest - seq_num).expect("u32 difference fits usize");
+        if delta >= self.seen.len() {
+            return RpcSecGssSequenceDecision::TooOld;
+        }
+        if self.seen[delta] {
+            return RpcSecGssSequenceDecision::Replay;
+        }
+
+        self.seen[delta] = true;
+        RpcSecGssSequenceDecision::Accepted
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -212,6 +298,52 @@ fn decode_rpcsec_gss(body: &[u8]) -> Result<RpcSecGssCredential, XdrError> {
     Ok(credential)
 }
 
+pub fn decode_rpcsec_gss_init_token(body: &[u8]) -> Result<Vec<u8>, XdrError> {
+    let mut reader = XdrReader::new(body);
+    let token = reader.opaque(MAX_RPC_RECORD_BYTES)?;
+    reader.finish()?;
+    Ok(token)
+}
+
+pub fn encode_rpcsec_gss_init_token(token: &[u8]) -> Result<Vec<u8>, XdrError> {
+    if token.len() > MAX_RPC_RECORD_BYTES {
+        return Err(XdrError::LimitExceeded);
+    }
+    let mut writer = XdrWriter::new();
+    writer.opaque(token)?;
+    Ok(writer.into_bytes())
+}
+
+pub fn decode_rpcsec_gss_init_result(body: &[u8]) -> Result<RpcSecGssInitResult, XdrError> {
+    let mut reader = XdrReader::new(body);
+    let result = RpcSecGssInitResult {
+        handle: reader.opaque(MAX_AUTH_BYTES)?,
+        gss_major: reader.u32()?,
+        gss_minor: reader.u32()?,
+        seq_window: reader.u32()?,
+        token: reader.opaque(MAX_RPC_RECORD_BYTES)?,
+    };
+    reader.finish()?;
+    Ok(result)
+}
+
+pub fn encode_rpcsec_gss_init_result(result: &RpcSecGssInitResult) -> Result<Vec<u8>, XdrError> {
+    if result.handle.len() > MAX_AUTH_BYTES || result.token.len() > MAX_RPC_RECORD_BYTES {
+        return Err(XdrError::LimitExceeded);
+    }
+    let mut writer = XdrWriter::new();
+    writer.opaque(&result.handle)?;
+    writer.u32(result.gss_major);
+    writer.u32(result.gss_minor);
+    writer.u32(result.seq_window);
+    writer.opaque(&result.token)?;
+    Ok(writer.into_bytes())
+}
+
+pub const fn rpcsec_gss_u32_mic_input(value: u32) -> [u8; 4] {
+    value.to_be_bytes()
+}
+
 pub fn decode_rpcsec_gss_integrity_body(
     body: &[u8],
     expected_seq_num: u32,
@@ -274,6 +406,14 @@ pub fn encode_rpcsec_gss_integrity_body(
 
 pub fn accepted_success(xid: u32, body: &[u8]) -> Vec<u8> {
     accepted_reply(xid, SUCCESS, None, body)
+}
+
+pub fn accepted_success_with_verifier(
+    xid: u32,
+    verifier: &RpcVerifier,
+    body: &[u8],
+) -> Result<Vec<u8>, XdrError> {
+    accepted_reply_with_verifier(xid, SUCCESS, None, verifier, body)
 }
 
 pub fn accepted_program_unavailable(xid: u32) -> Vec<u8> {
@@ -384,12 +524,36 @@ fn rpcsec_gss_service_is_valid(service: u32) -> bool {
 }
 
 fn accepted_reply(xid: u32, status: u32, mismatch: Option<(u32, u32)>, body: &[u8]) -> Vec<u8> {
+    accepted_reply_with_verifier(
+        xid,
+        status,
+        mismatch,
+        &RpcVerifier {
+            flavor: AUTH_NONE,
+            body: Vec::new(),
+        },
+        body,
+    )
+    .expect("AUTH_NONE verifier is always encodable")
+}
+
+fn accepted_reply_with_verifier(
+    xid: u32,
+    status: u32,
+    mismatch: Option<(u32, u32)>,
+    verifier: &RpcVerifier,
+    body: &[u8],
+) -> Result<Vec<u8>, XdrError> {
+    if verifier.body.len() > MAX_AUTH_BYTES {
+        return Err(XdrError::LimitExceeded);
+    }
+
     let mut writer = XdrWriter::new();
     writer.u32(xid);
     writer.u32(REPLY);
     writer.u32(MSG_ACCEPTED);
-    writer.u32(AUTH_NONE);
-    writer.u32(0);
+    writer.u32(verifier.flavor);
+    writer.opaque(&verifier.body)?;
     writer.u32(status);
     if let Some((low, high)) = mismatch {
         writer.u32(low);
@@ -397,7 +561,7 @@ fn accepted_reply(xid: u32, status: u32, mismatch: Option<(u32, u32)>, body: &[u
     }
     let mut output = writer.into_bytes();
     output.extend_from_slice(body);
-    output
+    Ok(output)
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -566,6 +730,102 @@ mod tests {
             decode_call(&writer.into_bytes()),
             Err(RpcDecodeError::MalformedCredential { xid: 100 })
         );
+    }
+
+    #[test]
+    fn rpcsec_gss_context_creation_codecs_preserve_large_tokens_and_result_fields() {
+        let token = vec![0x5a; MAX_AUTH_BYTES + 257];
+        let encoded_token = encode_rpcsec_gss_init_token(&token).unwrap();
+        assert_eq!(decode_rpcsec_gss_init_token(&encoded_token).unwrap(), token);
+
+        let result = RpcSecGssInitResult {
+            handle: b"context-handle".to_vec(),
+            gss_major: GSS_S_CONTINUE_NEEDED,
+            gss_minor: 7,
+            seq_window: 64,
+            token: vec![0x7b; MAX_AUTH_BYTES + 33],
+        };
+        let encoded_result = encode_rpcsec_gss_init_result(&result).unwrap();
+        assert_eq!(
+            decode_rpcsec_gss_init_result(&encoded_result).unwrap(),
+            result
+        );
+
+        let mut trailing = encoded_token;
+        trailing.extend_from_slice(&0u32.to_be_bytes());
+        assert_eq!(
+            decode_rpcsec_gss_init_token(&trailing),
+            Err(XdrError::TrailingData)
+        );
+    }
+
+    #[test]
+    fn rpcsec_gss_reply_verifier_and_mic_input_follow_wire_encoding() {
+        assert_eq!(rpcsec_gss_u32_mic_input(0x0102_0304), [1, 2, 3, 4]);
+
+        let reply = accepted_success_with_verifier(
+            0x1122_3344,
+            &RpcVerifier {
+                flavor: RPCSEC_GSS,
+                body: b"seq-window-mic".to_vec(),
+            },
+            b"result",
+        )
+        .unwrap();
+
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 0x1122_3344);
+        assert_eq!(reader.u32().unwrap(), REPLY);
+        assert_eq!(reader.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(reader.u32().unwrap(), RPCSEC_GSS);
+        assert_eq!(reader.opaque(MAX_AUTH_BYTES).unwrap(), b"seq-window-mic");
+        assert_eq!(reader.u32().unwrap(), SUCCESS);
+        assert_eq!(reader.remaining(), b"result");
+    }
+
+    #[test]
+    fn rpcsec_gss_sequence_window_accepts_out_of_order_once_and_rejects_replay() {
+        let mut window = RpcSecGssSequenceWindow::new(4).unwrap();
+        assert_eq!(window.size(), 4);
+        assert_eq!(window.highest(), None);
+
+        assert_eq!(
+            window.check_and_mark(10),
+            RpcSecGssSequenceDecision::Accepted
+        );
+        assert_eq!(
+            window.check_and_mark(12),
+            RpcSecGssSequenceDecision::Accepted
+        );
+        assert_eq!(
+            window.check_and_mark(11),
+            RpcSecGssSequenceDecision::Accepted
+        );
+        assert_eq!(
+            window.check_and_mark(11),
+            RpcSecGssSequenceDecision::Replay
+        );
+        assert_eq!(
+            window.check_and_mark(9),
+            RpcSecGssSequenceDecision::Accepted
+        );
+        assert_eq!(
+            window.check_and_mark(8),
+            RpcSecGssSequenceDecision::TooOld
+        );
+        assert_eq!(
+            window.check_and_mark(16),
+            RpcSecGssSequenceDecision::Accepted
+        );
+        assert_eq!(
+            window.check_and_mark(12),
+            RpcSecGssSequenceDecision::TooOld
+        );
+        assert_eq!(
+            window.check_and_mark(RPCSEC_GSS_MAXSEQ),
+            RpcSecGssSequenceDecision::OutOfRange
+        );
+        assert_eq!(window.highest(), Some(16));
     }
 
     #[test]
