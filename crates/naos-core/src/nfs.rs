@@ -427,7 +427,11 @@ impl NfsKrbPrincipalService {
     }
 
     pub async fn delete(&self, principal_id: &str) -> Result<(), NfsKrbPrincipalServiceError> {
-        if self.repository.delete_nfs_krb_principal(principal_id).await? {
+        if self
+            .repository
+            .delete_nfs_krb_principal(principal_id)
+            .await?
+        {
             Ok(())
         } else {
             Err(NfsKrbPrincipalServiceError::NotFound)
