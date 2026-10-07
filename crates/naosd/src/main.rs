@@ -14,6 +14,11 @@ use naos_core::{
     reconcile::Reconciler,
 };
 use naos_nfs::server::{NfsServer, NfsServerConfig};
+#[cfg(all(unix, feature = "system-gss"))]
+use naos_nfs::{
+    rpcsec_gss::StatefulRpcSecGssAcceptor,
+    system_gss::SystemGssHandshakeProvider,
+};
 use naos_platform::SmbDoctor;
 use naos_store::Store;
 use naos_webdav::WebDavState;
@@ -60,6 +65,12 @@ struct Cli {
 
     #[arg(long, env = "NAOS_NFS_RPCBIND", default_value_t = false)]
     nfs_rpcbind: bool,
+
+    #[arg(long, env = "NAOS_NFS_KERBEROS_ENABLED", default_value_t = false)]
+    nfs_kerberos_enabled: bool,
+
+    #[arg(long, env = "NAOS_NFS_KERBEROS_SERVICE_PRINCIPAL")]
+    nfs_kerberos_service_principal: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -127,25 +138,33 @@ async fn main() -> anyhow::Result<()> {
         let rpcbind_address = cli
             .nfs_rpcbind
             .then(|| SocketAddr::from(([127, 0, 0, 1], 111)));
-        let server = NfsServer::bind(
-            store,
-            NfsServerConfig {
-                listen: cli.nfs_listen,
-                nfs_port: cli.nfs_port,
-                mount_port: cli.mount_port,
-                nlm_port: cli.nlm_port,
-                nsm_port: cli.nsm_port,
-                rpcbind_address,
-            },
-        )
-        .await
-        .context("bind NFS data plane")?;
+        let config = NfsServerConfig {
+            listen: cli.nfs_listen,
+            nfs_port: cli.nfs_port,
+            mount_port: cli.mount_port,
+            nlm_port: cli.nlm_port,
+            nsm_port: cli.nsm_port,
+            rpcbind_address,
+        };
+        let server = if cli.nfs_kerberos_enabled {
+            bind_kerberos_nfs_server(
+                store,
+                config,
+                cli.nfs_kerberos_service_principal.as_deref(),
+            )
+            .await?
+        } else {
+            NfsServer::bind(store, config)
+                .await
+                .context("bind NFS data plane")?
+        };
         info!(
             nfs = %server.nfs_address()?,
             mount = %server.mount_address()?,
             nlm = %server.nlm_address()?,
             nsm = %server.nsm_address()?,
             rpcbind = cli.nfs_rpcbind,
+            kerberos = cli.nfs_kerberos_enabled,
             "NFS data plane started"
         );
         Some(server)
@@ -185,6 +204,44 @@ async fn main() -> anyhow::Result<()> {
     signal_task.abort();
 
     Ok(())
+}
+
+#[cfg(all(unix, feature = "system-gss"))]
+async fn bind_kerberos_nfs_server(
+    store: Arc<Store>,
+    config: NfsServerConfig,
+    service_principal: Option<&str>,
+) -> anyhow::Result<NfsServer> {
+    let service_principal = service_principal
+        .filter(|value| !value.trim().is_empty())
+        .context(
+            "NFS Kerberos requires --nfs-kerberos-service-principal / \
+             NAOS_NFS_KERBEROS_SERVICE_PRINCIPAL",
+        )?;
+    let provider = Arc::new(
+        SystemGssHandshakeProvider::new(service_principal)
+            .context("initialize NFS Kerberos system GSS acceptor credential")?,
+    );
+    let acceptor = Arc::new(
+        StatefulRpcSecGssAcceptor::new(provider, 128)
+            .context("configure NFS RPCSEC_GSS sequence window")?,
+    );
+
+    NfsServer::bind_with_rpcsec_gss(store, config, acceptor)
+        .await
+        .context("bind Kerberos-enabled NFS data plane")
+}
+
+#[cfg(not(all(unix, feature = "system-gss")))]
+async fn bind_kerberos_nfs_server(
+    _store: Arc<Store>,
+    _config: NfsServerConfig,
+    _service_principal: Option<&str>,
+) -> anyhow::Result<NfsServer> {
+    anyhow::bail!(
+        "NFS Kerberos was requested, but this naosd build does not include \
+         Unix system GSS support"
+    )
 }
 
 fn init_tracing() {
