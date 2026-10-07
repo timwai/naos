@@ -209,9 +209,9 @@ impl NsmV1Service {
         }
     }
 
-    pub(crate) async fn notify_reboot_peer(&self, peer_ip: IpAddr, notify_name: &str) -> bool {
+    pub(crate) async fn notify_reboot_peer(&self, peer_ip: IpAddr) -> bool {
         let state = self.current_state().await;
-        if !send_reboot_notification(peer_ip, notify_name, state).await {
+        if !send_reboot_notification(peer_ip, state).await {
             return false;
         }
 
@@ -224,7 +224,7 @@ impl NsmV1Service {
     }
 }
 
-async fn send_reboot_notification(peer_ip: IpAddr, notify_name: &str, state: u32) -> bool {
+async fn send_reboot_notification(peer_ip: IpAddr, state: u32) -> bool {
     let rpcbind_address = SocketAddr::new(peer_ip, RPCBIND_PORT);
     let port = match lookup_port(rpcbind_address, NSM_PROGRAM, NSM_VERSION, RpcTransport::Udp).await
     {
@@ -242,9 +242,16 @@ async fn send_reboot_notification(peer_ip: IpAddr, notify_name: &str, state: u32
         Err(_) => return false,
     };
 
-    let request = notify_rpc_call(random_xid(), notify_name, state);
     let target = SocketAddr::new(peer_ip, port);
-    socket.send_to(&request, target).await.ok() == Some(request.len())
+    if socket.connect(target).await.is_err() {
+        return false;
+    }
+    let notify_name = match socket.local_addr() {
+        Ok(address) => address.ip().to_string(),
+        Err(_) => return false,
+    };
+    let request = notify_rpc_call(random_xid(), &notify_name, state);
+    socket.send(&request).await.ok() == Some(request.len())
 }
 
 fn notify_rpc_call(xid: u32, notify_name: &str, state: u32) -> Vec<u8> {
