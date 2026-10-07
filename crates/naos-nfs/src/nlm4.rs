@@ -638,10 +638,7 @@ impl NlmV4Service {
             };
         }
 
-        let validated = match self
-            .validate_share(client_ip, credential, &share)
-            .await
-        {
+        let validated = match self.validate_share(client_ip, credential, &share).await {
             Ok(validated) => validated,
             Err(status) => {
                 return NlmShareResult {
