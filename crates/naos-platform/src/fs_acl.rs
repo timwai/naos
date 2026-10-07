@@ -8,7 +8,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
-    account::SystemAccountName,
+    account::{SystemAccountName, SystemGroupName},
     command::{CommandError, CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner},
 };
 
@@ -21,8 +21,44 @@ pub enum FsAclPermission {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FsAclSubject {
+    User(SystemAccountName),
+    Group(SystemGroupName),
+}
+
+impl FsAclSubject {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::User(account) => account.as_str(),
+            Self::Group(group) => group.as_str(),
+        }
+    }
+
+    fn posix_tag(&self) -> &'static str {
+        match self {
+            Self::User(_) => "u",
+            Self::Group(_) => "g",
+        }
+    }
+
+    fn posix_long_tag(&self) -> &'static str {
+        match self {
+            Self::User(_) => "user",
+            Self::Group(_) => "group",
+        }
+    }
+
+    fn macos_tag(&self) -> &'static str {
+        match self {
+            Self::User(_) => "user",
+            Self::Group(_) => "group",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveAclEntry {
-    pub account: SystemAccountName,
+    pub subject: FsAclSubject,
     pub permission: FsAclPermission,
     pub inherit: bool,
 }
@@ -196,7 +232,7 @@ impl FsAclManager {
     pub async fn remove(
         &self,
         target: &Path,
-        account: &SystemAccountName,
+        subject: &FsAclSubject,
     ) -> Result<(), FsAclError> {
         let canonical = canonical_target(target)?;
         let path = path_text(&canonical);
@@ -207,19 +243,19 @@ impl FsAclManager {
             let output = self.runner.run(query.clone()).await?;
             require_success(&query, &output)?;
 
-            if linux_has_entry(&output.stdout, account.as_str(), false) {
+            if linux_has_entry(&output.stdout, subject, false) {
                 let spec = CommandSpec::new("setfacl").args([
                     "-x".to_owned(),
-                    format!("u:{}", account.as_str()),
+                    format!("{}:{}", subject.posix_tag(), subject.name()),
                     path.clone(),
                 ]);
                 let output = self.runner.run(spec.clone()).await?;
                 require_success(&spec, &output)?;
             }
-            if canonical.is_dir() && linux_has_entry(&output.stdout, account.as_str(), true) {
+            if canonical.is_dir() && linux_has_entry(&output.stdout, subject, true) {
                 let spec = CommandSpec::new("setfacl").args([
                     "-x".to_owned(),
-                    format!("d:u:{}", account.as_str()),
+                    format!("d:{}:{}", subject.posix_tag(), subject.name()),
                     path,
                 ]);
                 let output = self.runner.run(spec.clone()).await?;
@@ -233,7 +269,7 @@ impl FsAclManager {
             let list = CommandSpec::new("/bin/ls").args(["-lde".to_owned(), path.clone()]);
             let output = self.runner.run(list.clone()).await?;
             require_success(&list, &output)?;
-            for index in macos_account_indexes(&output.stdout, account.as_str())
+            for index in macos_subject_indexes(&output.stdout, subject)
                 .into_iter()
                 .rev()
             {
@@ -254,7 +290,7 @@ impl FsAclManager {
                 let spec = CommandSpec::new("icacls.exe").args([
                     path.clone(),
                     mode.to_owned(),
-                    account.as_str().to_owned(),
+                    subject.name().to_owned(),
                 ]);
                 let output = self.runner.run(spec.clone()).await?;
                 require_success(&spec, &output)?;
@@ -301,8 +337,8 @@ impl FsAclManager {
             let spec = CommandSpec::new("icacls.exe").args([path]);
             let output = self.runner.run(spec.clone()).await?;
             require_success(&spec, &output)?;
-            let account = entry.account.as_str().to_ascii_lowercase();
-            return if output.stdout.to_ascii_lowercase().contains(&account) {
+            let subject = entry.subject.name().to_ascii_lowercase();
+            return if output.stdout.to_ascii_lowercase().contains(&subject) {
                 Ok(())
             } else {
                 Err(FsAclError::VerifyFailed)
@@ -318,7 +354,7 @@ impl FsAclManager {
     pub async fn verify_absent(
         &self,
         target: &Path,
-        account: &SystemAccountName,
+        subject: &FsAclSubject,
     ) -> Result<(), FsAclError> {
         let canonical = canonical_target(target)?;
         let path = path_text(&canonical);
@@ -328,8 +364,8 @@ impl FsAclManager {
             let spec = CommandSpec::new("getfacl").args(["-cp".to_owned(), path]);
             let output = self.runner.run(spec.clone()).await?;
             require_success(&spec, &output)?;
-            let present = linux_has_entry(&output.stdout, account.as_str(), false)
-                || linux_has_entry(&output.stdout, account.as_str(), true);
+            let present = linux_has_entry(&output.stdout, subject, false)
+                || linux_has_entry(&output.stdout, subject, true);
             return if present {
                 Err(FsAclError::VerifyFailed)
             } else {
@@ -342,7 +378,7 @@ impl FsAclManager {
             let spec = CommandSpec::new("/bin/ls").args(["-lde".to_owned(), path]);
             let output = self.runner.run(spec.clone()).await?;
             require_success(&spec, &output)?;
-            return if macos_account_indexes(&output.stdout, account.as_str()).is_empty() {
+            return if macos_subject_indexes(&output.stdout, subject).is_empty() {
                 Ok(())
             } else {
                 Err(FsAclError::VerifyFailed)
@@ -354,7 +390,7 @@ impl FsAclManager {
             let spec = CommandSpec::new("icacls.exe").args([path]);
             let output = self.runner.run(spec.clone()).await?;
             require_success(&spec, &output)?;
-            let account = account.as_str().to_ascii_lowercase();
+            let subject = subject.name().to_ascii_lowercase();
             return if output.stdout.to_ascii_lowercase().contains(&account) {
                 Err(FsAclError::VerifyFailed)
             } else {
@@ -378,9 +414,13 @@ fn path_text(path: &Path) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_has_entry(output: &str, account: &str, default: bool) -> bool {
-    let prefix = if default { "default:user:" } else { "user:" };
-    let marker = format!("{prefix}{account}:");
+fn linux_has_entry(output: &str, subject: &FsAclSubject, default: bool) -> bool {
+    let default_prefix = if default { "default:" } else { "" };
+    let marker = format!(
+        "{default_prefix}{}:{}:",
+        subject.posix_long_tag(),
+        subject.name()
+    );
     output
         .lines()
         .any(|line| line.trim() == marker || line.trim().starts_with(&marker))
@@ -393,12 +433,12 @@ fn linux_entry_matches(output: &str, entry: &EffectiveAclEntry, is_dir: bool) ->
         FsAclPermission::ReadOnly => "r-x",
         FsAclPermission::ReadWrite => "rwx",
     };
-    let current = format!("user:{}:{permission}", entry.account.as_str());
+    let current = format!("{}:{}:{permission}", entry.subject.posix_long_tag(), entry.subject.name());
     if !output.lines().any(|line| line.trim() == current) {
         return false;
     }
 
-    let default = format!("default:user:{}:{permission}", entry.account.as_str());
+    let default = format!("default:{}:{}:{permission}", entry.subject.posix_long_tag(), entry.subject.name());
     let has_default = output.lines().any(|line| line.trim() == default);
     if is_dir {
         has_default == entry.inherit
@@ -409,7 +449,7 @@ fn linux_entry_matches(output: &str, entry: &EffectiveAclEntry, is_dir: bool) ->
 
 #[cfg(target_os = "macos")]
 fn macos_entry_matches(output: &str, entry: &EffectiveAclEntry) -> bool {
-    let marker = format!("user:{} ", entry.account.as_str());
+    let marker = format!("{}:{} ", entry.subject.macos_tag(), entry.subject.name());
     let lines = output
         .lines()
         .map(str::trim)
@@ -443,7 +483,7 @@ fn macos_entry_matches(output: &str, entry: &EffectiveAclEntry) -> bool {
 
 #[cfg(any(target_os = "linux", test))]
 fn linux_specs(target: &Path, entry: &EffectiveAclEntry, is_dir: bool) -> Vec<CommandSpec> {
-    let account = entry.account.as_str();
+    let subject = entry.subject.name();
     let permission = match entry.permission {
         FsAclPermission::None => "---",
         FsAclPermission::ReadOnly => "r-x",
@@ -452,7 +492,7 @@ fn linux_specs(target: &Path, entry: &EffectiveAclEntry, is_dir: bool) -> Vec<Co
     let path = path_text(target);
     let mut specs = vec![CommandSpec::new("setfacl").args([
         "-m".to_owned(),
-        format!("u:{account}:{permission}"),
+        format!("{}:{subject}:{permission}", entry.subject.posix_tag()),
         path.clone(),
     ])];
 
@@ -460,13 +500,13 @@ fn linux_specs(target: &Path, entry: &EffectiveAclEntry, is_dir: bool) -> Vec<Co
         if entry.inherit {
             specs.push(CommandSpec::new("setfacl").args([
                 "-m".to_owned(),
-                format!("d:u:{account}:{permission}"),
+                format!("d:{}:{subject}:{permission}", entry.subject.posix_tag()),
                 path,
             ]));
         } else {
             specs.push(CommandSpec::new("setfacl").args([
                 "-x".to_owned(),
-                format!("d:u:{account}"),
+                format!("d:{}:{subject}", entry.subject.posix_tag()),
                 path,
             ]));
         }
@@ -477,9 +517,9 @@ fn linux_specs(target: &Path, entry: &EffectiveAclEntry, is_dir: bool) -> Vec<Co
 
 #[cfg(any(target_os = "macos", test))]
 fn macos_specs(target: &Path, entry: &EffectiveAclEntry, current_acl: &str) -> Vec<CommandSpec> {
-    let account = entry.account.as_str();
+    let subject = entry.subject.name();
     let path = path_text(target);
-    let mut specs = macos_account_indexes(current_acl, account)
+    let mut specs = macos_subject_indexes(current_acl, &entry.subject)
         .into_iter()
         .rev()
         .map(|index| {
@@ -498,7 +538,7 @@ fn macos_specs(target: &Path, entry: &EffectiveAclEntry, current_acl: &str) -> V
             let rights = "read,write,execute,delete,append,list,search,add_file,add_subdirectory,delete_child,readattr,writeattr,readextattr,writeextattr,readsecurity";
             specs.push(CommandSpec::new("/bin/chmod").args([
                 "+a".to_owned(),
-                format!("user:{account} deny {rights}{inheritance}"),
+                format!("{}:{subject} deny {rights}{inheritance}", entry.subject.macos_tag()),
                 path,
             ]));
         }
@@ -508,12 +548,12 @@ fn macos_specs(target: &Path, entry: &EffectiveAclEntry, current_acl: &str) -> V
             let allowed = "read,execute,list,search,readattr,readextattr,readsecurity";
             specs.push(CommandSpec::new("/bin/chmod").args([
                 "+a".to_owned(),
-                format!("user:{account} deny {denied}{inheritance}"),
+                format!("{}:{subject} deny {denied}{inheritance}", entry.subject.macos_tag()),
                 path.clone(),
             ]));
             specs.push(CommandSpec::new("/bin/chmod").args([
                 "+a".to_owned(),
-                format!("user:{account} allow {allowed}{inheritance}"),
+                format!("{}:{subject} allow {allowed}{inheritance}", entry.subject.macos_tag()),
                 path,
             ]));
         }
@@ -521,7 +561,7 @@ fn macos_specs(target: &Path, entry: &EffectiveAclEntry, current_acl: &str) -> V
             let rights = "read,write,execute,delete,append,list,search,add_file,add_subdirectory,delete_child,readattr,writeattr,readextattr,writeextattr,readsecurity";
             specs.push(CommandSpec::new("/bin/chmod").args([
                 "+a".to_owned(),
-                format!("user:{account} allow {rights}{inheritance}"),
+                format!("{}:{subject} allow {rights}{inheritance}", entry.subject.macos_tag()),
                 path,
             ]));
         }
@@ -531,8 +571,8 @@ fn macos_specs(target: &Path, entry: &EffectiveAclEntry, current_acl: &str) -> V
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn macos_account_indexes(output: &str, account: &str) -> Vec<usize> {
-    let marker = format!("user:{account} ");
+fn macos_subject_indexes(output: &str, subject: &FsAclSubject) -> Vec<usize> {
+    let marker = format!("{}:{} ", subject.macos_tag(), subject.name());
     output
         .lines()
         .filter_map(|line| {
@@ -557,7 +597,7 @@ fn windows_specs(target: &Path, entry: &EffectiveAclEntry) -> Vec<CommandSpec> {
         CommandSpec::new("icacls.exe").args([
             path.clone(),
             "/remove:g".to_owned(),
-            account.to_owned(),
+            subject.to_owned(),
         ]),
         CommandSpec::new("icacls.exe").args([
             path.clone(),
@@ -571,26 +611,26 @@ fn windows_specs(target: &Path, entry: &EffectiveAclEntry) -> Vec<CommandSpec> {
             specs.push(CommandSpec::new("icacls.exe").args([
                 path,
                 "/deny".to_owned(),
-                format!("{account}:{inheritance}(F)"),
+                format!("{subject}:{inheritance}(F)"),
             ]));
         }
         FsAclPermission::ReadOnly => {
             specs.push(CommandSpec::new("icacls.exe").args([
                 path.clone(),
                 "/deny".to_owned(),
-                format!("{account}:{inheritance}(W,D)"),
+                format!("{subject}:{inheritance}(W,D)"),
             ]));
             specs.push(CommandSpec::new("icacls.exe").args([
                 path,
                 "/grant:r".to_owned(),
-                format!("{account}:{inheritance}(RX)"),
+                format!("{subject}:{inheritance}(RX)"),
             ]));
         }
         FsAclPermission::ReadWrite => {
             specs.push(CommandSpec::new("icacls.exe").args([
                 path,
                 "/grant:r".to_owned(),
-                format!("{account}:{inheritance}(M)"),
+                format!("{subject}:{inheritance}(M)"),
             ]));
         }
     }
@@ -616,7 +656,17 @@ mod tests {
 
     fn entry(permission: FsAclPermission, inherit: bool) -> EffectiveAclEntry {
         EffectiveAclEntry {
-            account: SystemAccountName::from_username("alice").unwrap(),
+            subject: FsAclSubject::User(SystemAccountName::from_username("alice").unwrap()),
+            permission,
+            inherit,
+        }
+    }
+
+    fn group_entry(permission: FsAclPermission, inherit: bool) -> EffectiveAclEntry {
+        EffectiveAclEntry {
+            subject: FsAclSubject::Group(
+                SystemGroupName::from_group_id("grp_01JXYZ1234567890ABCDE").unwrap(),
+            ),
             permission,
             inherit,
         }
@@ -636,6 +686,18 @@ mod tests {
             specs[1].args,
             vec!["-m", "d:u:naos_alice:r-x", "/srv/share"]
         );
+    }
+
+    #[test]
+    fn linux_group_acl_uses_named_group_entries() {
+        let specs = linux_specs(
+            Path::new("/srv/share"),
+            &group_entry(FsAclPermission::ReadWrite, true),
+            true,
+        );
+
+        assert!(specs[0].args[1].starts_with("g:naosg_"));
+        assert!(specs[1].args[1].starts_with("d:g:naosg_"));
     }
 
     #[test]
@@ -667,6 +729,21 @@ mod tests {
     }
 
     #[test]
+    fn macos_group_acl_uses_group_principal() {
+        let specs = macos_specs(
+            Path::new("/srv/share"),
+            &group_entry(FsAclPermission::ReadOnly, false),
+            "",
+        );
+
+        assert!(specs.iter().any(|spec| {
+            spec.args
+                .iter()
+                .any(|arg| arg.starts_with("group:naosg_") && arg.contains(" allow "))
+        }));
+    }
+
+    #[test]
     fn windows_read_only_denies_write_then_grants_read() {
         let specs = windows_specs(
             Path::new("C:/share"),
@@ -680,6 +757,17 @@ mod tests {
         assert!(specs[2].args[2].contains("(W,D)"));
         assert_eq!(specs[3].args[1], "/grant:r");
         assert!(specs[3].args[2].contains("(RX)"));
+    }
+
+    #[test]
+    fn windows_group_acl_uses_managed_group_name() {
+        let specs = windows_specs(
+            Path::new("C:/share"),
+            &group_entry(FsAclPermission::ReadWrite, true),
+        );
+
+        assert!(specs[0].args[2].starts_with("naosg_"));
+        assert!(specs[2].args[2].starts_with("naosg_"));
     }
 
     #[test]
