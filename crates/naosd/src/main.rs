@@ -147,12 +147,8 @@ async fn main() -> anyhow::Result<()> {
     let files = Arc::new(FileService::new(store.clone()));
     let groups = Arc::new(GroupService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
-    let group_mutations = Arc::new(GroupMutationService::new(
-        store.clone(),
-        operations.clone(),
-    ));
-    let group_reconcile_factory =
-        Arc::new(PlatformGroupReconcileDriverFactory::new(store.clone()));
+    let group_mutations = Arc::new(GroupMutationService::new(store.clone(), operations.clone()));
+    let group_reconcile_factory = Arc::new(PlatformGroupReconcileDriverFactory::new(store.clone()));
     let acl_mutations = Arc::new(AclMutationService::new(store.clone(), operations.clone()));
     let acl_reconcile_factory = Arc::new(PlatformAclReconcileDriverFactory::new(
         store.clone(),
