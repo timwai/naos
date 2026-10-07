@@ -231,10 +231,7 @@ async fn members_for_user_ids(
     for user_id in user_ids {
         query = query.bind(user_id);
     }
-    let rows = query
-        .fetch_all(&mut **tx)
-        .await
-        .map_err(store_error)?;
+    let rows = query.fetch_all(&mut **tx).await.map_err(store_error)?;
     if rows.len() != user_ids.len() {
         return Err(GroupMutationRepositoryError::UserNotFound);
     }
