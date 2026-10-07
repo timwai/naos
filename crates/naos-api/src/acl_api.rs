@@ -6,8 +6,8 @@ use axum::{
 };
 use naos_contract::{
     acl::{
-        AclMatchedRuleDto, AclRuleDto, AclRulesResponse, AclSimulateRequest,
-        AclSimulationResponse, AclSubjectDto,
+        AclMatchedRuleDto, AclRuleDto, AclRulesResponse, AclSimulateRequest, AclSimulationResponse,
+        AclSubjectDto,
     },
     auth::ErrorResponse,
 };
@@ -72,12 +72,7 @@ async fn simulate_acl(
     AuthService::ensure_admin(&session)?;
     let result = state
         .acl
-        .simulate(
-            &share_id,
-            &input.user_id,
-            &input.rel_path,
-            &input.operation,
-        )
+        .simulate(&share_id, &input.user_id, &input.rel_path, &input.operation)
         .await?;
 
     Ok(Json(AclSimulationResponse {
@@ -129,9 +124,7 @@ impl From<AclServiceError> for ApiError {
                 "USER_NOT_FOUND",
                 "用户不存在或已禁用",
             ),
-            AclServiceError::Validation { field, message } => {
-                ApiError::validation(field, &message)
-            }
+            AclServiceError::Validation { field, message } => ApiError::validation(field, &message),
             AclServiceError::Repository(_) => ApiError::internal(),
         }
     }

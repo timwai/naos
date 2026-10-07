@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 use naos_core::{
-    acl::{
-        AclRepository, AclRepositoryError, AclRule, AclRuleRecord, Permission, Subject,
-    },
+    acl::{AclRepository, AclRepositoryError, AclRule, AclRuleRecord, Permission, Subject},
     path::RelativePath,
 };
 use sqlx::Row;
@@ -21,13 +19,12 @@ impl AclRepository for Store {
     }
 
     async fn enabled_user_exists(&self, user_id: &str) -> Result<bool, AclRepositoryError> {
-        let count = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM users WHERE id = ? AND enabled = 1",
-        )
-        .bind(user_id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(store_error)?;
+        let count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE id = ? AND enabled = 1")
+                .bind(user_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(store_error)?;
         Ok(count > 0)
     }
 
@@ -83,9 +80,7 @@ impl AclRepository for Store {
     }
 }
 
-fn rule_from_row(
-    row: sqlx::sqlite::SqliteRow,
-) -> Result<AclRuleRecord, AclRepositoryError> {
+fn rule_from_row(row: sqlx::sqlite::SqliteRow) -> Result<AclRuleRecord, AclRepositoryError> {
     let subject_type: String = row.try_get("subject_type").map_err(store_error)?;
     let subject_id: String = row.try_get("subject_id").map_err(store_error)?;
     let permission: String = row.try_get("perm").map_err(store_error)?;

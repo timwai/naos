@@ -319,15 +319,9 @@ impl AclService {
         let allowed = evaluation
             .permission
             .allows(operation.required_permission());
-        let explanation = match (
-            evaluation.matched_depth,
-            evaluation.permission,
-            allowed,
-        ) {
+        let explanation = match (evaluation.matched_depth, evaluation.permission, allowed) {
             (None, _, _) => "未命中 ACL 规则，按默认拒绝处理".to_owned(),
-            (Some(_), Permission::None, _) => {
-                "命中最深层级 ACL，显式拒绝规则优先".to_owned()
-            }
+            (Some(_), Permission::None, _) => "命中最深层级 ACL，显式拒绝规则优先".to_owned(),
             (Some(_), _, true) => "命中最深层级 ACL，权限满足该操作要求".to_owned(),
             (Some(_), _, false) => "命中最深层级 ACL，但权限不足以执行该操作".to_owned(),
         };
