@@ -48,7 +48,6 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$SHARE" "$MOUNTPOINT"
-printf 'before\n' >"$SHARE/roundtrip.txt"
 
 "$SERVER" "$SHARE" "$NFS_PORT" "$MOUNT_PORT" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
@@ -73,13 +72,17 @@ if [[ "$READY" -ne 1 ]]; then
   exit 6
 fi
 
-printf 'before\n' >"$ROOT/expected-before.txt"
-cmp "$ROOT/expected-before.txt" "$MOUNTPOINT/roundtrip.txt"
-
-printf 'after\n' >>"$MOUNTPOINT/roundtrip.txt"
+printf 'created\n' >"$MOUNTPOINT/roundtrip.txt"
 sync "$MOUNTPOINT/roundtrip.txt"
-grep -Fxq 'after' "$MOUNTPOINT/roundtrip.txt"
-grep -Fxq 'after' "$SHARE/roundtrip.txt"
+printf 'created\n' >"$ROOT/expected-created.txt"
+cmp "$ROOT/expected-created.txt" "$MOUNTPOINT/roundtrip.txt"
+cmp "$ROOT/expected-created.txt" "$SHARE/roundtrip.txt"
+
+printf 'truncated\n' >"$MOUNTPOINT/roundtrip.txt"
+sync "$MOUNTPOINT/roundtrip.txt"
+printf 'truncated\n' >"$ROOT/expected-truncated.txt"
+cmp "$ROOT/expected-truncated.txt" "$MOUNTPOINT/roundtrip.txt"
+cmp "$ROOT/expected-truncated.txt" "$SHARE/roundtrip.txt"
 
 mv "$MOUNTPOINT/roundtrip.txt" "$MOUNTPOINT/renamed.txt"
 [[ -f "$SHARE/renamed.txt" && ! -e "$SHARE/roundtrip.txt" ]]
@@ -92,4 +95,4 @@ rm "$MOUNTPOINT/renamed.txt"
 
 [[ ! -e "$SHARE/dir" && ! -e "$SHARE/renamed.txt" ]]
 
-echo "real NFSv3 mount/read/write/rename/delete smoke test passed"
+echo "real NFSv3 mount/create/truncate/read/write/rename/delete smoke test passed"
