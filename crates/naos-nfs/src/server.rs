@@ -7,10 +7,7 @@ use std::{
 use naos_core::nfs::{NfsAccessRepository, NfsBindingRepository};
 use rand_core::{OsRng, RngCore};
 use thiserror::Error;
-use tokio::{
-    net::TcpListener,
-    sync::watch,
-};
+use tokio::{net::TcpListener, sync::watch};
 use tracing::warn;
 
 use crate::{
@@ -133,7 +130,8 @@ impl NfsServer {
         }
 
         if let Some(rpcbind_address) = self.rpcbind_address {
-            if let Err(error) = unregister_tcp(rpcbind_address, MOUNT_PROGRAM, MOUNT_VERSION).await {
+            if let Err(error) = unregister_tcp(rpcbind_address, MOUNT_PROGRAM, MOUNT_VERSION).await
+            {
                 warn!(%error, "failed to unregister MOUNTv3 from rpcbind");
             }
             if let Err(error) = unregister_tcp(rpcbind_address, NFS_PROGRAM, NFS_VERSION).await {
