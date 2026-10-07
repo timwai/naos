@@ -77,12 +77,18 @@ jobs:
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
 
+          ready=false
           for _ in $(seq 1 30); do
             if curl -fsS "http://127.0.0.1:18443/" >"$RUNNER_TEMP/root.html"; then
+              ready=true
               break
             fi
             sleep 1
           done
+          if [ "$ready" != true ]; then
+            cat "$RUNNER_TEMP/naosd-spa.log"
+            exit 1
+          fi
 
           grep -q '<div id="root"></div>' "$RUNNER_TEMP/root.html"
           curl -fsS "http://127.0.0.1:18443/users" >"$RUNNER_TEMP/users.html"
@@ -90,7 +96,10 @@ jobs:
           curl -fsS "http://127.0.0.1:18443/assets/app.js" >/dev/null
           curl -fsS "http://127.0.0.1:18443/assets/app.css" >/dev/null
 
-          status="$(curl -sS -o /dev/null -w '%{http_code}'             "http://127.0.0.1:18443/api/v1/not-a-real-route")"
+          status="$(
+            curl -sS -o /dev/null -w '%{http_code}' \
+              "http://127.0.0.1:18443/api/v1/not-a-real-route"
+          )"
           test "$status" = "404"
 
 
