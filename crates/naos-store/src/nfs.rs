@@ -173,9 +173,7 @@ impl NfsBindingRepository for Store {
         row.map(krb_principal_from_row).transpose()
     }
 
-    async fn list_nfs_krb_principals(
-        &self,
-    ) -> Result<Vec<NfsKrbPrincipal>, NfsRepositoryError> {
+    async fn list_nfs_krb_principals(&self) -> Result<Vec<NfsKrbPrincipal>, NfsRepositoryError> {
         let rows = sqlx::query(
             "SELECT id, principal, user_id
              FROM nfs_krb_principals
@@ -560,16 +558,21 @@ mod tests {
                 .unwrap(),
             Some(mapping.clone())
         );
-        assert_eq!(store.list_nfs_krb_principals().await.unwrap(), vec![mapping.clone()]);
+        assert_eq!(
+            store.list_nfs_krb_principals().await.unwrap(),
+            vec![mapping.clone()]
+        );
 
         mapping.principal = "alice/admin@EXAMPLE.COM".to_owned();
         mapping.user_id = "usr_bob".to_owned();
         assert!(store.update_nfs_krb_principal(&mapping).await.unwrap());
-        assert!(store
-            .find_nfs_krb_principal("alice@EXAMPLE.COM")
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            store
+                .find_nfs_krb_principal("alice@EXAMPLE.COM")
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             store
                 .find_nfs_krb_principal("alice/admin@EXAMPLE.COM")
