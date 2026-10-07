@@ -1692,7 +1692,7 @@ NFSv3 数据面当前实现约束：
 - MOUNT 与 NFSv3 共用同一 file-handle table，rename 后已签发 handle 保持有效，delete 后对应 handle 变为 stale；
 - file-handle HMAC secret 与 nonce→share/path registry 已持久化到 SQLite；同一 share/path 会复用 registry 中的 nonce，rename 会事务化更新相关 handle path，delete/rmdir 会删除对应 registry 项。只要 share generation 与 canonical root 未发生使 handle 失效的变化，`naosd` 重启后旧 handle 可继续使用；绝对宿主机路径仍不会直接编码进 wire handle；
 - L1/L2 权限继续复用 `NfsBindingRepository + acl-engine + SafePathResolver`，协议层不得另写一套 ACL 规则；
-- L3/RPCSEC_GSS 仍为后续 feature，不属于当前基础数据面的完成条件。
+- L3/RPCSEC_GSS 已开始协议基础层：RPC decoder 识别 flavor 6 的 credential wire fields（version/gss_proc/seq_num/service/context handle），保留 RPC verifier 与计算 header MIC 所需的“header through credential”原始字节；但当前尚未接入 GSS context accept、VerifyMIC、integrity/privacy unwrap/wrap 或 Kerberos principal→naos user 映射，因此所有未验证的 RPCSEC_GSS MOUNT/NFS 数据请求继续 fail-closed，绝不回退到 L1 IP 身份。L3 仍是独立 feature，不计入 L1/L2 基础数据面的完成条件。
 
 对应运行参数：
 
@@ -2345,7 +2345,7 @@ package
 | 9 | SMB Doctor / conflict UX | UI 展示 provider、445 owner、冲突原因和可执行修复建议 |
 | 10 | WebDAV | ACL 一致性矩阵通过 |
 | 11 | NFS L1/L2 | 基础数据面 + in-process/真实 TCP smoke 已完成；NLMv4 同步 range-lock、异步 *_MSG/*_RES、BLOCKED→GRANTED、CANCEL、RPCBIND v4/v3 callback discovery 与 NSMv1 peer reboot cleanup 已接入；file-handle secret + nonce/path registry、NSM epoch、有效 NLM peer IP 已持久化，daemon restart grace/reclaim 与带 RPC acknowledgement 的 restart `SM_NOTIFY` 已实现，server E2E 覆盖旧 FH 跨两次 restart、reclaim 与 NSM epoch 1→3→5→7。分离主机远程 NLM smoke harness 已同时覆盖 macOS 与 Windows Client for NFS 的 record-lock，并支持可选 server restart/reclaim；剩余关键 gate 是在已配置真实分离 client/server 的 self-hosted runner 上实际跑绿 macOS/Windows 自动 `SM_NOTIFY → reclaim`；macOS 基础内核 NFS 数据面继续自动化通过 |
-| 12 | NFS L3（feature） | Linux/macOS krb5 测试通过 |
+| 12 | NFS L3（feature） | RPCSEC_GSS wire credential/verifier + MIC header preservation 已开始并保持 fail-closed；后续完成 GSS context、Kerberos principal 映射、integrity/privacy 与 Linux/macOS krb5 真机测试 |
 | 13 | React Web UI | 原型核心页面全部 API 化 |
 | 14 | 审计/Doctor/Verify | 可检索、可导出、漂移可发现 |
 | 15 | 打包/E2E/安全测试 | 三平台可安装、升级、卸载 |
