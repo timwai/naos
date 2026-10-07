@@ -374,7 +374,12 @@ mod tests {
                 commands[0].env,
                 vec![("NAOS_ACCOUNT".to_owned(), "naos_alice".to_owned())]
             );
-            assert!(commands[0].args.iter().all(|arg| !arg.contains("naos_alice")));
+            assert!(
+                commands[0]
+                    .args
+                    .iter()
+                    .all(|arg| !arg.contains("naos_alice"))
+            );
         }
 
         #[tokio::test]

@@ -10,12 +10,12 @@ use naos_core::{
 };
 use serde_json::{Value, json};
 
+#[cfg(target_os = "macos")]
+use naos_platform::{SystemAccountManager, SystemAccountName};
 #[cfg(target_os = "linux")]
 use naos_smb::LinuxSambaCredentialManager;
 #[cfg(target_os = "windows")]
 use naos_smb::WindowsSmbCredentialManager;
-#[cfg(target_os = "macos")]
-use naos_platform::{SystemAccountManager, SystemAccountName};
 
 pub struct PlatformUserReconcileDriverFactory {
     users: Arc<dyn UserMutationRepository>,
@@ -93,8 +93,8 @@ impl PlatformUserReconcileDriver {
 
     #[cfg(target_os = "macos")]
     async fn create_account(&self) -> Result<(), ReconcileFailure> {
-        let account = SystemAccountName::from_username(&self.target.username)
-            .map_err(platform_failure)?;
+        let account =
+            SystemAccountName::from_username(&self.target.username).map_err(platform_failure)?;
         let manager = SystemAccountManager::default();
         manager.ensure(&account).await.map_err(platform_failure)?;
         if self.target.desired_enabled {
@@ -148,8 +148,8 @@ impl PlatformUserReconcileDriver {
         if self.target.current_enabled == self.target.desired_enabled {
             return Ok(());
         }
-        let account = SystemAccountName::from_username(&self.target.username)
-            .map_err(platform_failure)?;
+        let account =
+            SystemAccountName::from_username(&self.target.username).map_err(platform_failure)?;
         let manager = SystemAccountManager::default();
         if self.target.desired_enabled {
             manager.enable(&account).await.map_err(platform_failure)
@@ -219,8 +219,8 @@ impl PlatformUserReconcileDriver {
 
     #[cfg(target_os = "macos")]
     async fn delete_account(&self) -> Result<(), ReconcileFailure> {
-        let account = SystemAccountName::from_username(&self.target.username)
-            .map_err(platform_failure)?;
+        let account =
+            SystemAccountName::from_username(&self.target.username).map_err(platform_failure)?;
         SystemAccountManager::default()
             .delete(&account)
             .await
@@ -305,8 +305,8 @@ impl PlatformUserReconcileDriver {
 
     #[cfg(target_os = "macos")]
     async fn restore_enabled_state(&self) -> Result<(), ReconcileFailure> {
-        let account = SystemAccountName::from_username(&self.target.username)
-            .map_err(platform_failure)?;
+        let account =
+            SystemAccountName::from_username(&self.target.username).map_err(platform_failure)?;
         let manager = SystemAccountManager::default();
         if self.target.current_enabled {
             manager.enable(&account).await.map_err(platform_failure)
@@ -409,9 +409,7 @@ impl ReconcileDriver for PlatformUserReconcileDriver {
     }
 }
 
-fn repository_failure(
-    _error: naos_core::user::UserMutationRepositoryError,
-) -> ReconcileFailure {
+fn repository_failure(_error: naos_core::user::UserMutationRepositoryError) -> ReconcileFailure {
     ReconcileFailure::new("USER_STORE_UNAVAILABLE", "user store is unavailable")
 }
 

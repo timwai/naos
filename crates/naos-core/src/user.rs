@@ -78,13 +78,8 @@ impl UserMutationSecret {
 
 #[derive(Clone)]
 pub enum UserMutationIntent {
-    Update {
-        role: Role,
-        enabled: bool,
-    },
-    PasswordReset {
-        password_hash: String,
-    },
+    Update { role: Role, enabled: bool },
+    PasswordReset { password_hash: String },
     Delete,
 }
 
@@ -243,10 +238,7 @@ impl UserMutationService {
             .await
             .map_err(map_repository_error)?;
 
-        Ok(self.finish_commit(
-            commit,
-            Some(UserMutationSecret::new(input.password)),
-        ))
+        Ok(self.finish_commit(commit, Some(UserMutationSecret::new(input.password))))
     }
 
     pub async fn update(
@@ -296,7 +288,8 @@ impl UserMutationService {
         actor_user_id: String,
         idempotency_key: String,
     ) -> Result<UserMutationResult, UserMutationError> {
-        validate_password(&password, self.config.min_password_length).map_err(map_auth_validation)?;
+        validate_password(&password, self.config.min_password_length)
+            .map_err(map_auth_validation)?;
         let password_hash = hash_password(password.clone())
             .await
             .map_err(map_auth_crypto)?;
@@ -371,7 +364,11 @@ impl UserMutationService {
             operation: commit.operation,
             created_operation: commit.created_operation,
             target: commit.target,
-            secret: if commit.created_operation { secret } else { None },
+            secret: if commit.created_operation {
+                secret
+            } else {
+                None
+            },
         }
     }
 }
@@ -507,7 +504,9 @@ impl ReconcileDriver for DatabaseUserReconcileDriver {
 
 fn map_auth_validation(error: AuthError) -> UserMutationError {
     match error {
-        AuthError::Validation { field, message } => UserMutationError::Validation { field, message },
+        AuthError::Validation { field, message } => {
+            UserMutationError::Validation { field, message }
+        }
         _ => UserMutationError::Crypto,
     }
 }

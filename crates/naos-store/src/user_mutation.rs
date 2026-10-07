@@ -93,37 +93,25 @@ impl UserMutationRepository for Store {
         .map_err(store_error)?
         .ok_or(UserMutationRepositoryError::NotFound)?;
 
-        let username = row
-            .try_get::<String, _>("username")
-            .map_err(store_error)?;
-        let current_role = Role::from_str(
-            &row.try_get::<String, _>("role").map_err(store_error)?,
-        )
-        .map_err(|_| UserMutationRepositoryError::Unavailable)?;
+        let username = row.try_get::<String, _>("username").map_err(store_error)?;
+        let current_role = Role::from_str(&row.try_get::<String, _>("role").map_err(store_error)?)
+            .map_err(|_| UserMutationRepositoryError::Unavailable)?;
         let current_enabled = row.try_get::<bool, _>("enabled").map_err(store_error)?;
         let expected_updated_at = row
             .try_get::<String, _>("updated_at")
             .map_err(store_error)?;
 
         let (action, desired_role, desired_enabled, password_hash) = match intent {
-            UserMutationIntent::Update { role, enabled } => (
-                UserMutationAction::Update,
-                *role,
-                *enabled,
-                None,
-            ),
+            UserMutationIntent::Update { role, enabled } => {
+                (UserMutationAction::Update, *role, *enabled, None)
+            }
             UserMutationIntent::PasswordReset { password_hash } => (
                 UserMutationAction::PasswordReset,
                 current_role,
                 current_enabled,
                 Some(password_hash.clone()),
             ),
-            UserMutationIntent::Delete => (
-                UserMutationAction::Delete,
-                current_role,
-                false,
-                None,
-            ),
+            UserMutationIntent::Delete => (UserMutationAction::Delete, current_role, false, None),
         };
 
         if current_role == Role::Admin
@@ -178,20 +166,16 @@ impl UserMutationRepository for Store {
             return Ok(false);
         };
 
-        let role = Role::from_str(
-            &row.try_get::<String, _>("role").map_err(store_error)?,
-        )
-        .map_err(|_| UserMutationRepositoryError::Unavailable)?;
+        let role = Role::from_str(&row.try_get::<String, _>("role").map_err(store_error)?)
+            .map_err(|_| UserMutationRepositoryError::Unavailable)?;
         let enabled = row.try_get::<bool, _>("enabled").map_err(store_error)?;
         let updated_at = row
             .try_get::<String, _>("updated_at")
             .map_err(store_error)?;
 
-        Ok(
-            role == target.current_role
-                && enabled == target.current_enabled
-                && updated_at == target.expected_updated_at,
-        )
+        Ok(role == target.current_role
+            && enabled == target.current_enabled
+            && updated_at == target.expected_updated_at)
     }
 
     async fn finalize_target(
@@ -211,15 +195,10 @@ impl UserMutationRepository for Store {
         let Some(current) = current else {
             return Ok(false);
         };
-        let current_role = Role::from_str(
-            &current
-                .try_get::<String, _>("role")
-                .map_err(store_error)?,
-        )
-        .map_err(|_| UserMutationRepositoryError::Unavailable)?;
-        let current_enabled = current
-            .try_get::<bool, _>("enabled")
-            .map_err(store_error)?;
+        let current_role =
+            Role::from_str(&current.try_get::<String, _>("role").map_err(store_error)?)
+                .map_err(|_| UserMutationRepositoryError::Unavailable)?;
+        let current_enabled = current.try_get::<bool, _>("enabled").map_err(store_error)?;
         let current_updated_at = current
             .try_get::<String, _>("updated_at")
             .map_err(store_error)?;
@@ -401,8 +380,8 @@ async fn existing_idempotent(
         return Ok(None);
     };
 
-    let same_resource = operation.kind.as_str() == "user.create"
-        || existing.resource_id == operation.resource_id;
+    let same_resource =
+        operation.kind.as_str() == "user.create" || existing.resource_id == operation.resource_id;
     if existing.kind.as_str() != operation.kind.as_str()
         || existing.resource_type != operation.resource_type
         || !same_resource

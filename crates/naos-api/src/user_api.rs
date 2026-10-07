@@ -15,9 +15,7 @@ use naos_contract::{
 };
 use naos_core::{
     auth::{AuthService, AuthenticatedSession, Role, UserSummary},
-    user::{
-        UserCreateInput, UserMutationError, UserMutationResult, UserUpdateInput,
-    },
+    user::{UserCreateInput, UserMutationError, UserMutationResult, UserUpdateInput},
 };
 use utoipa::OpenApi;
 

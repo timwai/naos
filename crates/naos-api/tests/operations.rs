@@ -845,13 +845,7 @@ async fn user_lifecycle_is_operation_backed_and_password_reset_revokes_old_crede
     assert_eq!(reset.status(), StatusCode::ACCEPTED);
     let reset = json_body(reset).await;
     assert_eq!(
-        wait_operation(
-            &app,
-            peer,
-            &cookie,
-            reset["operation_id"].as_str().unwrap(),
-        )
-        .await["state"],
+        wait_operation(&app, peer, &cookie, reset["operation_id"].as_str().unwrap()).await["state"],
         "succeeded"
     );
 
