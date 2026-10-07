@@ -13,13 +13,13 @@ use naos_core::{
     operation::OperationService,
     reconcile::Reconciler,
 };
+#[cfg(all(any(unix, windows), feature = "system-gss"))]
+use naos_nfs::rpcsec_gss::StatefulRpcSecGssAcceptor;
 use naos_nfs::server::{NfsServer, NfsServerConfig};
 #[cfg(all(unix, feature = "system-gss"))]
 use naos_nfs::system_gss::SystemGssHandshakeProvider;
 #[cfg(all(windows, feature = "system-gss"))]
 use naos_nfs::windows_sspi::WindowsSspiHandshakeProvider;
-#[cfg(all(any(unix, windows), feature = "system-gss"))]
-use naos_nfs::rpcsec_gss::StatefulRpcSecGssAcceptor;
 use naos_platform::SmbDoctor;
 use naos_store::Store;
 use naos_webdav::WebDavState;
