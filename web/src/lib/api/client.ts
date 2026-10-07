@@ -31,6 +31,7 @@ export type SetupAdminRequest =
 export type SetupStatusResponse =
   components["schemas"]["SetupStatusResponse"];
 export type ShareDto = components["schemas"]["ShareDto"];
+export type ShareWriteRequest = components["schemas"]["ShareWriteRequest"];
 export type SharesResponse = components["schemas"]["SharesResponse"];
 export type SmbDoctorResponse =
   components["schemas"]["SmbDoctorResponse"];
@@ -275,5 +276,50 @@ export async function deleteNfsBinding(
   return requestJson<void>(
     `/api/v1/shares/${encodeURIComponent(shareId)}/nfs-bindings/${encodeURIComponent(bindingId)}`,
     { method: "DELETE" },
+  );
+}
+
+export async function createShare(
+  input: ShareWriteRequest,
+  idempotencyKey = crypto.randomUUID(),
+) {
+  return requestJson<AcceptedOperation>("/api/v1/shares", {
+    method: "POST",
+    headers: {
+      "idempotency-key": idempotencyKey,
+    },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateShare(
+  shareId: string,
+  input: ShareWriteRequest,
+  idempotencyKey = crypto.randomUUID(),
+) {
+  return requestJson<AcceptedOperation>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}`,
+    {
+      method: "PUT",
+      headers: {
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function deleteShare(
+  shareId: string,
+  idempotencyKey = crypto.randomUUID(),
+) {
+  return requestJson<AcceptedOperation>(
+    `/api/v1/shares/${encodeURIComponent(shareId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        "idempotency-key": idempotencyKey,
+      },
+    },
   );
 }

@@ -3,20 +3,24 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import {
   ApiError,
   createNfsBinding,
   deleteNfsBinding,
+  deleteShare,
+  getOperation,
   getShare,
   listNfsBindings,
   listShareAcl,
   listUsers,
   updateNfsBinding,
+  updateShare,
   type NfsBindingDto,
   type NfsBindingUpsertRequest,
+  type ShareWriteRequest,
 } from "../lib/api/client";
 import { queryKeys } from "../lib/api/queryKeys";
 
@@ -30,8 +34,13 @@ function errorMessage(error: unknown) {
   return "请求失败";
 }
 
+function isTerminal(state: string | undefined) {
+  return state === "succeeded" || state === "failed" || state === "degraded";
+}
+
 export function ShareDetailPage() {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const share = useQuery({
@@ -59,6 +68,15 @@ export function ShareDetailPage() {
   const [uid, setUid] = useState("");
   const [userId, setUserId] = useState("");
   const [permission, setPermission] = useState("ro");
+  const [configDraft, setConfigDraft] = useState<ShareWriteRequest | null>(
+    null,
+  );
+  const [shareOperationId, setShareOperationId] = useState<string | null>(
+    null,
+  );
+  const [shareAction, setShareAction] = useState<"update" | "delete" | null>(
+    null,
+  );
 
   const selectedUserId =
     userId || users.data?.items.find((user) => user.enabled)?.id || "";
@@ -70,6 +88,76 @@ export function ShareDetailPage() {
     setUserId("");
     setPermission("ro");
   };
+
+  const saveShare = useMutation({
+    mutationFn: (input: ShareWriteRequest) => updateShare(id, input),
+    onSuccess: (operation) => {
+      setShareAction("update");
+      setShareOperationId(operation.operation_id);
+    },
+  });
+
+  const removeShare = useMutation({
+    mutationFn: () => deleteShare(id),
+    onSuccess: (operation) => {
+      setShareAction("delete");
+      setShareOperationId(operation.operation_id);
+    },
+  });
+
+  const shareOperation = useQuery({
+    queryKey: queryKeys.operations.detail(shareOperationId ?? ""),
+    queryFn: () => getOperation(shareOperationId ?? ""),
+    enabled: Boolean(shareOperationId),
+    refetchInterval: (query) =>
+      isTerminal(query.state.data?.state) ? false : 750,
+  });
+
+  useEffect(() => {
+    if (!share.data || configDraft !== null) {
+      return;
+    }
+    setConfigDraft({
+      name: share.data.name,
+      path: share.data.path,
+      comment: share.data.comment,
+      enabled: share.data.enabled,
+      smb_enabled: share.data.smb_enabled,
+      webdav_enabled: share.data.webdav_enabled,
+      nfs_enabled: share.data.nfs_enabled,
+    });
+  }, [configDraft, share.data]);
+
+  useEffect(() => {
+    if (shareOperation.data?.state !== "succeeded") {
+      return;
+    }
+
+    if (shareAction === "delete") {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.shares.list(),
+      });
+      navigate("/shares", { replace: true });
+      return;
+    }
+
+    if (shareAction === "update") {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.shares.detail(id),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.shares.list(),
+      });
+      setShareOperationId(null);
+      setShareAction(null);
+    }
+  }, [
+    id,
+    navigate,
+    queryClient,
+    shareAction,
+    shareOperation.data?.state,
+  ]);
 
   const saveBinding = useMutation({
     mutationFn: async () => {
@@ -128,6 +216,33 @@ export function ShareDetailPage() {
       return;
     }
     saveBinding.mutate();
+  };
+
+  const submitShare = (event: FormEvent) => {
+    event.preventDefault();
+    if (!configDraft) {
+      return;
+    }
+    setShareOperationId(null);
+    setShareAction(null);
+    saveShare.mutate({
+      ...configDraft,
+      name: configDraft.name.trim(),
+      path: configDraft.path.trim(),
+      comment: configDraft.comment?.trim() || null,
+    });
+  };
+
+  const requestDelete = () => {
+    if (
+      window.confirm(
+        "确定删除此共享？外部 SMB 清理成功后，数据库记录、ACL 与 NFS binding 会一起删除。",
+      )
+    ) {
+      setShareOperationId(null);
+      setShareAction(null);
+      removeShare.mutate();
+    }
   };
 
   if (!id) {
@@ -195,6 +310,179 @@ export function ShareDetailPage() {
           <small>persisted rules</small>
         </article>
       </div>
+
+      <article className="panel share-config-detail">
+        <div className="panel-heading">
+          <div>
+            <h2>共享配置</h2>
+            <p>
+              保存后先更新 desired state 与 generation，再由 Operation/Reconciler 应用协议状态。
+            </p>
+          </div>
+          <button
+            className="button danger"
+            type="button"
+            disabled={
+              removeShare.isPending ||
+              (Boolean(shareOperationId) &&
+                !isTerminal(shareOperation.data?.state))
+            }
+            onClick={requestDelete}
+          >
+            {removeShare.isPending ? "提交删除…" : "删除共享"}
+          </button>
+        </div>
+
+        {configDraft && (
+          <form className="share-config-form" onSubmit={submitShare}>
+            <label>
+              名称
+              <input
+                value={configDraft.name}
+                onChange={(event) =>
+                  setConfigDraft((value) =>
+                    value
+                      ? { ...value, name: event.target.value }
+                      : value,
+                  )
+                }
+                required
+              />
+            </label>
+            <label>
+              宿主路径
+              <input
+                value={configDraft.path}
+                onChange={(event) =>
+                  setConfigDraft((value) =>
+                    value
+                      ? { ...value, path: event.target.value }
+                      : value,
+                  )
+                }
+                required
+              />
+            </label>
+            <label className="share-config-comment">
+              说明
+              <input
+                value={configDraft.comment ?? ""}
+                onChange={(event) =>
+                  setConfigDraft((value) =>
+                    value
+                      ? { ...value, comment: event.target.value }
+                      : value,
+                  )
+                }
+              />
+            </label>
+
+            <div className="share-toggle-grid">
+              <label className="toggle-field">
+                <input
+                  type="checkbox"
+                  checked={configDraft.enabled}
+                  onChange={(event) =>
+                    setConfigDraft((value) =>
+                      value
+                        ? { ...value, enabled: event.target.checked }
+                        : value,
+                    )
+                  }
+                />
+                <span>启用共享</span>
+              </label>
+              <label className="toggle-field">
+                <input
+                  type="checkbox"
+                  checked={configDraft.smb_enabled}
+                  onChange={(event) =>
+                    setConfigDraft((value) =>
+                      value
+                        ? { ...value, smb_enabled: event.target.checked }
+                        : value,
+                    )
+                  }
+                />
+                <span>SMB</span>
+              </label>
+              <label className="toggle-field">
+                <input
+                  type="checkbox"
+                  checked={configDraft.webdav_enabled}
+                  onChange={(event) =>
+                    setConfigDraft((value) =>
+                      value
+                        ? { ...value, webdav_enabled: event.target.checked }
+                        : value,
+                    )
+                  }
+                />
+                <span>WebDAV</span>
+              </label>
+              <label className="toggle-field">
+                <input
+                  type="checkbox"
+                  checked={configDraft.nfs_enabled}
+                  onChange={(event) =>
+                    setConfigDraft((value) =>
+                      value
+                        ? { ...value, nfs_enabled: event.target.checked }
+                        : value,
+                    )
+                  }
+                />
+                <span>NFS</span>
+              </label>
+            </div>
+
+            {saveShare.isError && (
+              <div className="error-box">{errorMessage(saveShare.error)}</div>
+            )}
+            {removeShare.isError && (
+              <div className="error-box">
+                {errorMessage(removeShare.error)}
+              </div>
+            )}
+            {shareOperation.isError && (
+              <div className="error-box">
+                {errorMessage(shareOperation.error)}
+              </div>
+            )}
+            {shareOperation.data && (
+              <div className="share-operation-state">
+                <div>
+                  <strong>
+                    {shareAction === "delete" ? "删除" : "更新"} ·{" "}
+                    {shareOperation.data.state}
+                  </strong>
+                  <span>{shareOperation.data.phase ?? "queued"}</span>
+                </div>
+                <span>{shareOperation.data.progress}%</span>
+              </div>
+            )}
+            {shareOperation.data &&
+              (shareOperation.data.state === "failed" ||
+                shareOperation.data.state === "degraded") && (
+                <div className="error-box">
+                  {shareOperation.data.error_code ?? "SHARE_APPLY_FAILED"}
+                </div>
+              )}
+
+            <button
+              className="button primary"
+              type="submit"
+              disabled={
+                saveShare.isPending ||
+                (Boolean(shareOperationId) &&
+                  !isTerminal(shareOperation.data?.state))
+              }
+            >
+              {saveShare.isPending ? "提交中…" : "保存并 Apply"}
+            </button>
+          </form>
+        )}
+      </article>
 
       {share.data.comment && (
         <article className="panel detail-comment">{share.data.comment}</article>

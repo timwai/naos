@@ -1104,3 +1104,104 @@ select:disabled {
     flex: 1;
   }
 }
+
+
+.heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.share-create-panel,
+.share-config-detail {
+  margin-top: 0;
+  margin-bottom: 20px;
+}
+
+.share-config-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(260px, 1.2fr);
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.share-config-form > label {
+  display: grid;
+  gap: 7px;
+  color: var(--tx-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.share-config-comment,
+.share-toggle-grid,
+.share-config-form > .error-box,
+.share-config-form > .share-operation-state,
+.share-config-form > .button {
+  grid-column: 1 / -1;
+}
+
+.share-toggle-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.toggle-field {
+  display: inline-flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 8px !important;
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-soft);
+  color: var(--tx-main) !important;
+  cursor: pointer;
+}
+
+.toggle-field input {
+  width: auto;
+  margin: 0;
+}
+
+.share-operation-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-soft);
+}
+
+.share-operation-state > div {
+  display: grid;
+  gap: 3px;
+}
+
+.share-operation-state span {
+  color: var(--tx-muted);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .heading-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .share-config-form {
+    grid-template-columns: 1fr;
+  }
+
+  .share-config-comment,
+  .share-toggle-grid,
+  .share-config-form > .error-box,
+  .share-config-form > .share-operation-state,
+  .share-config-form > .button {
+    grid-column: auto;
+  }
+}
