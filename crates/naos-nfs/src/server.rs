@@ -143,7 +143,6 @@ impl NfsServer {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, path::Path};
@@ -151,9 +150,7 @@ mod tests {
     use async_trait::async_trait;
     use naos_core::{
         acl::{AclRule, Permission, Subject},
-        nfs::{
-            NfsBinding, NfsBindingPermission, NfsCidr, NfsExport, NfsRepositoryError,
-        },
+        nfs::{NfsBinding, NfsBindingPermission, NfsCidr, NfsExport, NfsRepositoryError},
         path::RelativePath,
     };
     use tokio::net::TcpStream;
@@ -297,19 +294,13 @@ mod tests {
         let mut mount_stream = TcpStream::connect(mount_address).await.unwrap();
         let mount_call = mount_call(41, "/media");
         write_record(&mut mount_stream, &mount_call).await.unwrap();
-        let mount_reply = read_record(&mut mount_stream)
-            .await
-            .unwrap()
-            .unwrap();
+        let mount_reply = read_record(&mut mount_stream).await.unwrap().unwrap();
         let root_handle = parse_mount_handle(&mount_reply, 41);
 
         let mut nfs_stream = TcpStream::connect(nfs_address).await.unwrap();
         let getattr_call = getattr_call(42, &root_handle);
         write_record(&mut nfs_stream, &getattr_call).await.unwrap();
-        let getattr_reply = read_record(&mut nfs_stream)
-            .await
-            .unwrap()
-            .unwrap();
+        let getattr_reply = read_record(&mut nfs_stream).await.unwrap().unwrap();
         assert_rpc_success_prefix(&getattr_reply, 42);
         let mut reader = XdrReader::new(&getattr_reply[24..]);
         assert_eq!(reader.u32().unwrap(), 0);
