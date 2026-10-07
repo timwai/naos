@@ -47,6 +47,8 @@ const NLMPROC4_LOCK_RES: u32 = 12;
 const NLMPROC4_CANCEL_RES: u32 = 13;
 const NLMPROC4_UNLOCK_RES: u32 = 14;
 const NLMPROC4_GRANTED_RES: u32 = 15;
+const NLMPROC4_SHARE: u32 = 20;
+const NLMPROC4_UNSHARE: u32 = 21;
 const NLMPROC4_NM_LOCK: u32 = 22;
 const NLMPROC4_FREE_ALL: u32 = 23;
 
@@ -151,6 +153,42 @@ struct BlockedLock {
     validated: ValidatedLock,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NlmShare {
+    caller_name: String,
+    file_handle: Vec<u8>,
+    owner_handle: Vec<u8>,
+    mode: u32,
+    access: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShareOwnerKey {
+    client_ip: IpAddr,
+    caller_name: String,
+    owner_handle: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShareReservation {
+    file_key: [u8; 32],
+    owner: ShareOwnerKey,
+    access_deny_pairs: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ValidatedShare {
+    file_key: [u8; 32],
+    owner: ShareOwnerKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NlmShareResult {
+    cookie: Vec<u8>,
+    status: u32,
+    sequence: i32,
+}
+
 #[derive(Clone)]
 pub struct NlmV4Service {
     identity_repository: Arc<dyn NfsBindingRepository>,
@@ -158,6 +196,7 @@ pub struct NlmV4Service {
     handles: FileHandleTable,
     locks: Arc<Mutex<Vec<HeldLock>>>,
     waiters: Arc<Mutex<Vec<BlockedLock>>>,
+    shares: Arc<Mutex<Vec<ShareReservation>>>,
     state_guard: Arc<Mutex<()>>,
     callback_rpcbind_port: u16,
     grace_until: Option<Instant>,
@@ -175,6 +214,7 @@ impl NlmV4Service {
             handles,
             locks: Arc::new(Mutex::new(Vec::new())),
             waiters: Arc::new(Mutex::new(Vec::new())),
+            shares: Arc::new(Mutex::new(Vec::new())),
             state_guard: Arc::new(Mutex::new(())),
             callback_rpcbind_port: 111,
             grace_until: None,
@@ -509,6 +549,123 @@ impl NlmV4Service {
         }
     }
 
+    async fn share(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        cookie: Vec<u8>,
+        share: NlmShare,
+        reclaim: bool,
+    ) -> NlmShareResult {
+        if self.in_grace() != reclaim {
+            return NlmShareResult {
+                cookie,
+                status: NLM4_DENIED_GRACE_PERIOD,
+                sequence: 0,
+            };
+        }
+
+        let validated = match self.validate_share(client_ip, credential, &share).await {
+            Ok(validated) => validated,
+            Err(status) => {
+                return NlmShareResult {
+                    cookie,
+                    status,
+                    sequence: 0,
+                };
+            }
+        };
+
+        if self
+            .identity_repository
+            .remember_nfs_nsm_peer(client_ip)
+            .await
+            .is_err()
+        {
+            return NlmShareResult {
+                cookie,
+                status: NLM4_FAILED,
+                sequence: 0,
+            };
+        }
+
+        let _state = self.state_guard.lock().await;
+        let mut shares = self.shares.lock().await;
+        if shares
+            .iter()
+            .any(|held| share_conflicts(held, &validated, share.mode, share.access))
+        {
+            return NlmShareResult {
+                cookie,
+                status: NLM4_DENIED,
+                sequence: 0,
+            };
+        }
+
+        let pair = share_reservation_bit(share.access, share.mode);
+        if let Some(held) = shares
+            .iter_mut()
+            .find(|held| held.file_key == validated.file_key && held.owner == validated.owner)
+        {
+            held.access_deny_pairs |= pair;
+        } else {
+            shares.push(ShareReservation {
+                file_key: validated.file_key,
+                owner: validated.owner,
+                access_deny_pairs: pair,
+            });
+        }
+
+        NlmShareResult {
+            cookie,
+            status: NLM4_GRANTED,
+            sequence: 0,
+        }
+    }
+
+    async fn unshare(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        cookie: Vec<u8>,
+        share: NlmShare,
+    ) -> NlmShareResult {
+        if self.in_grace() {
+            return NlmShareResult {
+                cookie,
+                status: NLM4_DENIED_GRACE_PERIOD,
+                sequence: 0,
+            };
+        }
+
+        let validated = match self.validate_share(client_ip, credential, &share).await {
+            Ok(validated) => validated,
+            Err(status) => {
+                return NlmShareResult {
+                    cookie,
+                    status,
+                    sequence: 0,
+                };
+            }
+        };
+
+        let pair = share_reservation_bit(share.access, share.mode);
+        let _state = self.state_guard.lock().await;
+        self.shares.lock().await.retain_mut(|held| {
+            if held.file_key != validated.file_key || held.owner != validated.owner {
+                return true;
+            }
+            held.access_deny_pairs &= !pair;
+            held.access_deny_pairs != 0
+        });
+
+        NlmShareResult {
+            cookie,
+            status: NLM4_GRANTED,
+            sequence: 0,
+        }
+    }
+
     async fn free_all(&self, client_ip: IpAddr, credential: &RpcCredential, caller_name: &str) {
         if !matches!(credential, RpcCredential::AuthSys(_)) {
             return;
@@ -521,6 +678,9 @@ impl NlmV4Service {
             self.waiters.lock().await.retain(|waiter| {
                 waiter.validated.owner.client_ip != client_ip
                     || waiter.validated.owner.caller_name != caller_name
+            });
+            self.shares.lock().await.retain(|share| {
+                share.owner.client_ip != client_ip || share.owner.caller_name != caller_name
             });
         }
         self.grant_waiters().await;
@@ -538,6 +698,10 @@ impl NlmV4Service {
                 .lock()
                 .await
                 .retain(|waiter| waiter.validated.owner.client_ip != client_ip);
+            self.shares
+                .lock()
+                .await
+                .retain(|share| share.owner.client_ip != client_ip);
         }
         self.grant_waiters().await;
     }
@@ -552,6 +716,10 @@ impl NlmV4Service {
                 waiter.validated.owner.client_ip != client_ip
                     || waiter.client_state == current_state
             });
+            self.shares
+                .lock()
+                .await
+                .retain(|share| share.owner.client_ip != client_ip);
         }
         self.grant_waiters().await;
     }
@@ -774,6 +942,121 @@ impl NlmV4Service {
             },
         })
     }
+
+    async fn validate_share(
+        &self,
+        client_ip: IpAddr,
+        credential: &RpcCredential,
+        share: &NlmShare,
+    ) -> Result<ValidatedShare, u32> {
+        if !matches!(credential, RpcCredential::AuthSys(_)) {
+            return Err(NLM4_FAILED);
+        }
+
+        let exports = self
+            .identity_repository
+            .list_enabled_nfs_exports()
+            .await
+            .map_err(|_| NLM4_FAILED)?;
+        let resolved = self
+            .handles
+            .resolve(&share.file_handle, &exports)
+            .map_err(|_| NLM4_STALE_FH)?;
+        let bindings = self
+            .identity_repository
+            .list_nfs_bindings(&resolved.export.id)
+            .await
+            .map_err(|_| NLM4_FAILED)?;
+        let identity = resolve_nfs_identity(&bindings, client_ip, credential.uid())
+            .map_err(|_| NLM4_DENIED)?
+            .ok_or(NLM4_DENIED)?;
+
+        let write_access = share.access & 2 != 0;
+        if write_access && identity.permission == NfsBindingPermission::ReadOnly {
+            return Err(NLM4_ROFS);
+        }
+
+        let groups = self
+            .access_repository
+            .nfs_group_ids_for_user(&identity.user_id)
+            .await
+            .map_err(|_| NLM4_FAILED)?;
+        let group_refs = groups.iter().map(String::as_str).collect::<Vec<_>>();
+        let rules = self
+            .access_repository
+            .list_nfs_acl_rules(&resolved.export.id)
+            .await
+            .map_err(|_| NLM4_FAILED)?;
+        let permission = AclEngine::new(rules).evaluate(
+            Principal {
+                user_id: &identity.user_id,
+                group_ids: &group_refs,
+            },
+            &resolved.relative_path,
+        );
+        let required = if write_access {
+            Permission::ReadWrite
+        } else {
+            Permission::ReadOnly
+        };
+        if !permission.allows(required) {
+            return Err(NLM4_DENIED);
+        }
+
+        let resolver = SafePathResolver::new(Path::new(&resolved.export.canonical_path))
+            .map_err(|_| NLM4_STALE_FH)?;
+        let entry = resolver
+            .resolve_entry(&resolved.relative_path)
+            .map_err(|_| NLM4_STALE_FH)?;
+        let entry_metadata = fs::symlink_metadata(&entry)
+            .await
+            .map_err(|_| NLM4_STALE_FH)?;
+        if !entry_metadata.is_file() {
+            return Err(NLM4_FAILED);
+        }
+        let path = resolver
+            .resolve_existing(&resolved.relative_path)
+            .map_err(|_| NLM4_STALE_FH)?;
+        let metadata = fs::metadata(&path).await.map_err(|_| NLM4_STALE_FH)?;
+
+        Ok(ValidatedShare {
+            file_key: file_key(&resolved.export.id, &path, &metadata),
+            owner: ShareOwnerKey {
+                client_ip,
+                caller_name: share.caller_name.clone(),
+                owner_handle: share.owner_handle.clone(),
+            },
+        })
+    }
+}
+
+fn share_reservation_bit(access: u32, mode: u32) -> u16 {
+    1u16 << ((access << 2) | mode)
+}
+
+fn share_reservation_masks(reservation: &ShareReservation) -> (u32, u32) {
+    let mut access = 0;
+    let mut mode = 0;
+    for index in 0..16 {
+        if reservation.access_deny_pairs & (1u16 << index) != 0 {
+            access |= index >> 2;
+            mode |= index & 3;
+        }
+    }
+    (access, mode)
+}
+
+fn share_conflicts(
+    held: &ShareReservation,
+    requested: &ValidatedShare,
+    mode: u32,
+    access: u32,
+) -> bool {
+    if held.file_key != requested.file_key || held.owner == requested.owner {
+        return false;
+    }
+    let (held_access, held_mode) = share_reservation_masks(held);
+    (held_mode & access) != 0 || (mode & held_access) != 0
 }
 
 fn blocked_lock_matches(
@@ -986,6 +1269,8 @@ pub async fn dispatch_nlm4_rpc(
         NLMPROC4_CANCEL_MSG => cancel_msg_reply(service, client_ip, &call).await,
         NLMPROC4_UNLOCK_MSG => unlock_msg_reply(service, client_ip, &call).await,
         NLMPROC4_GRANTED_MSG | NLMPROC4_GRANTED_RES => accepted_procedure_unavailable(call.xid),
+        NLMPROC4_SHARE => share_reply(service, client_ip, &call).await,
+        NLMPROC4_UNSHARE => unshare_reply(service, client_ip, &call).await,
         NLMPROC4_FREE_ALL => free_all_reply(service, client_ip, &call).await,
         _ => accepted_procedure_unavailable(call.xid),
     }
@@ -1103,6 +1388,50 @@ async fn unlock_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall)
         .unlock(client_ip, &call.credential, cookie, lock)
         .await;
     accepted_success(call.xid, &encode_result(&result))
+}
+
+async fn share_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let cookie = match reader.opaque(MAX_NETOBJ_BYTES) {
+        Ok(cookie) => cookie,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let share = match decode_share(&mut reader) {
+        Ok(share) => share,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let reclaim = match decode_bool(&mut reader) {
+        Ok(reclaim) => reclaim,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let result = service
+        .share(client_ip, &call.credential, cookie, share, reclaim)
+        .await;
+    accepted_success(call.xid, &encode_share_result(&result))
+}
+
+async fn unshare_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
+    let mut reader = XdrReader::new(&call.body);
+    let cookie = match reader.opaque(MAX_NETOBJ_BYTES) {
+        Ok(cookie) => cookie,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    let share = match decode_share(&mut reader) {
+        Ok(share) => share,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if decode_bool(&mut reader).is_err() || reader.finish().is_err() {
+        return accepted_garbage_args(call.xid);
+    }
+
+    let result = service
+        .unshare(client_ip, &call.credential, cookie, share)
+        .await;
+    accepted_success(call.xid, &encode_share_result(&result))
 }
 
 async fn test_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -> Vec<u8> {
@@ -1351,6 +1680,25 @@ fn decode_bool(reader: &mut XdrReader<'_>) -> Result<bool, ()> {
     }
 }
 
+fn decode_share(reader: &mut XdrReader<'_>) -> Result<NlmShare, ()> {
+    let caller_name = reader.string(MAX_CALLER_NAME_BYTES).map_err(|_| ())?;
+    let file_handle = reader.opaque(MAX_HANDLE_BYTES).map_err(|_| ())?;
+    let owner_handle = reader.opaque(MAX_NETOBJ_BYTES).map_err(|_| ())?;
+    let mode = reader.u32().map_err(|_| ())?;
+    let access = reader.u32().map_err(|_| ())?;
+    if mode > 3 || access > 3 {
+        return Err(());
+    }
+
+    Ok(NlmShare {
+        caller_name,
+        file_handle,
+        owner_handle,
+        mode,
+        access,
+    })
+}
+
 fn decode_lock(reader: &mut XdrReader<'_>) -> Result<NlmLock, ()> {
     Ok(NlmLock {
         caller_name: reader.string(MAX_CALLER_NAME_BYTES).map_err(|_| ())?,
@@ -1366,6 +1714,14 @@ fn encode_result(result: &NlmResult) -> Vec<u8> {
     let mut writer = XdrWriter::new();
     writer.opaque(&result.cookie).expect("validated NLM cookie");
     writer.u32(result.status);
+    writer.into_bytes()
+}
+
+fn encode_share_result(result: &NlmShareResult) -> Vec<u8> {
+    let mut writer = XdrWriter::new();
+    writer.opaque(&result.cookie).expect("validated NLM cookie");
+    writer.u32(result.status);
+    writer.u32(result.sequence as u32);
     writer.into_bytes()
 }
 
@@ -1518,6 +1874,24 @@ mod tests {
             offset,
             length,
         }
+    }
+
+    fn share(handle: Vec<u8>, owner: &str, mode: u32, access: u32) -> NlmShare {
+        NlmShare {
+            caller_name: owner.to_owned(),
+            file_handle: handle,
+            owner_handle: owner.as_bytes().to_vec(),
+            mode,
+            access,
+        }
+    }
+
+    fn encode_share(writer: &mut XdrWriter, share: &NlmShare) {
+        writer.string(&share.caller_name).unwrap();
+        writer.opaque(&share.file_handle).unwrap();
+        writer.opaque(&share.owner_handle).unwrap();
+        writer.u32(share.mode);
+        writer.u32(share.access);
     }
 
     fn encode_lock(writer: &mut XdrWriter, lock: &NlmLock) {
@@ -1954,6 +2328,265 @@ mod tests {
         assert_eq!(locks[0].owner.client_ip, second_ip);
         drop(locks);
         assert!(service.waiters.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn share_reservations_enforce_dos_deny_modes_and_unshare() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let first_ip = "192.168.1.10".parse().unwrap();
+        let second_ip = "192.168.1.11".parse().unwrap();
+
+        let first = share(handle.clone(), "client-a", 2, 1);
+        assert_eq!(
+            service
+                .share(first_ip, &credential(1000), vec![1], first.clone(), false,)
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+
+        assert_eq!(
+            service
+                .share(
+                    second_ip,
+                    &credential(1000),
+                    vec![2],
+                    share(handle.clone(), "client-b", 0, 2),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_DENIED
+        );
+
+        assert_eq!(
+            service
+                .share(
+                    second_ip,
+                    &credential(1000),
+                    vec![3],
+                    share(handle.clone(), "client-b", 0, 1),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+        assert_eq!(service.shares.lock().await.len(), 2);
+
+        assert_eq!(
+            service
+                .unshare(first_ip, &credential(1000), vec![4], first)
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+
+        assert_eq!(
+            service
+                .share(
+                    second_ip,
+                    &credential(1000),
+                    vec![5],
+                    share(handle, "client-b", 0, 2),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+        {
+            let shares = service.shares.lock().await;
+            assert_eq!(shares.len(), 1);
+            assert_eq!(shares[0].owner.caller_name, "client-b");
+            assert_eq!(share_reservation_masks(&shares[0]), (3, 0));
+        }
+
+        assert_eq!(
+            service
+                .unshare(
+                    second_ip,
+                    &credential(1000),
+                    vec![6],
+                    share(
+                        handles.issue(&export, &RelativePath::parse("/data.bin").unwrap()),
+                        "client-b",
+                        0,
+                        1,
+                    ),
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+        {
+            let shares = service.shares.lock().await;
+            assert_eq!(shares.len(), 1);
+            assert_eq!(share_reservation_masks(&shares[0]), (2, 0));
+        }
+    }
+
+    #[tokio::test]
+    async fn share_grace_accepts_reclaim_and_rejects_unshare() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let service = service.with_grace_period(Duration::from_secs(60));
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let client_ip = "192.168.1.10".parse().unwrap();
+        let requested = share(handle, "client-a", 0, 1);
+
+        assert_eq!(
+            service
+                .share(
+                    client_ip,
+                    &credential(1000),
+                    vec![1],
+                    requested.clone(),
+                    false,
+                )
+                .await
+                .status,
+            NLM4_DENIED_GRACE_PERIOD
+        );
+        assert_eq!(
+            service
+                .share(
+                    client_ip,
+                    &credential(1000),
+                    vec![2],
+                    requested.clone(),
+                    true,
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+        assert_eq!(
+            service
+                .unshare(client_ip, &credential(1000), vec![3], requested)
+                .await
+                .status,
+            NLM4_DENIED_GRACE_PERIOD
+        );
+    }
+
+    #[tokio::test]
+    async fn free_all_and_peer_reboot_release_share_reservations() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let first_ip = "192.168.1.10".parse().unwrap();
+        let second_ip = "192.168.1.11".parse().unwrap();
+
+        for (ip, owner) in [(first_ip, "client-a"), (second_ip, "client-b")] {
+            assert_eq!(
+                service
+                    .share(
+                        ip,
+                        &credential(1000),
+                        vec![1],
+                        share(handle.clone(), owner, 0, 1),
+                        false,
+                    )
+                    .await
+                    .status,
+                NLM4_GRANTED
+            );
+        }
+        assert_eq!(service.shares.lock().await.len(), 2);
+
+        service
+            .free_all(first_ip, &credential(1000), "client-a")
+            .await;
+        {
+            let shares = service.shares.lock().await;
+            assert_eq!(shares.len(), 1);
+            assert_eq!(shares[0].owner.client_ip, second_ip);
+        }
+
+        service.release_stale_client_state(second_ip, 3).await;
+        assert!(service.shares.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn wire_share_and_unshare_echo_cookie_status_and_sequence() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let client_ip = "192.168.1.10".parse().unwrap();
+        let requested = share(handle, "client-a", 2, 1);
+
+        let mut body = XdrWriter::new();
+        body.opaque(&[9]).unwrap();
+        encode_share(&mut body, &requested);
+        body.u32(0);
+        let request = rpc_call(91, NLMPROC4_SHARE, credential(1000), &body.into_bytes());
+        let reply = dispatch_nlm4_rpc(&service, client_ip, &request).await;
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 91);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+        assert!(reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.opaque(16).unwrap(), vec![9]);
+        assert_eq!(reader.u32().unwrap(), NLM4_GRANTED);
+        assert_eq!(reader.u32().unwrap(), 0);
+        reader.finish().unwrap();
+        assert_eq!(service.shares.lock().await.len(), 1);
+
+        let mut body = XdrWriter::new();
+        body.opaque(&[10]).unwrap();
+        encode_share(&mut body, &requested);
+        body.u32(1);
+        let request = rpc_call(92, NLMPROC4_UNSHARE, credential(1000), &body.into_bytes());
+        let reply = dispatch_nlm4_rpc(&service, client_ip, &request).await;
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 92);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+        assert!(reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.opaque(16).unwrap(), vec![10]);
+        assert_eq!(reader.u32().unwrap(), NLM4_GRANTED);
+        assert_eq!(reader.u32().unwrap(), 0);
+        reader.finish().unwrap();
+        assert!(service.shares.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn wire_share_rejects_invalid_mode_enum_as_garbage_args() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+
+        let mut body = XdrWriter::new();
+        body.opaque(&[1]).unwrap();
+        body.string("client-a").unwrap();
+        body.opaque(&handle).unwrap();
+        body.opaque(b"client-a").unwrap();
+        body.u32(4);
+        body.u32(1);
+        body.u32(0);
+        let request = rpc_call(93, NLMPROC4_SHARE, credential(1000), &body.into_bytes());
+        let reply = dispatch_nlm4_rpc(&service, "192.168.1.10".parse().unwrap(), &request).await;
+
+        let mut reader = XdrReader::new(&reply);
+        assert_eq!(reader.u32().unwrap(), 93);
+        assert_eq!(reader.u32().unwrap(), 1);
+        assert_eq!(reader.u32().unwrap(), 0);
+        assert_eq!(reader.u32().unwrap(), AUTH_NONE);
+        assert!(reader.opaque(0).unwrap().is_empty());
+        assert_eq!(reader.u32().unwrap(), 4);
+        reader.finish().unwrap();
     }
 
     #[tokio::test]
