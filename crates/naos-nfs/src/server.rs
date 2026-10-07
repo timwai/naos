@@ -270,7 +270,9 @@ impl NfsServer {
                 }
                 notification = self.nsm_notifications.recv() => {
                     if let Some(notification) = notification {
-                        self.nlm_service.release_client(notification.client_ip).await;
+                        self.nlm_service
+                            .release_stale_client_state(notification.client_ip, notification.state)
+                            .await;
                     }
                 }
                 received = self.nlm_udp.recv_from(&mut nlm_datagram) => {

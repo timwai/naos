@@ -85,6 +85,7 @@ struct OwnerKey {
 struct HeldLock {
     file_key: [u8; 32],
     owner: OwnerKey,
+    client_state: u32,
     exclusive: bool,
     offset: u64,
     length: u64,
@@ -137,12 +138,14 @@ struct LockRequest {
     exclusive: bool,
     lock: NlmLock,
     reclaim: bool,
+    client_state: u32,
 }
 
 #[derive(Debug, Clone)]
 struct BlockedLock {
     client_ip: IpAddr,
     cookie: Vec<u8>,
+    client_state: u32,
     exclusive: bool,
     lock: NlmLock,
     validated: ValidatedLock,
@@ -314,6 +317,7 @@ impl NlmV4Service {
                 exclusive,
                 lock,
                 reclaim,
+                client_state: 1,
             },
         )
         .await
@@ -331,6 +335,7 @@ impl NlmV4Service {
             exclusive,
             lock,
             reclaim,
+            client_state,
         } = request;
         let in_grace = self
             .grace_until
@@ -352,10 +357,16 @@ impl NlmV4Service {
 
         let _state = self.state_guard.lock().await;
         let mut locks = self.locks.lock().await;
-        if locks
-            .iter()
-            .any(|held| lock_conflicts(held, &validated, exclusive, lock.offset, lock.length))
-        {
+        if locks.iter().any(|held| {
+            lock_request_conflicts(
+                held,
+                &validated,
+                client_state,
+                exclusive,
+                lock.offset,
+                lock.length,
+            )
+        }) {
             if !block {
                 return NlmResult {
                     cookie,
@@ -371,6 +382,7 @@ impl NlmV4Service {
                 waiters.push(BlockedLock {
                     client_ip,
                     cookie: cookie.clone(),
+                    client_state,
                     exclusive,
                     lock,
                     validated,
@@ -392,6 +404,7 @@ impl NlmV4Service {
         locks.push(HeldLock {
             file_key: validated.file_key,
             owner: validated.owner,
+            client_state,
             exclusive,
             offset: lock.offset,
             length: lock.length,
@@ -492,6 +505,24 @@ impl NlmV4Service {
         self.grant_waiters().await;
     }
 
+    pub(crate) async fn release_stale_client_state(
+        &self,
+        client_ip: IpAddr,
+        current_state: u32,
+    ) {
+        {
+            let _state = self.state_guard.lock().await;
+            self.locks.lock().await.retain(|lock| {
+                lock.owner.client_ip != client_ip || lock.client_state == current_state
+            });
+            self.waiters.lock().await.retain(|waiter| {
+                waiter.validated.owner.client_ip != client_ip
+                    || waiter.client_state == current_state
+            });
+        }
+        self.grant_waiters().await;
+    }
+
     async fn grant_waiters(&self) {
         loop {
             let waiter = {
@@ -500,9 +531,10 @@ impl NlmV4Service {
                 let mut waiters = self.waiters.lock().await;
                 let grantable = waiters.iter().enumerate().find_map(|(index, waiter)| {
                     let held_conflict = locks.iter().any(|held| {
-                        lock_conflicts(
+                        lock_request_conflicts(
                             held,
                             &waiter.validated,
+                            waiter.client_state,
                             waiter.exclusive,
                             waiter.lock.offset,
                             waiter.lock.length,
@@ -527,6 +559,7 @@ impl NlmV4Service {
                 locks.push(HeldLock {
                     file_key: waiter.validated.file_key,
                     owner: waiter.validated.owner.clone(),
+                    client_state: waiter.client_state,
                     exclusive: waiter.exclusive,
                     offset: waiter.lock.offset,
                     length: waiter.lock.length,
@@ -726,7 +759,8 @@ fn blocked_lock_matches(
 
 fn blocked_locks_conflict(left: &BlockedLock, right: &BlockedLock) -> bool {
     left.validated.file_key == right.validated.file_key
-        && left.validated.owner != right.validated.owner
+        && (left.validated.owner != right.validated.owner
+            || left.client_state != right.client_state)
         && (left.exclusive || right.exclusive)
         && ranges_overlap(
             left.lock.offset,
@@ -739,6 +773,7 @@ fn blocked_locks_conflict(left: &BlockedLock, right: &BlockedLock) -> bool {
 fn held_lock_matches_blocked(held: &HeldLock, waiter: &BlockedLock) -> bool {
     held.file_key == waiter.validated.file_key
         && held.owner == waiter.validated.owner
+        && held.client_state == waiter.client_state
         && held.exclusive == waiter.exclusive
         && held.offset == waiter.lock.offset
         && held.length == waiter.lock.length
@@ -753,6 +788,20 @@ fn lock_conflicts(
 ) -> bool {
     held.file_key == requested.file_key
         && held.owner != requested.owner
+        && (held.exclusive || exclusive)
+        && ranges_overlap(held.offset, held.length, offset, length)
+}
+
+fn lock_request_conflicts(
+    held: &HeldLock,
+    requested: &ValidatedLock,
+    client_state: u32,
+    exclusive: bool,
+    offset: u64,
+    length: u64,
+) -> bool {
+    held.file_key == requested.file_key
+        && (held.owner != requested.owner || held.client_state != client_state)
         && (held.exclusive || exclusive)
         && ranges_overlap(held.offset, held.length, offset, length)
 }
@@ -955,7 +1004,11 @@ async fn lock_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -
         Ok(value) => value,
         Err(_) => return accepted_garbage_args(call.xid),
     };
-    if reader.u32().is_err() || reader.finish().is_err() {
+    let client_state = match reader.u32() {
+        Ok(value) => value,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
         return accepted_garbage_args(call.xid);
     }
 
@@ -969,6 +1022,7 @@ async fn lock_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCall) -
                 exclusive,
                 lock,
                 reclaim,
+                client_state,
             },
         )
         .await;
@@ -1067,7 +1121,11 @@ async fn lock_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCal
         Ok(value) => value,
         Err(_) => return accepted_garbage_args(call.xid),
     };
-    if reader.u32().is_err() || reader.finish().is_err() {
+    let client_state = match reader.u32() {
+        Ok(value) => value,
+        Err(_) => return accepted_garbage_args(call.xid),
+    };
+    if reader.finish().is_err() {
         return accepted_garbage_args(call.xid);
     }
 
@@ -1083,6 +1141,7 @@ async fn lock_msg_reply(service: &NlmV4Service, client_ip: IpAddr, call: &RpcCal
                 exclusive,
                 lock,
                 reclaim,
+                client_state,
             },
         )
         .await;
@@ -1678,6 +1737,7 @@ mod tests {
                         exclusive: true,
                         lock: blocked_lock,
                         reclaim: false,
+                    client_state: 1,
                     },
                 )
                 .await
@@ -1767,6 +1827,7 @@ mod tests {
                         exclusive: true,
                         lock: blocked_lock.clone(),
                         reclaim: false,
+                    client_state: 1,
                     },
                 )
                 .await
@@ -1843,6 +1904,7 @@ mod tests {
                         exclusive: true,
                         lock: lock(handle, "client-a", 10, 20, 10),
                         reclaim: false,
+                    client_state: 1,
                     },
                 )
                 .await
@@ -1859,6 +1921,79 @@ mod tests {
         assert_eq!(locks[0].owner.client_ip, second_ip);
         drop(locks);
         assert!(service.waiters.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn client_state_change_preserves_new_epoch_locks() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("data.bin"), b"data").unwrap();
+        let (service, handles, export) = service(temp.path());
+        let handle = handles.issue(&export, &RelativePath::parse("/data.bin").unwrap());
+        let client_ip = "192.168.1.10".parse().unwrap();
+        let requested = lock(handle, "client-a", 10, 0, 10);
+
+        assert_eq!(
+            service
+                .lock_request(
+                    client_ip,
+                    &credential(1000),
+                    LockRequest {
+                        cookie: vec![1],
+                        block: false,
+                        exclusive: true,
+                        lock: requested.clone(),
+                        reclaim: false,
+                        client_state: 1,
+                    },
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+
+        assert_eq!(
+            service
+                .lock_request(
+                    client_ip,
+                    &credential(1000),
+                    LockRequest {
+                        cookie: vec![2],
+                        block: false,
+                        exclusive: true,
+                        lock: requested.clone(),
+                        reclaim: false,
+                        client_state: 3,
+                    },
+                )
+                .await
+                .status,
+            NLM4_DENIED
+        );
+
+        service.release_stale_client_state(client_ip, 3).await;
+        assert!(service.locks.lock().await.is_empty());
+
+        assert_eq!(
+            service
+                .lock_request(
+                    client_ip,
+                    &credential(1000),
+                    LockRequest {
+                        cookie: vec![3],
+                        block: false,
+                        exclusive: true,
+                        lock: requested,
+                        reclaim: false,
+                        client_state: 3,
+                    },
+                )
+                .await
+                .status,
+            NLM4_GRANTED
+        );
+        let locks = service.locks.lock().await;
+        assert_eq!(locks.len(), 1);
+        assert_eq!(locks[0].client_state, 3);
     }
 
     #[tokio::test]
@@ -2059,6 +2194,7 @@ mod tests {
         let mut locks = vec![HeldLock {
             file_key: key,
             owner: owner.clone(),
+            client_state: 1,
             exclusive: true,
             offset: 0,
             length: 100,
