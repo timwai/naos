@@ -22,6 +22,7 @@ pub const RPCSEC_GSS_CREDPROBLEM: u32 = 13;
 pub const RPCSEC_GSS_CTXPROBLEM: u32 = 14;
 pub const GSS_S_COMPLETE: u32 = 0;
 pub const GSS_S_CONTINUE_NEEDED: u32 = 1;
+pub const GSS_S_NO_CONTEXT: u32 = 5 << 16;
 pub const MAX_AUTH_BYTES: usize = 400;
 pub const MAX_RPC_RECORD_BYTES: usize = 16 * 1024 * 1024;
 
