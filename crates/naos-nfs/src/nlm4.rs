@@ -1117,17 +1117,20 @@ mod tests {
         let request = read_record(&mut stream).await.unwrap().unwrap();
         let call = decode_call(&request).unwrap();
         assert_eq!(call.program, 100000);
-        assert_eq!(call.version, 2);
+        assert_eq!(call.version, 4);
         assert_eq!(call.procedure, 3);
         let mut mapping = XdrReader::new(&call.body);
         assert_eq!(mapping.u32().unwrap(), NLM_PROGRAM);
         assert_eq!(mapping.u32().unwrap(), NLM_VERSION);
-        assert_eq!(mapping.u32().unwrap(), 17);
-        assert_eq!(mapping.u32().unwrap(), 0);
+        assert_eq!(mapping.string(16).unwrap(), "udp");
+        assert_eq!(mapping.string(16).unwrap(), "");
+        assert_eq!(mapping.string(16).unwrap(), "");
         mapping.finish().unwrap();
 
+        let high = callback_port >> 8;
+        let low = callback_port & 0xff;
         let mut body = XdrWriter::new();
-        body.u32(u32::from(callback_port));
+        body.string(&format!("127.0.0.1.{high}.{low}")).unwrap();
         let reply = accepted_success(call.xid, &body.into_bytes());
         write_record(&mut stream, &reply).await.unwrap();
     }
