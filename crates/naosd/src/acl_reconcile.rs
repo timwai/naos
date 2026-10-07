@@ -2,16 +2,12 @@ use std::{path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use naos_core::{
-    acl::{
-        AclApplyRule, AclMutationTarget, AclReconcileDriverFactory, Permission,
-    },
+    acl::{AclApplyRule, AclMutationTarget, AclReconcileDriverFactory, Permission},
     path::{PathError, SafePathResolver},
     reconcile::{ReconcileDriver, ReconcileFailure},
     share::{ShareApplyRepository, ShareApplyRepositoryError},
 };
-use naos_platform::{
-    EffectiveAclEntry, FsAclManager, FsAclPermission, SystemAccountName,
-};
+use naos_platform::{EffectiveAclEntry, FsAclManager, FsAclPermission, SystemAccountName};
 use serde_json::{Value, json};
 
 pub struct PlatformAclReconcileDriverFactory {
@@ -46,8 +42,7 @@ struct PlatformAclReconcileDriver {
 
 impl PlatformAclReconcileDriver {
     fn resolver(&self) -> Result<SafePathResolver, ReconcileFailure> {
-        SafePathResolver::new(&PathBuf::from(&self.target.canonical_path))
-            .map_err(path_failure)
+        SafePathResolver::new(&PathBuf::from(&self.target.canonical_path)).map_err(path_failure)
     }
 
     fn entry(rule: &AclApplyRule) -> Result<EffectiveAclEntry, ReconcileFailure> {

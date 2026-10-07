@@ -43,9 +43,9 @@ async fn test_app() -> (Router, Arc<Store>, TempDir) {
         store.clone(),
         operations.clone(),
     ));
-    let acl_reconcile_factory = Arc::new(
-        naos_core::acl::DatabaseAclReconcileDriverFactory::new(store.clone()),
-    );
+    let acl_reconcile_factory = Arc::new(naos_core::acl::DatabaseAclReconcileDriverFactory::new(
+        store.clone(),
+    ));
     let share_mutations = Arc::new(naos_core::share::ShareMutationService::new(
         store.clone(),
         operations.clone(),
@@ -661,10 +661,7 @@ async fn acl_replace_is_operation_backed_idempotent_and_bumps_share_generation()
         .await
         .unwrap();
     assert_eq!(group.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(
-        json_body(group).await["code"],
-        "ACL_GROUP_UNSUPPORTED"
-    );
+    assert_eq!(json_body(group).await["code"], "ACL_GROUP_UNSUPPORTED");
 }
 
 struct VerifyFailDriver {

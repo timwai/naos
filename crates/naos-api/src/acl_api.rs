@@ -176,10 +176,7 @@ fn idempotency_key(headers: &HeaderMap) -> Result<String, ApiError> {
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty() && value.len() <= 200)
         .ok_or_else(|| {
-            ApiError::validation(
-                "idempotency-key",
-                "替换 ACL 必须提供有效的 Idempotency-Key",
-            )
+            ApiError::validation("idempotency-key", "替换 ACL 必须提供有效的 Idempotency-Key")
         })
 }
 

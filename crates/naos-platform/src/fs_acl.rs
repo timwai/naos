@@ -268,11 +268,7 @@ impl FsAclManager {
         ))
     }
 
-    pub async fn verify(
-        &self,
-        target: &Path,
-        entry: &EffectiveAclEntry,
-    ) -> Result<(), FsAclError> {
+    pub async fn verify(&self, target: &Path, entry: &EffectiveAclEntry) -> Result<(), FsAclError> {
         let canonical = canonical_target(target)?;
         let path = path_text(&canonical);
 
@@ -385,7 +381,9 @@ fn path_text(path: &Path) -> String {
 fn linux_has_entry(output: &str, account: &str, default: bool) -> bool {
     let prefix = if default { "default:user:" } else { "user:" };
     let marker = format!("{prefix}{account}:");
-    output.lines().any(|line| line.trim() == marker || line.trim().starts_with(&marker))
+    output
+        .lines()
+        .any(|line| line.trim() == marker || line.trim().starts_with(&marker))
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -431,16 +429,15 @@ fn macos_entry_matches(output: &str, entry: &EffectiveAclEntry) -> bool {
             .iter()
             .any(|line| line.contains(" deny ") && inheritance_matches(line)),
         FsAclPermission::ReadOnly => {
-            lines
-                .iter()
-                .any(|line| line.contains(" deny ") && line.contains("write") && inheritance_matches(line))
-                && lines
-                    .iter()
-                    .any(|line| line.contains(" allow ") && line.contains("read") && inheritance_matches(line))
+            lines.iter().any(|line| {
+                line.contains(" deny ") && line.contains("write") && inheritance_matches(line)
+            }) && lines.iter().any(|line| {
+                line.contains(" allow ") && line.contains("read") && inheritance_matches(line)
+            })
         }
-        FsAclPermission::ReadWrite => lines
-            .iter()
-            .any(|line| line.contains(" allow ") && line.contains("write") && inheritance_matches(line)),
+        FsAclPermission::ReadWrite => lines.iter().any(|line| {
+            line.contains(" allow ") && line.contains("write") && inheritance_matches(line)
+        }),
     }
 }
 

@@ -86,9 +86,7 @@ impl AclMutationRepository for Store {
             });
         }
 
-        let current_generation = share
-            .try_get::<i64, _>("generation")
-            .map_err(store_error)?;
+        let current_generation = share.try_get::<i64, _>("generation").map_err(store_error)?;
         let generation = current_generation
             .checked_add(1)
             .ok_or(AclMutationRepositoryError::Unavailable)?;
@@ -179,9 +177,7 @@ async fn load_user_apply_rules(
                 "rw" => Permission::ReadWrite,
                 _ => return Err(AclMutationRepositoryError::Unavailable),
             };
-            let rel_path = row
-                .try_get::<String, _>("rel_path")
-                .map_err(store_error)?;
+            let rel_path = row.try_get::<String, _>("rel_path").map_err(store_error)?;
 
             Ok(AclApplyRule {
                 path: RelativePath::parse(&rel_path)

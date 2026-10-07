@@ -346,7 +346,6 @@ impl AclService {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AclRuleWriteInput {
     pub rel_path: String,
@@ -562,9 +561,7 @@ impl AclMutationService {
     }
 }
 
-fn map_acl_mutation_repository_error(
-    error: AclMutationRepositoryError,
-) -> AclMutationError {
+fn map_acl_mutation_repository_error(error: AclMutationRepositoryError) -> AclMutationError {
     match error {
         AclMutationRepositoryError::ShareNotFound => AclMutationError::ShareNotFound,
         AclMutationRepositoryError::UserNotFound => AclMutationError::UserNotFound,
