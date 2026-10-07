@@ -5,7 +5,8 @@ use naos_core::{
     acl::{AclRule, Permission, Subject},
     nfs::{
         NFS_HANDLE_NONCE_BYTES, NfsAccessRepository, NfsBinding, NfsBindingPermission,
-        NfsBindingRepository, NfsCidr, NfsExport, NfsFileHandleRecord, NfsRepositoryError,
+        NfsBindingRepository, NfsCidr, NfsExport, NfsFileHandleRecord, NfsKrbPrincipal,
+        NfsRepositoryError,
     },
     path::RelativePath,
 };
@@ -79,6 +80,57 @@ impl NfsBindingRepository for Store {
         .fetch_optional(&self.pool)
         .await
         .map_err(store_error)
+    }
+
+    async fn list_nfs_krb_principals(&self) -> Result<Vec<NfsKrbPrincipal>, NfsRepositoryError> {
+        let rows = sqlx::query(
+            "SELECT id, principal, user_id
+             FROM nfs_krb_principals
+             ORDER BY principal, id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_error)?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(NfsKrbPrincipal {
+                    id: row.try_get("id").map_err(store_error)?,
+                    principal: row.try_get("principal").map_err(store_error)?,
+                    user_id: row.try_get("user_id").map_err(store_error)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn insert_nfs_krb_principal(
+        &self,
+        principal: &NfsKrbPrincipal,
+    ) -> Result<(), NfsRepositoryError> {
+        sqlx::query(
+            "INSERT INTO nfs_krb_principals (id, principal, user_id)
+             VALUES (?, ?, ?)",
+        )
+        .bind(&principal.id)
+        .bind(&principal.principal)
+        .bind(&principal.user_id)
+        .execute(&self.pool)
+        .await
+        .map_err(store_error)?;
+        Ok(())
+    }
+
+    async fn delete_nfs_krb_principal(
+        &self,
+        principal_id: &str,
+    ) -> Result<bool, NfsRepositoryError> {
+        let deleted = sqlx::query("DELETE FROM nfs_krb_principals WHERE id = ?")
+            .bind(principal_id)
+            .execute(&self.pool)
+            .await
+            .map_err(store_error)?
+            .rows_affected();
+        Ok(deleted > 0)
     }
 
     async fn list_nfs_bindings(
@@ -498,6 +550,21 @@ mod tests {
                 .unwrap(),
             None
         );
+
+        let mappings = store.list_nfs_krb_principals().await.unwrap();
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings[0].principal, "alice@EXAMPLE.COM");
+        assert_eq!(mappings[1].principal, "bob@EXAMPLE.COM");
+
+        let carol = NfsKrbPrincipal {
+            id: "krb_carol".to_owned(),
+            principal: "carol@EXAMPLE.COM".to_owned(),
+            user_id: "usr_enabled".to_owned(),
+        };
+        store.insert_nfs_krb_principal(&carol).await.unwrap();
+        assert_eq!(store.list_nfs_krb_principals().await.unwrap().len(), 3);
+        assert!(store.delete_nfs_krb_principal("krb_carol").await.unwrap());
+        assert!(!store.delete_nfs_krb_principal("krb_missing").await.unwrap());
     }
 
     #[tokio::test]
