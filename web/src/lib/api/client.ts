@@ -8,6 +8,8 @@ export type AclSimulateRequest =
 export type AclSimulationResponse =
   components["schemas"]["AclSimulationResponse"];
 export type ApiErrorBody = components["schemas"]["ErrorResponse"];
+export type AuditPageResponse =
+  components["schemas"]["AuditPageResponse"];
 export type AuthSessionResponse =
   components["schemas"]["AuthSessionResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
@@ -321,5 +323,34 @@ export async function deleteShare(
         "idempotency-key": idempotencyKey,
       },
     },
+  );
+}
+
+export type AuditFilters = {
+  from?: string;
+  to?: string;
+  protocol?: string;
+  user_id?: string;
+  share_id?: string;
+  result?: string;
+  q?: string;
+  page?: number;
+  page_size?: number;
+};
+
+export async function listAudit(filters: AuditFilters = {}) {
+  const params = new URLSearchParams();
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+  if (filters.protocol) params.set("protocol", filters.protocol);
+  if (filters.user_id) params.set("user_id", filters.user_id);
+  if (filters.share_id) params.set("share_id", filters.share_id);
+  if (filters.result) params.set("result", filters.result);
+  if (filters.q) params.set("q", filters.q);
+  params.set("page", String(filters.page ?? 1));
+  params.set("page_size", String(filters.page_size ?? 50));
+
+  return requestJson<AuditPageResponse>(
+    `/api/v1/audit?${params.toString()}`,
   );
 }

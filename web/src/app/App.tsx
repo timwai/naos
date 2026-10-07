@@ -3,6 +3,7 @@ import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import { useSession } from "../features/auth/queries";
 import { AppShell } from "./layout/AppShell";
 import { AclSimulatorPage } from "../pages/AclSimulatorPage";
+import { AuditPage } from "../pages/AuditPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { LoginPage } from "../pages/LoginPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
@@ -67,15 +68,7 @@ export function App() {
             <Route path="shares/:id" element={<ShareDetailPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="acl-simulator" element={<AclSimulatorPage />} />
-            <Route
-              path="audit"
-              element={
-                <PlaceholderPage
-                  title="审计"
-                  description="等待审计后端 API 接入。"
-                />
-              }
-            />
+            <Route path="audit" element={<AuditPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
         </Route>

@@ -1,4 +1,8 @@
 export const queryKeys = {
+  audit: {
+    list: (filters: object) =>
+      ["audit", "list", filters] as const,
+  },
   auth: {
     session: () => ["auth", "session"] as const,
     setup: () => ["auth", "setup"] as const,
