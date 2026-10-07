@@ -971,7 +971,11 @@ fn decode_wire_data_reply(
 
 fn assert_sealed_rfc4121_wrap_token(token: &[u8]) {
     assert!(token.len() >= 16, "Kerberos Wrap token is too short");
-    assert_eq!(&token[..2], &[0x05, 0x04], "unexpected Kerberos Wrap TOK_ID");
+    assert_eq!(
+        &token[..2],
+        &[0x05, 0x04],
+        "unexpected Kerberos Wrap TOK_ID"
+    );
     assert_ne!(
         token[2] & 0x02,
         0,
