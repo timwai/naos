@@ -271,12 +271,11 @@ impl NfsBindingRepository for Store {
     }
 
     async fn list_nfs_nsm_peers(&self) -> Result<Vec<IpAddr>, NfsRepositoryError> {
-        let rows = sqlx::query_scalar::<_, String>(
-            "SELECT peer_ip FROM nfs_nsm_peers ORDER BY peer_ip",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(store_error)?;
+        let rows =
+            sqlx::query_scalar::<_, String>("SELECT peer_ip FROM nfs_nsm_peers ORDER BY peer_ip")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(store_error)?;
 
         rows.into_iter()
             .map(|value| value.parse().map_err(|_| NfsRepositoryError::Unavailable))
