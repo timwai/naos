@@ -93,10 +93,7 @@ impl ShareCatalogService {
         self.repository.list_shares().await
     }
 
-    pub async fn get(
-        &self,
-        id: &str,
-    ) -> Result<Option<ShareSummary>, ShareCatalogRepositoryError> {
+    pub async fn get(&self, id: &str) -> Result<Option<ShareSummary>, ShareCatalogRepositoryError> {
         self.repository.get_share(id).await
     }
 }
