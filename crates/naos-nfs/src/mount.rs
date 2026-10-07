@@ -16,8 +16,8 @@ use crate::{
         denied_auth_error, denied_rpc_mismatch, rpcsec_gss_unavailable_reply,
     },
     rpcsec_gss::{
-        RpcSecGssContextRegistry, RpcSecGssDataError, RpcSecGssRegistryError,
-        authenticate_data_call,
+        RpcSecGssAcceptor, RpcSecGssContextRegistry, RpcSecGssDataError, RpcSecGssRegistryError,
+        accept_context_call, authenticate_data_call, rpcsec_gss_context_error_reply,
     },
     transport::{read_record, write_record},
     xdr::{XdrReader, XdrWriter},
@@ -81,6 +81,7 @@ pub struct MountService {
     repository: Arc<dyn NfsBindingRepository>,
     handles: FileHandleTable,
     rpcsec_gss_registry: Option<RpcSecGssContextRegistry>,
+    rpcsec_gss_acceptor: Option<Arc<dyn RpcSecGssAcceptor>>,
 }
 
 impl MountService {
@@ -96,11 +97,22 @@ impl MountService {
             repository,
             handles,
             rpcsec_gss_registry: None,
+            rpcsec_gss_acceptor: None,
         }
     }
 
     pub fn with_rpcsec_gss_registry(mut self, registry: RpcSecGssContextRegistry) -> Self {
         self.rpcsec_gss_registry = Some(registry);
+        self
+    }
+
+    pub fn with_rpcsec_gss(
+        mut self,
+        registry: RpcSecGssContextRegistry,
+        acceptor: Arc<dyn RpcSecGssAcceptor>,
+    ) -> Self {
+        self.rpcsec_gss_registry = Some(registry);
+        self.rpcsec_gss_acceptor = Some(acceptor);
         self
     }
 
@@ -225,11 +237,23 @@ pub async fn dispatch_mount_rpc(
         Err(RpcDecodeError::Xdr(_)) => return Vec::new(),
     };
 
-    if matches!(
-        &call.credential,
-        RpcCredential::RpcSecGss(credential) if credential.gss_proc == RPCSEC_GSS_DATA
-    ) {
-        if let Some(registry) = service.rpcsec_gss_registry.as_ref() {
+    if let RpcCredential::RpcSecGss(credential) = &call.credential {
+        if matches!(
+            credential.gss_proc,
+            crate::rpc::RPCSEC_GSS_INIT | crate::rpc::RPCSEC_GSS_CONTINUE_INIT
+        ) {
+            if let (Some(registry), Some(acceptor)) = (
+                service.rpcsec_gss_registry.as_ref(),
+                service.rpcsec_gss_acceptor.as_ref(),
+            ) {
+                return match accept_context_call(registry, acceptor.as_ref(), &call).await {
+                    Ok(reply) => reply,
+                    Err(error) => rpcsec_gss_context_error_reply(call.xid, error),
+                };
+            }
+        } else if credential.gss_proc == RPCSEC_GSS_DATA
+            && let Some(registry) = service.rpcsec_gss_registry.as_ref()
+        {
             return dispatch_rpcsec_gss_data(service, registry, client_ip, &call).await;
         }
     }
