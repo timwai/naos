@@ -24,6 +24,16 @@ $nlmPort = if ($env:NAOS_NFS_SMOKE_NLM_PORT) { [int]$env:NAOS_NFS_SMOKE_NLM_PORT
 $nsmPort = if ($env:NAOS_NFS_SMOKE_NSM_PORT) { [int]$env:NAOS_NFS_SMOKE_NSM_PORT } else { 32046 }
 $rpcbindAddress = if ($env:NAOS_NFS_SMOKE_RPCBIND) { $env:NAOS_NFS_SMOKE_RPCBIND } else { "127.0.0.1:111" }
 
+$servicePorts = @($nfsPort, $mountPort, $nlmPort, $nsmPort)
+foreach ($port in $servicePorts) {
+    if ($port -lt 1 -or $port -gt 65535) {
+        throw "invalid NFS smoke service port: $port"
+    }
+}
+if (($servicePorts | Select-Object -Unique).Count -ne $servicePorts.Count) {
+    throw "NFS, MOUNT, NLM, and NSM smoke ports must be distinct"
+}
+
 if ($rpcbindAddress -ne "127.0.0.1:111") {
     throw "Windows smoke test currently requires NAOS_NFS_SMOKE_RPCBIND=127.0.0.1:111"
 }
@@ -110,6 +120,49 @@ try {
         throw "backing share did not receive truncated content"
     }
 
+    $unicodeName = "naos-你好-é.txt"
+    $unicodeMounted = Join-Path $mountRoot $unicodeName
+    $unicodeShare = Join-Path $share $unicodeName
+    $unicodeContent = "Windows NFS Unicode: 你好 / café / Δ"
+    [IO.File]::WriteAllText($unicodeMounted, $unicodeContent, [Text.UTF8Encoding]::new($false))
+    if ([IO.File]::ReadAllText($unicodeMounted) -ne $unicodeContent) {
+        throw "mounted Unicode filename/content round-trip failed"
+    }
+    if ([IO.File]::ReadAllText($unicodeShare) -ne $unicodeContent) {
+        throw "backing share did not receive Unicode filename/content correctly"
+    }
+
+    $largeMounted = Join-Path $mountRoot "large.bin"
+    $largeShare = Join-Path $share "large.bin"
+    $payload = [byte[]]::new(2 * 1024 * 1024)
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($payload)
+    }
+    finally {
+        $rng.Dispose()
+    }
+
+    $stream = [IO.File]::Open(
+        $largeMounted,
+        [IO.FileMode]::Create,
+        [IO.FileAccess]::Write,
+        [IO.FileShare]::None
+    )
+    try {
+        $stream.Write($payload, 0, $payload.Length)
+        $stream.Flush($true)
+    }
+    finally {
+        $stream.Dispose()
+    }
+
+    $mountedHash = (Get-FileHash -LiteralPath $largeMounted -Algorithm SHA256).Hash
+    $shareHash = (Get-FileHash -LiteralPath $largeShare -Algorithm SHA256).Hash
+    if ($mountedHash -ne $shareHash) {
+        throw "large binary write/read hash mismatch between NFS mount and backing share"
+    }
+
     $renamedMounted = Join-Path $mountRoot "renamed.txt"
     $renamedShare = Join-Path $share "renamed.txt"
     Move-Item -LiteralPath $mountedFile -Destination $renamedMounted
@@ -127,12 +180,19 @@ try {
     Get-ChildItem -LiteralPath $mountRoot | Out-Null
     Remove-Item -LiteralPath $mountedDir
     Remove-Item -LiteralPath $renamedMounted
+    Remove-Item -LiteralPath $unicodeMounted
+    Remove-Item -LiteralPath $largeMounted
 
-    if ((Test-Path -LiteralPath $shareDir) -or (Test-Path -LiteralPath $renamedShare)) {
+    if (
+        (Test-Path -LiteralPath $shareDir) -or
+        (Test-Path -LiteralPath $renamedShare) -or
+        (Test-Path -LiteralPath $unicodeShare) -or
+        (Test-Path -LiteralPath $largeShare)
+    ) {
         throw "delete did not propagate to the backing share"
     }
 
-    Write-Host "real Windows NFSv3 mount/create/truncate/read/write/rename/delete smoke test passed"
+    Write-Host "real Windows NFSv3 mount/create/truncate/read/write/Unicode/large-file/flush/rename/delete smoke test passed"
 }
 catch {
     if (Test-Path -LiteralPath $serverOut) {
