@@ -12,3 +12,6 @@ naos-core = { path = "../naos-core" }
 serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

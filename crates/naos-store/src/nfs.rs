@@ -154,6 +154,32 @@ impl NfsBindingRepository for Store {
             .rows_affected();
         Ok(deleted > 0)
     }
+
+    async fn get_or_create_nfs_handle_secret(
+        &self,
+        candidate: [u8; 32],
+    ) -> Result<[u8; 32], NfsRepositoryError> {
+        sqlx::query(
+            "INSERT INTO nfs_runtime_state (key, value)
+             VALUES ('handle_secret', ?)
+             ON CONFLICT(key) DO NOTHING",
+        )
+        .bind(candidate.as_slice())
+        .execute(&self.pool)
+        .await
+        .map_err(store_error)?;
+
+        let value = sqlx::query_scalar::<_, Vec<u8>>(
+            "SELECT value FROM nfs_runtime_state WHERE key = 'handle_secret'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(store_error)?;
+
+        value
+            .try_into()
+            .map_err(|_| NfsRepositoryError::Unavailable)
+    }
 }
 
 #[async_trait]
@@ -237,4 +263,72 @@ fn export_from_row(row: sqlx::sqlite::SqliteRow) -> Result<NfsExport, NfsReposit
 
 fn store_error(_: sqlx::Error) -> NfsRepositoryError {
     NfsRepositoryError::Unavailable
+}
+
+
+#[cfg(test)]
+mod tests {
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn nfs_handle_secret_is_created_once_and_reused() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE nfs_runtime_state (
+                key TEXT PRIMARY KEY,
+                value BLOB NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let store = Store { pool };
+
+        let first = store
+            .get_or_create_nfs_handle_secret([7; 32])
+            .await
+            .unwrap();
+        let second = store
+            .get_or_create_nfs_handle_secret([8; 32])
+            .await
+            .unwrap();
+
+        assert_eq!(first, [7; 32]);
+        assert_eq!(second, first);
+    }
+
+    #[tokio::test]
+    async fn invalid_persisted_handle_secret_is_rejected() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE nfs_runtime_state (
+                key TEXT PRIMARY KEY,
+                value BLOB NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO nfs_runtime_state (key, value) VALUES ('handle_secret', ?)")
+            .bind(vec![1u8; 31])
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = Store { pool };
+
+        assert!(matches!(
+            store.get_or_create_nfs_handle_secret([9; 32]).await,
+            Err(NfsRepositoryError::Unavailable)
+        ));
+    }
 }

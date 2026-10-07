@@ -265,6 +265,13 @@ pub trait NfsBindingRepository: Send + Sync {
         share_id: &str,
         binding_id: &str,
     ) -> Result<bool, NfsRepositoryError>;
+
+    async fn get_or_create_nfs_handle_secret(
+        &self,
+        candidate: [u8; 32],
+    ) -> Result<[u8; 32], NfsRepositoryError> {
+        Ok(candidate)
+    }
 }
 
 #[async_trait]

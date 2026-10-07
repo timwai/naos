@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use naos_core::nfs::{NfsAccessRepository, NfsBindingRepository};
+use naos_core::nfs::{NfsAccessRepository, NfsBindingRepository, NfsRepositoryError};
 use rand_core::{OsRng, RngCore};
 use thiserror::Error;
 use tokio::{
@@ -56,6 +56,8 @@ pub enum NfsServerError {
     Io(#[from] io::Error),
     #[error(transparent)]
     RpcBind(#[from] RpcBindError),
+    #[error(transparent)]
+    Repository(#[from] NfsRepositoryError),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -106,8 +108,11 @@ impl NfsServer {
         let nlm_udp = UdpSocket::bind((config.listen, nlm_port)).await?;
         let nsm_udp = UdpSocket::bind((config.listen, nsm_port)).await?;
 
-        let mut secret = [0u8; 32];
-        OsRng.fill_bytes(&mut secret);
+        let mut secret_candidate = [0u8; 32];
+        OsRng.fill_bytes(&mut secret_candidate);
+        let secret = repository
+            .get_or_create_nfs_handle_secret(secret_candidate)
+            .await?;
         let mount_repository: Arc<dyn NfsBindingRepository> = repository.clone();
         let nfs_access_repository: Arc<dyn NfsAccessRepository> = repository.clone();
         let nfs_identity_repository: Arc<dyn NfsBindingRepository> = repository.clone();
