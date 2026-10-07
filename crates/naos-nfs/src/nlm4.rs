@@ -1615,12 +1615,7 @@ mod tests {
 
         assert_eq!(
             service
-                .unlock(
-                    client_ip,
-                    &credential(1000),
-                    vec![3],
-                    first_lock,
-                )
+                .unlock(client_ip, &credential(1000), vec![3], first_lock,)
                 .await
                 .status,
             NLM4_GRANTED
@@ -1679,12 +1674,7 @@ mod tests {
 
         assert_eq!(
             service
-                .cancel(
-                    client_ip,
-                    &credential(1000),
-                    vec![2],
-                    blocked_lock,
-                )
+                .cancel(client_ip, &credential(1000), vec![2], blocked_lock,)
                 .await
                 .status,
             NLM4_GRANTED
@@ -1693,12 +1683,7 @@ mod tests {
 
         assert_eq!(
             service
-                .unlock(
-                    client_ip,
-                    &credential(1000),
-                    vec![3],
-                    first_lock,
-                )
+                .unlock(client_ip, &credential(1000), vec![3], first_lock,)
                 .await
                 .status,
             NLM4_GRANTED
