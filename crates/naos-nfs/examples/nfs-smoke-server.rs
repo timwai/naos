@@ -1,10 +1,4 @@
-use std::{
-    env,
-    error::Error,
-    io,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{env, error::Error, io, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use naos_core::{
