@@ -103,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let operations = Arc::new(OperationService::new(store.clone()));
     let nfs_bindings = Arc::new(NfsBindingService::new(store.clone()));
+    let nfs_principals = Arc::new(naos_core::nfs::NfsKrbPrincipalService::new(store.clone()));
     let reconciler = Arc::new(Reconciler::new(operations.clone()));
     let smb_doctor = Arc::new(SmbDoctor::default());
 
@@ -112,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
         auth: auth.clone(),
         operations,
         nfs_bindings,
+        nfs_principals,
         reconciler,
         smb_doctor,
     })
