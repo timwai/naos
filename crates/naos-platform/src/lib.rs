@@ -10,7 +10,9 @@ pub use account::{
 };
 pub use command::{CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};
 pub use doctor::SmbDoctor;
-pub use fs_acl::{EffectiveAclEntry, FsAclCapability, FsAclError, FsAclManager, FsAclPermission};
+pub use fs_acl::{
+    EffectiveAclEntry, FsAclCapability, FsAclError, FsAclManager, FsAclPermission, FsAclSubject,
+};
 pub use share_path::SystemSharePathResolver;
 pub use smb::{
     ConfigMode, DetectionDisposition, PlatformKind, PortListener, SmbDetection, SmbDetector,
