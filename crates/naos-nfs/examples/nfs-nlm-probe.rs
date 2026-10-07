@@ -8,7 +8,7 @@ use std::{
 use naos_nfs::{
     mount::{MOUNT_PROGRAM, MOUNT_VERSION},
     nfs3::{NFS_PROGRAM, NFS_VERSION},
-    nlm4::{NLM4_DENIED, NLM4_GRANTED, NLM_PROGRAM, NLM_VERSION},
+    nlm4::{NLM_PROGRAM, NLM_VERSION, NLM4_DENIED, NLM4_GRANTED},
     rpc::{AUTH_NONE, AUTH_SYS, MAX_AUTH_BYTES, RPC_VERSION},
     rpcbind::{RpcTransport, lookup_port},
     transport::{read_record, write_record},
@@ -179,9 +179,12 @@ async fn nlm_test(
 async fn rpc_round_trip(address: SocketAddr, request: Vec<u8>) -> io::Result<Vec<u8>> {
     let mut stream = TcpStream::connect(address).await?;
     write_record(&mut stream, &request).await?;
-    read_record(&mut stream)
-        .await?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "RPC peer closed without reply"))
+    read_record(&mut stream).await?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "RPC peer closed without reply",
+        )
+    })
 }
 
 fn rpc_call(xid: u32, program: u32, version: u32, procedure: u32, body: &[u8]) -> Vec<u8> {
@@ -218,10 +221,7 @@ fn rpc_call(xid: u32, program: u32, version: u32, procedure: u32, body: &[u8]) -
 
 fn accepted_body<'a>(reply: &'a [u8], expected_xid: u32) -> Result<XdrReader<'a>, io::Error> {
     let mut reader = XdrReader::new(reply);
-    if reader
-        .u32()
-        .map_err(xdr_error)?
-        != expected_xid
+    if reader.u32().map_err(xdr_error)? != expected_xid
         || reader.u32().map_err(xdr_error)? != 1
         || reader.u32().map_err(xdr_error)? != 0
     {
