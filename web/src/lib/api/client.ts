@@ -358,20 +358,32 @@ export async function updateGroup(
 export async function replaceGroupMembers(
   groupId: string,
   input: GroupMembersReplaceRequest,
+  idempotencyKey = crypto.randomUUID(),
 ) {
-  return requestJson<GroupDetailDto>(
+  return requestJson<AcceptedOperation>(
     `/api/v1/groups/${encodeURIComponent(groupId)}/members`,
     {
       method: "PUT",
+      headers: {
+        "idempotency-key": idempotencyKey,
+      },
       body: JSON.stringify(input),
     },
   );
 }
 
-export async function deleteGroup(groupId: string) {
-  return requestJson<void>(
+export async function deleteGroup(
+  groupId: string,
+  idempotencyKey = crypto.randomUUID(),
+) {
+  return requestJson<AcceptedOperation>(
     `/api/v1/groups/${encodeURIComponent(groupId)}`,
-    { method: "DELETE" },
+    {
+      method: "DELETE",
+      headers: {
+        "idempotency-key": idempotencyKey,
+      },
+    },
   );
 }
 

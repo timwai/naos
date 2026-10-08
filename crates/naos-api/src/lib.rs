@@ -48,6 +48,8 @@ pub struct AppState {
     pub audit: Arc<naos_core::audit::AuditService>,
     pub files: Arc<naos_core::files::FileService>,
     pub groups: Arc<naos_core::group::GroupService>,
+    pub group_mutations: Arc<naos_core::group::GroupMutationService>,
+    pub group_reconcile_factory: Arc<dyn naos_core::group::GroupReconcileDriverFactory>,
     pub operations: Arc<naos_core::operation::OperationService>,
     pub share_mutations: Arc<naos_core::share::ShareMutationService>,
     pub share_reconcile_factory: Arc<dyn naos_core::share::ShareReconcileDriverFactory>,

@@ -53,6 +53,14 @@ impl OperationKind {
         Self::new("user.delete")
     }
 
+    pub fn group_members_replace() -> Self {
+        Self::new("group.members.replace")
+    }
+
+    pub fn group_delete() -> Self {
+        Self::new("group.delete")
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

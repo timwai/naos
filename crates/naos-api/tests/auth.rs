@@ -39,6 +39,13 @@ async fn test_app() -> (Router, TempDir) {
     let files = Arc::new(naos_core::files::FileService::new(store.clone()));
     let groups = Arc::new(naos_core::group::GroupService::new(store.clone()));
     let operations = Arc::new(OperationService::new(store.clone()));
+    let group_mutations = Arc::new(naos_core::group::GroupMutationService::new(
+        store.clone(),
+        operations.clone(),
+    ));
+    let group_reconcile_factory = Arc::new(
+        naos_core::group::DatabaseGroupReconcileDriverFactory::new(store.clone()),
+    );
     let acl_mutations = Arc::new(naos_core::acl::AclMutationService::new(
         store.clone(),
         operations.clone(),
@@ -94,6 +101,8 @@ async fn test_app() -> (Router, TempDir) {
         audit,
         files,
         groups,
+        group_mutations,
+        group_reconcile_factory,
         operations,
         share_mutations,
         share_reconcile_factory,
@@ -136,6 +145,38 @@ fn request(
 async fn json_body(response: axum::response::Response) -> Value {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn wait_for_operation(
+    app: &Router,
+    operation_id: &str,
+    peer: SocketAddr,
+    cookie: &str,
+) -> Value {
+    for _ in 0..100 {
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::GET,
+                &format!("/api/v1/operations/{operation_id}"),
+                None,
+                peer,
+                Some(cookie),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        if matches!(
+            body["state"].as_str(),
+            Some("succeeded" | "failed" | "degraded")
+        ) {
+            return body;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("operation did not reach a terminal state");
 }
 
 #[tokio::test]
@@ -504,4 +545,152 @@ async fn password_change_revokes_other_sessions() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn group_membership_and_delete_are_operation_backed() {
+    let (app, _dir) = test_app().await;
+    let loopback = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 32000);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/setup/admin",
+            Some(json!({
+                "username": "admin",
+                "password": "correct-horse-battery-staple"
+            })),
+            loopback,
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/auth/login",
+            Some(json!({
+                "username": "admin",
+                "password": "correct-horse-battery-staple"
+            })),
+            loopback,
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookie = response
+        .headers()
+        .get(SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/auth/session",
+            None,
+            loopback,
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    let session = json_body(response).await;
+    let csrf = session["csrf_token"].as_str().unwrap().to_owned();
+    let user_id = session["user"]["id"].as_str().unwrap().to_owned();
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::POST,
+            "/api/v1/groups",
+            Some(json!({"name":"family","description":"Family members"})),
+            loopback,
+            Some(&cookie),
+            Some(&csrf),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let group = json_body(response).await;
+    let group_id = group["id"].as_str().unwrap().to_owned();
+
+    let mut replace = request(
+        Method::PUT,
+        &format!("/api/v1/groups/{group_id}/members"),
+        Some(json!({"user_ids":[user_id]})),
+        loopback,
+        Some(&cookie),
+        Some(&csrf),
+    );
+    replace
+        .headers_mut()
+        .insert("idempotency-key", "group-members-test-1".parse().unwrap());
+    let response = app.clone().oneshot(replace).await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let accepted = json_body(response).await;
+    let operation_id = accepted["operation_id"].as_str().unwrap();
+    let operation = wait_for_operation(&app, operation_id, loopback, &cookie).await;
+    assert_eq!(operation["state"], "succeeded");
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/groups/{group_id}"),
+            None,
+            loopback,
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let group = json_body(response).await;
+    assert_eq!(group["members"].as_array().unwrap().len(), 1);
+    assert_eq!(group["members"][0]["username"], "admin");
+
+    let mut delete = request(
+        Method::DELETE,
+        &format!("/api/v1/groups/{group_id}"),
+        None,
+        loopback,
+        Some(&cookie),
+        Some(&csrf),
+    );
+    delete
+        .headers_mut()
+        .insert("idempotency-key", "group-delete-test-1".parse().unwrap());
+    let response = app.clone().oneshot(delete).await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let accepted = json_body(response).await;
+    let operation_id = accepted["operation_id"].as_str().unwrap();
+    let operation = wait_for_operation(&app, operation_id, loopback, &cookie).await;
+    assert_eq!(operation["state"], "succeeded");
+
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/groups/{group_id}"),
+            None,
+            loopback,
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

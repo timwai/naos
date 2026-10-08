@@ -3,6 +3,7 @@ mod acl_mutation;
 mod audit;
 mod files;
 mod group;
+mod group_mutation;
 mod nfs;
 mod operation;
 mod share_apply;
