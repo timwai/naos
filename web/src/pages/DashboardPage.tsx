@@ -21,6 +21,7 @@ export function DashboardPage() {
   const status = readiness.data?.status ?? (readiness.isError ? "error" : "checking");
   const isAdmin = session.data?.user?.role === "admin";
   const provider = doctor.data?.provider ?? "—";
+  const doctorStatus = doctor.isError ? "检查失败" : doctor.isPending ? "检查中…" : provider;
   const listener = doctor.data?.listener_445?.process
     ?? doctor.data?.listener_445?.local_address
     ?? "未检测到";
@@ -42,22 +43,29 @@ export function DashboardPage() {
           <small>/health/ready</small>
         </article>
 
-        {isAdmin && <article className="metric-card">
+        {isAdmin && (
+          <article className="metric-card">
           <span>SMB provider</span>
-          <strong>{doctor.isPending ? "检查中…" : provider}</strong>
+          <strong>{doctorStatus}</strong>
           <small>{doctor.data?.status ?? "system provider"}</small>
-        </article>}
+        </article>
+        )}
 
         {isAdmin && <article className="metric-card">
           <span>TCP/445</span>
-          <strong>{doctor.isPending ? "检查中…" : listener}</strong>
+          <strong>{doctor.isError ? "检查失败" : doctor.isPending ? "检查中…" : listener}</strong>
           <small>
             {doctor.data?.managed_by_naos ? "naos-managed scope" : "provider ownership"}
           </small>
-        </article>}
+        </article>
+        )}
       </div>
 
-      {doctor.data?.findings.length ? (
+      {isAdmin && doctor.isError && (
+        <div className="error-box" role="alert">SMB Doctor 检查失败，请在设置与诊断页面重试。</div>
+      )}
+
+      {isAdmin && doctor.data?.findings.length ? (
         <div className="panel">
           <div className="panel-heading">
             <h2>SMB Doctor</h2>
