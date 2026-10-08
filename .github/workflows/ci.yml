@@ -23,7 +23,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check NFS smoke shell syntax
         if: runner.os == 'Linux'
-        run: bash -n scripts/ci/nfs-real-smoke.sh scripts/ci/nfs-remote-lock-smoke.sh
+        run: bash -n scripts/ci/nfs-real-smoke.sh scripts/ci/nfs-remote-lock-smoke.sh scripts/qa/acceptance-smoke.sh
       - name: Check Windows smoke PowerShell syntax
         if: runner.os == 'Windows'
         shell: pwsh
@@ -31,7 +31,8 @@ jobs:
           @(
             "scripts/ci/windows-nfs-real-smoke.ps1",
             "scripts/ci/windows-nfs-remote-lock-smoke.ps1",
-            "scripts/ci/windows-smb-real-smoke.ps1"
+            "scripts/ci/windows-smb-real-smoke.ps1",
+            "scripts/qa/acceptance-smoke.ps1"
           ) | ForEach-Object {
             [void][scriptblock]::Create((Get-Content -LiteralPath $_ -Raw))
           }
