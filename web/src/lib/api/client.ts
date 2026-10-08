@@ -138,9 +138,9 @@ async function requestJson<T>(
   return (await response.json()) as T;
 }
 
-export async function getSession() {
+export async function getSession(signal?: AbortSignal) {
   return observeSession(
-    await requestJson<AuthSessionResponse>("/api/v1/auth/session"),
+    await requestJson<AuthSessionResponse>("/api/v1/auth/session", { signal }),
   );
 }
 
