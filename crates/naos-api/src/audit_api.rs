@@ -212,10 +212,7 @@ fn render_csv(records: &[AuditRecord]) -> String {
 
 fn csv_cell(value: &str) -> String {
     let mut safe = value.to_owned();
-    if safe
-        .trim_start()
-        .starts_with(['=', '+', '-', '@'])
-    {
+    if safe.trim_start().starts_with(['=', '+', '-', '@']) {
         safe.insert(0, '\'');
     }
     format!("\"{}\"", safe.replace('"', "\"\""))
@@ -274,7 +271,6 @@ struct AuditApiDoc;
 pub(crate) fn openapi() -> utoipa::openapi::OpenApi {
     AuditApiDoc::openapi()
 }
-
 
 #[cfg(test)]
 mod tests {
