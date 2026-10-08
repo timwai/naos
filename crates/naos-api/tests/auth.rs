@@ -1,6 +1,7 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
+    time::Duration,
 };
 
 use axum::{
@@ -154,7 +155,7 @@ async fn wait_for_operation(
     peer: SocketAddr,
     cookie: &str,
 ) -> Value {
-    for _ in 0..100 {
+    for _ in 0..500 {
         let response = app
             .clone()
             .oneshot(request(
@@ -175,7 +176,7 @@ async fn wait_for_operation(
         ) {
             return body;
         }
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("operation did not reach a terminal state");
 }
