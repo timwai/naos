@@ -158,13 +158,10 @@ pub fn build_system_drift_report(
         .count();
     if enabled_smb > 0 && smb.status != "ready" {
         drift_count += 1;
-        let source = smb
-            .findings
-            .iter()
-            .find(|finding| {
-                finding.severity != "info"
-                    && finding.code != "MACOS_SMB_CREDENTIAL_MANAGEMENT_UNSUPPORTED"
-            });
+        let source = smb.findings.iter().find(|finding| {
+            finding.severity != "info"
+                && finding.code != "MACOS_SMB_CREDENTIAL_MANAGEMENT_UNSUPPORTED"
+        });
         findings.push(SystemDriftFinding {
             code: source
                 .map(|finding| finding.code.clone())
@@ -295,7 +292,12 @@ mod drift_tests {
     fn smb_provider_only_counts_as_drift_when_smb_is_desired() {
         let desired = build_system_drift_report(&[share("in_sync", 1, 1)], &smb("stopped"));
         assert_eq!(desired.status, "drift");
-        assert!(desired.findings.iter().any(|finding| finding.code == "SAMBA_STOPPED"));
+        assert!(
+            desired
+                .findings
+                .iter()
+                .any(|finding| finding.code == "SAMBA_STOPPED")
+        );
 
         let mut disabled = share("in_sync", 1, 1);
         disabled.smb_enabled = false;
