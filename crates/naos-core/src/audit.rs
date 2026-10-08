@@ -49,6 +49,12 @@ pub struct AuditPage {
     pub total: u64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuditExport {
+    pub items: Vec<AuditRecord>,
+    pub total: u64,
+}
+
 #[derive(Debug, Error)]
 pub enum AuditRepositoryError {
     #[error("audit store is unavailable")]
@@ -69,6 +75,12 @@ pub enum AuditError {
 #[async_trait]
 pub trait AuditRepository: Send + Sync {
     async fn list(&self, filter: &AuditFilter) -> Result<AuditPage, AuditRepositoryError>;
+
+    async fn export(
+        &self,
+        filter: &AuditFilter,
+        limit: u32,
+    ) -> Result<AuditExport, AuditRepositoryError>;
 }
 
 pub struct AuditService {
@@ -83,6 +95,21 @@ impl AuditService {
     pub async fn list(&self, filter: AuditFilter) -> Result<AuditPage, AuditError> {
         let filter = normalize_filter(filter)?;
         self.repository.list(&filter).await.map_err(Into::into)
+    }
+
+    pub async fn export(
+        &self,
+        filter: AuditFilter,
+        limit: u32,
+    ) -> Result<AuditExport, AuditError> {
+        let filter = normalize_filter(filter)?;
+        if limit == 0 || limit > 50_000 {
+            return Err(validation("limit", "limit 必须在 1-50000 之间"));
+        }
+        self.repository
+            .export(&filter, limit)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -171,6 +198,49 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn export_limit_is_bounded() {
+        struct UnusedRepository;
+
+        #[async_trait]
+        impl AuditRepository for UnusedRepository {
+            async fn list(
+                &self,
+                _filter: &AuditFilter,
+            ) -> Result<AuditPage, AuditRepositoryError> {
+                unreachable!()
+            }
+
+            async fn export(
+                &self,
+                _filter: &AuditFilter,
+                _limit: u32,
+            ) -> Result<AuditExport, AuditRepositoryError> {
+                unreachable!()
+            }
+        }
+
+        let service = AuditService::new(Arc::new(UnusedRepository));
+        let filter = AuditFilter {
+            from: None,
+            to: None,
+            protocol: None,
+            user_id: None,
+            share_id: None,
+            result: None,
+            q: None,
+            page: 1,
+            page_size: 50,
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert!(runtime.block_on(service.export(filter.clone(), 0)).is_err());
+        assert!(runtime.block_on(service.export(filter, 50_001)).is_err());
     }
 
     #[test]
