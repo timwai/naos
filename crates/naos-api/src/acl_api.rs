@@ -231,11 +231,9 @@ impl From<AclMutationError> for ApiError {
                 "USER_NOT_FOUND",
                 "ACL 用户不存在或已禁用",
             ),
-            AclMutationError::GroupNotFound => ApiError::new(
-                StatusCode::NOT_FOUND,
-                "GROUP_NOT_FOUND",
-                "ACL 用户组不存在",
-            ),
+            AclMutationError::GroupNotFound => {
+                ApiError::new(StatusCode::NOT_FOUND, "GROUP_NOT_FOUND", "ACL 用户组不存在")
+            }
             AclMutationError::Conflict => ApiError::new(
                 StatusCode::CONFLICT,
                 "ACL_CONFLICT",
