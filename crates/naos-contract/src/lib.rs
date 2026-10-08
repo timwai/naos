@@ -276,6 +276,27 @@ pub mod doctor {
         pub capabilities: SmbDoctorCapabilitiesDto,
         pub findings: Vec<SmbDoctorFindingDto>,
     }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct SystemDriftFindingDto {
+        pub code: String,
+        pub severity: String,
+        pub resource_type: String,
+        pub resource_id: Option<String>,
+        pub summary: String,
+        pub detail: String,
+        pub remediation: String,
+        pub automatic_fix_allowed: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, ToSchema)]
+    pub struct SystemDriftResponse {
+        pub status: String,
+        pub shares_checked: usize,
+        pub pending_count: usize,
+        pub drift_count: usize,
+        pub findings: Vec<SystemDriftFindingDto>,
+    }
 }
 
 pub mod share {

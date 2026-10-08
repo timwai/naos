@@ -1604,3 +1604,45 @@ async fn audit_export_is_admin_only_filtered_and_bounded() {
     assert!(csv.starts_with("\u{feff}id,timestamp,actor_type"));
     assert!(csv.lines().count() >= 2);
 }
+
+#[tokio::test]
+async fn system_drift_report_is_admin_only_and_reports_clean_empty_state() {
+    let (app, _store, _dir) = test_app().await;
+    let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 33008);
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/system/drift",
+            None,
+            peer,
+            None,
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let (cookie, _csrf) = login_admin(&app, peer).await;
+    let response = app
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/system/drift",
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["shares_checked"], 0);
+    assert_eq!(body["pending_count"], 0);
+    assert_eq!(body["drift_count"], 0);
+    assert_eq!(body["findings"].as_array().unwrap().len(), 0);
+}

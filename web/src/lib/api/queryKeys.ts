@@ -34,6 +34,7 @@ export const queryKeys = {
     acl: (shareId: string) => ["shares", shareId, "acl"] as const,
   },
   system: {
+    drift: () => ["system", "drift"] as const,
     smbDoctor: () => ["system", "smb-doctor"] as const,
   },
   users: {
