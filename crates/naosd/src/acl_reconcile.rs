@@ -133,7 +133,8 @@ impl PlatformAclReconcileDriver {
 
     async fn verify_desired_groups(&self) -> Result<(), ReconcileFailure> {
         for (group_id, usernames) in self.desired_groups() {
-            let group = SystemGroupName::from_group_id(&group_id).map_err(platform_group_failure)?;
+            let group =
+                SystemGroupName::from_group_id(&group_id).map_err(platform_group_failure)?;
             let members = system_accounts(&usernames)?;
             self.system_groups
                 .verify_members(&group, &members)
