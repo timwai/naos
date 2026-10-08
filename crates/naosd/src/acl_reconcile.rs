@@ -1,27 +1,35 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use naos_core::{
-    acl::{AclApplyRule, AclMutationTarget, AclReconcileDriverFactory, Permission},
+    acl::{
+        AclApplyRule, AclApplySubject, AclMutationRepository, AclMutationRepositoryError,
+        AclMutationTarget, AclReconcileDriverFactory, Permission, acl_lock_keys,
+    },
     path::{PathError, SafePathResolver},
     reconcile::{ReconcileDriver, ReconcileFailure},
     share::{ShareApplyRepository, ShareApplyRepositoryError},
 };
 use naos_platform::{
     EffectiveAclEntry, FsAclManager, FsAclPermission, FsAclSubject, SystemAccountName,
+    SystemGroupError, SystemGroupManager, SystemGroupName,
 };
 use serde_json::{Value, json};
 
 pub struct PlatformAclReconcileDriverFactory {
     shares: Arc<dyn ShareApplyRepository>,
+    acl: Arc<dyn AclMutationRepository>,
     fs_acl: FsAclManager,
+    system_groups: SystemGroupManager,
 }
 
 impl PlatformAclReconcileDriverFactory {
-    pub fn new(shares: Arc<dyn ShareApplyRepository>) -> Self {
+    pub fn new(shares: Arc<dyn ShareApplyRepository>, acl: Arc<dyn AclMutationRepository>) -> Self {
         Self {
             shares,
+            acl,
             fs_acl: FsAclManager::default(),
+            system_groups: SystemGroupManager::default(),
         }
     }
 }
@@ -30,7 +38,9 @@ impl AclReconcileDriverFactory for PlatformAclReconcileDriverFactory {
     fn driver(&self, target: AclMutationTarget) -> Arc<dyn ReconcileDriver> {
         Arc::new(PlatformAclReconcileDriver {
             shares: self.shares.clone(),
+            acl: self.acl.clone(),
             fs_acl: self.fs_acl.clone(),
+            system_groups: self.system_groups.clone(),
             target,
         })
     }
@@ -38,7 +48,9 @@ impl AclReconcileDriverFactory for PlatformAclReconcileDriverFactory {
 
 struct PlatformAclReconcileDriver {
     shares: Arc<dyn ShareApplyRepository>,
+    acl: Arc<dyn AclMutationRepository>,
     fs_acl: FsAclManager,
+    system_groups: SystemGroupManager,
     target: AclMutationTarget,
 }
 
@@ -48,12 +60,26 @@ impl PlatformAclReconcileDriver {
     }
 
     fn entry(rule: &AclApplyRule) -> Result<EffectiveAclEntry, ReconcileFailure> {
-        let account = SystemAccountName::from_username(&rule.username).map_err(|_| {
-            ReconcileFailure::new(
-                "ACL_ACCOUNT_MAPPING_FAILED",
-                "ACL user could not be mapped to a managed system account",
-            )
-        })?;
+        let subject = match &rule.subject {
+            AclApplySubject::User { username, .. } => {
+                let account = SystemAccountName::from_username(username).map_err(|_| {
+                    ReconcileFailure::new(
+                        "ACL_ACCOUNT_MAPPING_FAILED",
+                        "ACL user could not be mapped to a managed system account",
+                    )
+                })?;
+                FsAclSubject::User(account)
+            }
+            AclApplySubject::Group { group_id, .. } => {
+                let group = SystemGroupName::from_group_id(group_id).map_err(|_| {
+                    ReconcileFailure::new(
+                        "ACL_GROUP_MAPPING_FAILED",
+                        "ACL group could not be mapped to a managed system group",
+                    )
+                })?;
+                FsAclSubject::Group(group)
+            }
+        };
         let permission = match rule.permission {
             Permission::None => FsAclPermission::None,
             Permission::ReadOnly => FsAclPermission::ReadOnly,
@@ -61,21 +87,89 @@ impl PlatformAclReconcileDriver {
         };
 
         Ok(EffectiveAclEntry {
-            subject: FsAclSubject::User(account),
+            subject,
             permission,
             inherit: rule.inherit,
         })
     }
 
     fn same_identity(left: &AclApplyRule, right: &AclApplyRule) -> bool {
-        left.path == right.path && left.username == right.username
+        left.path == right.path && same_subject(&left.subject, &right.subject)
+    }
+
+    fn desired_groups(&self) -> BTreeMap<String, Vec<String>> {
+        let mut groups = BTreeMap::new();
+        for rule in &self.target.desired {
+            if let AclApplySubject::Group {
+                group_id,
+                member_usernames,
+                ..
+            } = &rule.subject
+            {
+                groups
+                    .entry(group_id.clone())
+                    .or_insert_with(|| member_usernames.clone());
+            }
+        }
+        groups
+    }
+
+    async fn sync_desired_groups(&self) -> Result<(), ReconcileFailure> {
+        for (group_id, usernames) in self.desired_groups() {
+            let group =
+                SystemGroupName::from_group_id(&group_id).map_err(platform_group_failure)?;
+            let members = system_accounts(&usernames)?;
+            self.system_groups
+                .ensure(&group)
+                .await
+                .map_err(platform_group_failure)?;
+            self.system_groups
+                .replace_members(&group, &members)
+                .await
+                .map_err(platform_group_failure)?;
+        }
+        Ok(())
+    }
+
+    async fn verify_desired_groups(&self) -> Result<(), ReconcileFailure> {
+        for (group_id, usernames) in self.desired_groups() {
+            let group =
+                SystemGroupName::from_group_id(&group_id).map_err(platform_group_failure)?;
+            let members = system_accounts(&usernames)?;
+            self.system_groups
+                .verify_members(&group, &members)
+                .await
+                .map_err(platform_group_failure)?;
+        }
+        Ok(())
+    }
+
+    async fn previous_group_is_absent(
+        &self,
+        subject: &AclApplySubject,
+    ) -> Result<bool, ReconcileFailure> {
+        let AclApplySubject::Group { group_id, .. } = subject else {
+            return Ok(false);
+        };
+        let group = SystemGroupName::from_group_id(group_id).map_err(platform_group_failure)?;
+        match self.system_groups.verify_absent(&group).await {
+            Ok(()) => Ok(true),
+            Err(SystemGroupError::StillPresent) => {
+                self.system_groups
+                    .ensure(&group)
+                    .await
+                    .map_err(platform_group_failure)?;
+                Ok(false)
+            }
+            Err(error) => Err(platform_group_failure(error)),
+        }
     }
 }
 
 #[async_trait]
 impl ReconcileDriver for PlatformAclReconcileDriver {
     fn lock_keys(&self) -> Vec<String> {
-        vec![format!("share:{}", self.target.share_id)]
+        acl_lock_keys(&self.target)
     }
 
     fn target_type(&self) -> &str {
@@ -106,11 +200,26 @@ impl ReconcileDriver for PlatformAclReconcileDriver {
             ));
         }
 
+        if !self
+            .acl
+            .validate_group_snapshots(&self.target.desired)
+            .await
+            .map_err(acl_repository_failure)?
+        {
+            return Err(ReconcileFailure::new(
+                "ACL_GROUP_CONFLICT",
+                "group membership changed before ACL apply",
+            ));
+        }
+
         let resolver = self.resolver()?;
         for rule in &self.target.desired {
             resolver
                 .resolve_existing(&rule.path)
                 .map_err(path_failure)?;
+            Self::entry(rule)?;
+        }
+        for rule in &self.target.previous {
             Self::entry(rule)?;
         }
 
@@ -139,6 +248,7 @@ impl ReconcileDriver for PlatformAclReconcileDriver {
             "generation": self.target.generation,
             "remove_rules": self.target.previous.len(),
             "apply_rules": self.target.desired.len(),
+            "managed_groups": self.desired_groups().len(),
             "filesystem_apply": true,
         }))
     }
@@ -152,8 +262,13 @@ impl ReconcileDriver for PlatformAclReconcileDriver {
 
     async fn apply(&self, _plan: &Value) -> Result<(), ReconcileFailure> {
         let resolver = self.resolver()?;
+        self.sync_desired_groups().await?;
 
         for rule in &self.target.previous {
+            if self.previous_group_is_absent(&rule.subject).await? {
+                continue;
+            }
+
             let path = match resolver.resolve_existing(&rule.path) {
                 Ok(path) => path,
                 Err(PathError::TargetNotFound) => continue,
@@ -182,6 +297,7 @@ impl ReconcileDriver for PlatformAclReconcileDriver {
 
     async fn verify(&self) -> Result<Value, ReconcileFailure> {
         let resolver = self.resolver()?;
+        self.verify_desired_groups().await?;
 
         for rule in &self.target.desired {
             let path = resolver
@@ -203,6 +319,10 @@ impl ReconcileDriver for PlatformAclReconcileDriver {
             {
                 continue;
             }
+            if self.previous_group_is_absent(&previous.subject).await? {
+                continue;
+            }
+
             let path = match resolver.resolve_existing(&previous.path) {
                 Ok(path) => path,
                 Err(PathError::TargetNotFound) => continue,
@@ -229,6 +349,7 @@ impl ReconcileDriver for PlatformAclReconcileDriver {
 
         Ok(json!({
             "filesystem_acl": "verified",
+            "system_groups": "verified",
             "generation": self.target.generation,
             "rules": self.target.desired.len(),
         }))
@@ -251,8 +372,48 @@ impl ReconcileDriver for PlatformAclReconcileDriver {
     }
 }
 
+fn same_subject(left: &AclApplySubject, right: &AclApplySubject) -> bool {
+    match (left, right) {
+        (
+            AclApplySubject::User {
+                user_id: left_id, ..
+            },
+            AclApplySubject::User {
+                user_id: right_id, ..
+            },
+        ) => left_id == right_id,
+        (
+            AclApplySubject::Group {
+                group_id: left_id, ..
+            },
+            AclApplySubject::Group {
+                group_id: right_id, ..
+            },
+        ) => left_id == right_id,
+        _ => false,
+    }
+}
+
+fn system_accounts(usernames: &[String]) -> Result<Vec<SystemAccountName>, ReconcileFailure> {
+    usernames
+        .iter()
+        .map(|username| {
+            SystemAccountName::from_username(username).map_err(|_| {
+                ReconcileFailure::new(
+                    "ACL_ACCOUNT_MAPPING_FAILED",
+                    "group member could not be mapped to a managed system account",
+                )
+            })
+        })
+        .collect()
+}
+
 fn repository_failure(_error: ShareApplyRepositoryError) -> ReconcileFailure {
     ReconcileFailure::new("SHARE_STORE_UNAVAILABLE", "share store is unavailable")
+}
+
+fn acl_repository_failure(_error: AclMutationRepositoryError) -> ReconcileFailure {
+    ReconcileFailure::new("ACL_STORE_UNAVAILABLE", "ACL store is unavailable")
 }
 
 fn path_failure(error: PathError) -> ReconcileFailure {
@@ -261,4 +422,8 @@ fn path_failure(error: PathError) -> ReconcileFailure {
 
 fn fs_acl_failure(error: naos_platform::FsAclError) -> ReconcileFailure {
     ReconcileFailure::new("ACL_FILESYSTEM_APPLY_FAILED", error.to_string())
+}
+
+fn platform_group_failure(error: impl std::fmt::Display) -> ReconcileFailure {
+    ReconcileFailure::new("ACL_GROUP_APPLY_FAILED", error.to_string())
 }

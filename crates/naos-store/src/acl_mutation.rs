@@ -1,13 +1,15 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use naos_core::{
     acl::{
-        AclApplyRule, AclMutationCommit, AclMutationRepository, AclMutationRepositoryError,
-        AclMutationTarget, NewAclRule, Permission, Subject,
+        AclApplyRule, AclApplySubject, AclMutationCommit, AclMutationRepository,
+        AclMutationRepositoryError, AclMutationTarget, NewAclRule, Permission, Subject,
     },
     operation::{NewOperation, NewOperationEvent},
     path::RelativePath,
 };
-use sqlx::{Row, Sqlite, Transaction};
+use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use crate::{
     Store,
@@ -48,43 +50,8 @@ impl AclMutationRepository for Store {
             return Err(AclMutationRepositoryError::Conflict);
         }
 
-        let group_rule_count = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*)
-             FROM share_acl
-             WHERE share_id = ? AND subject_type = 'group'",
-        )
-        .bind(share_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(store_error)?;
-        if group_rule_count != 0 {
-            return Err(AclMutationRepositoryError::Conflict);
-        }
-
-        let previous = load_user_apply_rules(&mut tx, share_id).await?;
-        let mut desired = Vec::with_capacity(rules.len());
-        for rule in rules {
-            let Subject::User(user_id) = &rule.rule.subject else {
-                return Err(AclMutationRepositoryError::Conflict);
-            };
-            let username = sqlx::query_scalar::<_, String>(
-                "SELECT username
-                 FROM users
-                 WHERE id = ? AND enabled = 1",
-            )
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(store_error)?
-            .ok_or(AclMutationRepositoryError::UserNotFound)?;
-
-            desired.push(AclApplyRule {
-                path: rule.rule.path.clone(),
-                username,
-                permission: rule.rule.permission,
-                inherit: rule.rule.inherit,
-            });
-        }
+        let previous = load_apply_rules(&mut tx, share_id).await?;
+        let desired = build_apply_rules(&mut tx, rules).await?;
 
         let current_generation = share.try_get::<i64, _>("generation").map_err(store_error)?;
         let generation = current_generation
@@ -101,11 +68,12 @@ impl AclMutationRepository for Store {
             sqlx::query(
                 "INSERT INTO share_acl
                     (id, share_id, rel_path, subject_type, subject_id, perm, inherit)
-                 VALUES (?, ?, ?, 'user', ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&rule.id)
             .bind(share_id)
             .bind(rule.rule.path.as_slash_path())
+            .bind(rule.rule.subject.kind())
             .bind(rule.rule.subject.id())
             .bind(rule.rule.permission.as_str())
             .bind(rule.rule.inherit)
@@ -147,47 +115,229 @@ impl AclMutationRepository for Store {
             }),
         })
     }
+
+    async fn validate_group_snapshots(
+        &self,
+        rules: &[AclApplyRule],
+    ) -> Result<bool, AclMutationRepositoryError> {
+        let mut expected = HashMap::<String, (String, Vec<String>)>::new();
+        for rule in rules {
+            let AclApplySubject::Group {
+                group_id,
+                group_updated_at,
+                member_usernames,
+            } = &rule.subject
+            else {
+                continue;
+            };
+
+            match expected.get(group_id) {
+                Some((updated_at, members))
+                    if updated_at != group_updated_at || members != member_usernames =>
+                {
+                    return Ok(false);
+                }
+                Some(_) => {}
+                None => {
+                    expected.insert(
+                        group_id.clone(),
+                        (group_updated_at.clone(), member_usernames.clone()),
+                    );
+                }
+            }
+        }
+
+        for (group_id, (updated_at, members)) in expected {
+            let Some((current_updated_at, current_members)) =
+                group_snapshot_from_pool(&self.pool, &group_id).await?
+            else {
+                return Ok(false);
+            };
+            if current_updated_at != updated_at || current_members != members {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
 }
 
-async fn load_user_apply_rules(
+async fn build_apply_rules(
+    tx: &mut Transaction<'_, Sqlite>,
+    rules: &[NewAclRule],
+) -> Result<Vec<AclApplyRule>, AclMutationRepositoryError> {
+    let mut result = Vec::with_capacity(rules.len());
+    let mut groups = HashMap::<String, AclApplySubject>::new();
+
+    for rule in rules {
+        let subject = match &rule.rule.subject {
+            Subject::User(user_id) => {
+                let username = sqlx::query_scalar::<_, String>(
+                    "SELECT username
+                     FROM users
+                     WHERE id = ? AND enabled = 1",
+                )
+                .bind(user_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(store_error)?
+                .ok_or(AclMutationRepositoryError::UserNotFound)?;
+                AclApplySubject::User {
+                    user_id: user_id.clone(),
+                    username,
+                }
+            }
+            Subject::Group(group_id) => {
+                if let Some(subject) = groups.get(group_id) {
+                    subject.clone()
+                } else {
+                    let subject = group_apply_subject(tx, group_id).await?;
+                    groups.insert(group_id.clone(), subject.clone());
+                    subject
+                }
+            }
+        };
+
+        result.push(AclApplyRule {
+            path: rule.rule.path.clone(),
+            subject,
+            permission: rule.rule.permission,
+            inherit: rule.rule.inherit,
+        });
+    }
+
+    Ok(result)
+}
+
+async fn load_apply_rules(
     tx: &mut Transaction<'_, Sqlite>,
     share_id: &str,
 ) -> Result<Vec<AclApplyRule>, AclMutationRepositoryError> {
     let rows = sqlx::query(
-        "SELECT acl.rel_path, acl.perm, acl.inherit, users.username
+        "SELECT acl.rel_path, acl.subject_type, acl.subject_id, acl.perm, acl.inherit
          FROM share_acl AS acl
-         JOIN users ON users.id = acl.subject_id
-         WHERE acl.share_id = ? AND acl.subject_type = 'user'
-         ORDER BY acl.rel_path, users.username",
+         WHERE acl.share_id = ?
+         ORDER BY acl.rel_path, acl.subject_type, acl.subject_id",
     )
     .bind(share_id)
     .fetch_all(&mut **tx)
     .await
     .map_err(store_error)?;
 
-    rows.into_iter()
-        .map(|row| {
-            let permission = match row
-                .try_get::<String, _>("perm")
-                .map_err(store_error)?
-                .as_str()
-            {
-                "none" => Permission::None,
-                "ro" => Permission::ReadOnly,
-                "rw" => Permission::ReadWrite,
-                _ => return Err(AclMutationRepositoryError::Unavailable),
-            };
-            let rel_path = row.try_get::<String, _>("rel_path").map_err(store_error)?;
+    let mut groups = HashMap::<String, AclApplySubject>::new();
+    let mut result = Vec::with_capacity(rows.len());
+    for row in rows {
+        let subject_type = row
+            .try_get::<String, _>("subject_type")
+            .map_err(store_error)?;
+        let subject_id = row
+            .try_get::<String, _>("subject_id")
+            .map_err(store_error)?;
+        let subject = match subject_type.as_str() {
+            "user" => {
+                let username =
+                    sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = ?")
+                        .bind(&subject_id)
+                        .fetch_optional(&mut **tx)
+                        .await
+                        .map_err(store_error)?
+                        .ok_or(AclMutationRepositoryError::UserNotFound)?;
+                AclApplySubject::User {
+                    user_id: subject_id.clone(),
+                    username,
+                }
+            }
+            "group" => {
+                if let Some(subject) = groups.get(&subject_id) {
+                    subject.clone()
+                } else {
+                    let subject = group_apply_subject(tx, &subject_id).await?;
+                    groups.insert(subject_id, subject.clone());
+                    subject
+                }
+            }
+            _ => return Err(AclMutationRepositoryError::Unavailable),
+        };
+        let permission = parse_permission(&row.try_get::<String, _>("perm").map_err(store_error)?)?;
+        let rel_path = row.try_get::<String, _>("rel_path").map_err(store_error)?;
 
-            Ok(AclApplyRule {
-                path: RelativePath::parse(&rel_path)
-                    .map_err(|_| AclMutationRepositoryError::Unavailable)?,
-                username: row.try_get("username").map_err(store_error)?,
-                permission,
-                inherit: row.try_get("inherit").map_err(store_error)?,
-            })
-        })
-        .collect()
+        result.push(AclApplyRule {
+            path: RelativePath::parse(&rel_path)
+                .map_err(|_| AclMutationRepositoryError::Unavailable)?,
+            subject,
+            permission,
+            inherit: row.try_get("inherit").map_err(store_error)?,
+        });
+    }
+
+    Ok(result)
+}
+
+async fn group_apply_subject(
+    tx: &mut Transaction<'_, Sqlite>,
+    group_id: &str,
+) -> Result<AclApplySubject, AclMutationRepositoryError> {
+    let updated_at = sqlx::query_scalar::<_, String>("SELECT updated_at FROM groups WHERE id = ?")
+        .bind(group_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(store_error)?
+        .ok_or(AclMutationRepositoryError::GroupNotFound)?;
+
+    let member_usernames = sqlx::query_scalar::<_, String>(
+        "SELECT u.username
+         FROM users AS u
+         JOIN group_members AS gm ON gm.user_id = u.id
+         WHERE gm.group_id = ?
+         ORDER BY u.username",
+    )
+    .bind(group_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(store_error)?;
+
+    Ok(AclApplySubject::Group {
+        group_id: group_id.to_owned(),
+        group_updated_at: updated_at,
+        member_usernames,
+    })
+}
+
+async fn group_snapshot_from_pool(
+    pool: &SqlitePool,
+    group_id: &str,
+) -> Result<Option<(String, Vec<String>)>, AclMutationRepositoryError> {
+    let updated_at = sqlx::query_scalar::<_, String>("SELECT updated_at FROM groups WHERE id = ?")
+        .bind(group_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(store_error)?;
+    let Some(updated_at) = updated_at else {
+        return Ok(None);
+    };
+
+    let members = sqlx::query_scalar::<_, String>(
+        "SELECT u.username
+         FROM users AS u
+         JOIN group_members AS gm ON gm.user_id = u.id
+         WHERE gm.group_id = ?
+         ORDER BY u.username",
+    )
+    .bind(group_id)
+    .fetch_all(pool)
+    .await
+    .map_err(store_error)?;
+
+    Ok(Some((updated_at, members)))
+}
+
+fn parse_permission(value: &str) -> Result<Permission, AclMutationRepositoryError> {
+    match value {
+        "none" => Ok(Permission::None),
+        "ro" => Ok(Permission::ReadOnly),
+        "rw" => Ok(Permission::ReadWrite),
+        _ => Err(AclMutationRepositoryError::Unavailable),
+    }
 }
 
 async fn existing_idempotent(

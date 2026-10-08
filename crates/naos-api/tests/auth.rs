@@ -1,6 +1,7 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
+    time::Duration,
 };
 
 use axum::{
@@ -51,6 +52,7 @@ async fn test_app() -> (Router, TempDir) {
         operations.clone(),
     ));
     let acl_reconcile_factory = Arc::new(naos_core::acl::DatabaseAclReconcileDriverFactory::new(
+        store.clone(),
         store.clone(),
     ));
     let share_mutations = Arc::new(naos_core::share::ShareMutationService::new(
@@ -153,7 +155,7 @@ async fn wait_for_operation(
     peer: SocketAddr,
     cookie: &str,
 ) -> Value {
-    for _ in 0..100 {
+    for _ in 0..500 {
         let response = app
             .clone()
             .oneshot(request(
@@ -174,7 +176,7 @@ async fn wait_for_operation(
         ) {
             return body;
         }
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("operation did not reach a terminal state");
 }
@@ -549,7 +551,7 @@ async fn password_change_revokes_other_sessions() {
 
 #[tokio::test]
 async fn group_membership_and_delete_are_operation_backed() {
-    let (app, _dir) = test_app().await;
+    let (app, dir) = test_app().await;
     let loopback = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 32000);
 
     let response = app
@@ -662,6 +664,132 @@ async fn group_membership_and_delete_are_operation_backed() {
     let group = json_body(response).await;
     assert_eq!(group["members"].as_array().unwrap().len(), 1);
     assert_eq!(group["members"][0]["username"], "admin");
+
+    let share_path = dir.path().join("group-acl-share");
+    std::fs::create_dir_all(&share_path).unwrap();
+    let mut create_share = request(
+        Method::POST,
+        "/api/v1/shares",
+        Some(json!({
+            "name": "group-acl-share",
+            "path": share_path.to_string_lossy(),
+            "comment": null,
+            "enabled": true,
+            "smb_enabled": false,
+            "webdav_enabled": false,
+            "nfs_enabled": false
+        })),
+        loopback,
+        Some(&cookie),
+        Some(&csrf),
+    );
+    create_share
+        .headers_mut()
+        .insert("idempotency-key", "group-acl-share-create".parse().unwrap());
+    let response = app.clone().oneshot(create_share).await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let accepted = json_body(response).await;
+    let operation_id = accepted["operation_id"].as_str().unwrap();
+    let operation = wait_for_operation(&app, operation_id, loopback, &cookie).await;
+    assert_eq!(operation["state"], "succeeded");
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/shares",
+            None,
+            loopback,
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let shares = json_body(response).await;
+    let share_id = shares["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|share| share["name"] == "group-acl-share")
+        .and_then(|share| share["id"].as_str())
+        .unwrap()
+        .to_owned();
+
+    let mut replace_acl = request(
+        Method::PUT,
+        &format!("/api/v1/shares/{share_id}/acl"),
+        Some(json!({
+            "items": [{
+                "rel_path": "/",
+                "subject": {"type": "group", "id": group_id},
+                "permission": "rw",
+                "inherit": true
+            }]
+        })),
+        loopback,
+        Some(&cookie),
+        Some(&csrf),
+    );
+    replace_acl
+        .headers_mut()
+        .insert("idempotency-key", "group-acl-replace-1".parse().unwrap());
+    let response = app.clone().oneshot(replace_acl).await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let accepted = json_body(response).await;
+    let operation_id = accepted["operation_id"].as_str().unwrap();
+    let operation = wait_for_operation(&app, operation_id, loopback, &cookie).await;
+    assert_eq!(operation["state"], "succeeded");
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            &format!("/api/v1/shares/{share_id}/acl"),
+            None,
+            loopback,
+            Some(&cookie),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let acl = json_body(response).await;
+    assert_eq!(acl["items"].as_array().unwrap().len(), 1);
+    assert_eq!(acl["items"][0]["subject"]["type"], "group");
+    assert_eq!(acl["items"][0]["subject"]["id"], group_id);
+
+    let mut blocked_delete = request(
+        Method::DELETE,
+        &format!("/api/v1/groups/{group_id}"),
+        None,
+        loopback,
+        Some(&cookie),
+        Some(&csrf),
+    );
+    blocked_delete
+        .headers_mut()
+        .insert("idempotency-key", "group-delete-blocked".parse().unwrap());
+    let response = app.clone().oneshot(blocked_delete).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let mut clear_acl = request(
+        Method::PUT,
+        &format!("/api/v1/shares/{share_id}/acl"),
+        Some(json!({"items": []})),
+        loopback,
+        Some(&cookie),
+        Some(&csrf),
+    );
+    clear_acl
+        .headers_mut()
+        .insert("idempotency-key", "group-acl-clear-1".parse().unwrap());
+    let response = app.clone().oneshot(clear_acl).await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let accepted = json_body(response).await;
+    let operation_id = accepted["operation_id"].as_str().unwrap();
+    let operation = wait_for_operation(&app, operation_id, loopback, &cookie).await;
+    assert_eq!(operation["state"], "succeeded");
 
     let mut delete = request(
         Method::DELETE,

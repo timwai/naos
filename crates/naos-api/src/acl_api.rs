@@ -231,15 +231,13 @@ impl From<AclMutationError> for ApiError {
                 "USER_NOT_FOUND",
                 "ACL 用户不存在或已禁用",
             ),
+            AclMutationError::GroupNotFound => {
+                ApiError::new(StatusCode::NOT_FOUND, "GROUP_NOT_FOUND", "ACL 用户组不存在")
+            }
             AclMutationError::Conflict => ApiError::new(
                 StatusCode::CONFLICT,
                 "ACL_CONFLICT",
-                "ACL 与当前共享状态冲突，或仍包含尚不支持落盘的 group 规则",
-            ),
-            AclMutationError::GroupUnsupported => ApiError::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "ACL_GROUP_UNSUPPORTED",
-                "当前版本尚未实现 naos group 到系统组的安全映射；ACL 写入暂只支持 user subject",
+                "ACL 与当前共享、用户组或并发变更状态冲突",
             ),
             AclMutationError::Validation { field, message } => {
                 ApiError::validation(field, &message)
