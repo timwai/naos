@@ -84,9 +84,25 @@ function handleUnauthorized(status: number) {
 }
 
 function observeSession(session: AuthSessionResponse) {
+  const expired = sessionAuthenticated && !session.authenticated;
   sessionAuthenticated = session.authenticated;
   csrfToken = session.authenticated ? (session.csrf_token ?? null) : null;
+  if (expired) {
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+  }
   return session;
+}
+
+async function assertResponseOk(response: Response): Promise<void> {
+  if (response.ok) return;
+  handleUnauthorized(response.status);
+  let body: ApiErrorBody | null = null;
+  try {
+    body = (await response.json()) as ApiErrorBody;
+  } catch {
+    body = null;
+  }
+  throw new ApiError(response.status, body);
 }
 
 async function requestJson<T>(
@@ -113,16 +129,7 @@ async function requestJson<T>(
     credentials: "include",
   });
 
-  if (!response.ok) {
-    handleUnauthorized(response.status);
-    let body: ApiErrorBody | null = null;
-    try {
-      body = (await response.json()) as ApiErrorBody;
-    } catch {
-      body = null;
-    }
-    throw new ApiError(response.status, body);
-  }
+  await assertResponseOk(response);
 
   if (response.status === 204) {
     return undefined as T;
@@ -305,15 +312,7 @@ export async function uploadFile(
       body: file,
     },
   );
-  if (!response.ok) {
-    let body: ApiErrorBody | null = null;
-    try {
-      body = (await response.json()) as ApiErrorBody;
-    } catch {
-      body = null;
-    }
-    throw new ApiError(response.status, body);
-  }
+  await assertResponseOk(response);
 }
 
 export async function downloadFile(shareId: string, path: string) {
@@ -322,15 +321,7 @@ export async function downloadFile(shareId: string, path: string) {
     `/api/v1/shares/${encodeURIComponent(shareId)}/files/download?${params.toString()}`,
     { credentials: "include" },
   );
-  if (!response.ok) {
-    let body: ApiErrorBody | null = null;
-    try {
-      body = (await response.json()) as ApiErrorBody;
-    } catch {
-      body = null;
-    }
-    throw new ApiError(response.status, body);
-  }
+  await assertResponseOk(response);
   return response.blob();
 }
 
@@ -648,15 +639,7 @@ export async function exportAudit(
     { credentials: "include" },
   );
 
-  if (!response.ok) {
-    let body: ApiErrorBody | null = null;
-    try {
-      body = (await response.json()) as ApiErrorBody;
-    } catch {
-      body = null;
-    }
-    throw new ApiError(response.status, body);
-  }
+  await assertResponseOk(response);
 
   const total = Number.parseInt(
     response.headers.get("x-naos-audit-total") ?? "0",
