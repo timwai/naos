@@ -58,7 +58,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build release binary with embedded Web UI
-        run: cargo build --locked --release -p naosd --features embedded-web
+        run: cargo build --release -p naosd --features embedded-web
       - name: Smoke release CLI on Unix
         if: runner.os != 'Windows'
         shell: bash
