@@ -23,7 +23,9 @@ export function AppShell() {
 
   const logoutMutation = useMutation({
     mutationFn: logout,
-    onSuccess: () => {
+    onSuccess: async () => {
+      await queryClient.cancelQueries();
+      queryClient.clear();
       queryClient.setQueryData(queryKeys.auth.session(), {
         authenticated: false,
         user: null,
@@ -80,6 +82,11 @@ export function AppShell() {
           </button>
         </header>
         <div className="page-container">
+          {logoutMutation.isError && (
+            <div className="error-box" role="alert">
+              退出登录失败，请重试。
+            </div>
+          )}
           <Outlet />
         </div>
       </main>
