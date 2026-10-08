@@ -73,6 +73,12 @@ jobs:
         run: cargo test -p naosd --features embedded-web embedded_web
       - name: Build production single binary
         run: cargo build -p naosd --features embedded-web
+      - name: Install Chromium for browser E2E
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Run browser admin lifecycle E2E
+        working-directory: web
+        run: npm run test:e2e
       - name: Smoke embedded SPA routing
         shell: bash
         run: |
