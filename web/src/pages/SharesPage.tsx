@@ -1,3 +1,4 @@
+import { useOperation } from "../features/operations/useOperation";
 import {
   useMutation,
   useQuery,
@@ -9,7 +10,6 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   ApiError,
   createShare,
-  getOperation,
   listShares,
   type ShareWriteRequest,
 } from "../lib/api/client";
@@ -68,13 +68,7 @@ export function SharesPage() {
     onSuccess: (operation) => setOperationId(operation.operation_id),
   });
 
-  const operation = useQuery({
-    queryKey: queryKeys.operations.detail(operationId ?? ""),
-    queryFn: () => getOperation(operationId ?? ""),
-    enabled: Boolean(operationId),
-    refetchInterval: (query) =>
-      isTerminal(query.state.data?.state) ? false : 750,
-  });
+  const operation = useOperation(operationId);
 
   useEffect(() => {
     if (operation.data?.state !== "succeeded") {

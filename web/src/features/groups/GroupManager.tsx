@@ -1,3 +1,4 @@
+import { useOperation } from "../operations/useOperation";
 import {
   useMutation,
   useQuery,
@@ -10,7 +11,6 @@ import {
   createGroup,
   deleteGroup,
   getGroup,
-  getOperation,
   listGroups,
   listUsers,
   replaceGroupMembers,
@@ -158,13 +158,7 @@ export function GroupManager() {
     },
   });
 
-  const operation = useQuery({
-    queryKey: queryKeys.operations.detail(operationContext?.id ?? ""),
-    queryFn: () => getOperation(operationContext?.id ?? ""),
-    enabled: Boolean(operationContext),
-    refetchInterval: (query) =>
-      isTerminal(query.state.data?.state) ? false : 750,
-  });
+  const operation = useOperation(operationContext?.id ?? null);
 
   useEffect(() => {
     if (!operationContext || operation.data?.state !== "succeeded") {

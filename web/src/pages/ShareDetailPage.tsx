@@ -1,3 +1,4 @@
+import { useOperation } from "../features/operations/useOperation";
 import {
   useMutation,
   useQuery,
@@ -12,7 +13,6 @@ import {
   createNfsBinding,
   deleteNfsBinding,
   deleteShare,
-  getOperation,
   getShare,
   listNfsBindings,
   listShareAcl,
@@ -106,13 +106,7 @@ export function ShareDetailPage() {
     },
   });
 
-  const shareOperation = useQuery({
-    queryKey: queryKeys.operations.detail(shareOperationId ?? ""),
-    queryFn: () => getOperation(shareOperationId ?? ""),
-    enabled: Boolean(shareOperationId),
-    refetchInterval: (query) =>
-      isTerminal(query.state.data?.state) ? false : 750,
-  });
+  const shareOperation = useOperation(shareOperationId);
 
   useEffect(() => {
     if (!share.data || configDraft !== null) {

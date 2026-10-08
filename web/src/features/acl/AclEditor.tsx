@@ -1,3 +1,4 @@
+import { useOperation } from "../operations/useOperation";
 import {
   useMutation,
   useQuery,
@@ -7,7 +8,6 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   ApiError,
-  getOperation,
   listGroups,
   listShareAcl,
   listUsers,
@@ -77,13 +77,7 @@ export function AclEditor({ shareId }: { shareId: string }) {
     onSuccess: (operation) => setOperationId(operation.operation_id),
   });
 
-  const operation = useQuery({
-    queryKey: queryKeys.operations.detail(operationId ?? ""),
-    queryFn: () => getOperation(operationId ?? ""),
-    enabled: Boolean(operationId),
-    refetchInterval: (query) =>
-      isTerminal(query.state.data?.state) ? false : 750,
-  });
+  const operation = useOperation(operationId);
 
   useEffect(() => {
     if (operation.data?.state !== "succeeded") {

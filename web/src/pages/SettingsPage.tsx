@@ -1,3 +1,4 @@
+import { useOperation } from "../features/operations/useOperation";
 import {
   useMutation,
   useQuery,
@@ -9,7 +10,6 @@ import {
   ApiError,
   createNfsPrincipal,
   deleteNfsPrincipal,
-  getOperation,
   getSmbDoctor,
   getSystemDrift,
   listNfsPrincipals,
@@ -69,13 +69,7 @@ export function SettingsPage() {
     },
   });
 
-  const verifyOperation = useQuery({
-    queryKey: queryKeys.operations.detail(verifyOperationId ?? ""),
-    queryFn: () => getOperation(verifyOperationId ?? ""),
-    enabled: Boolean(verifyOperationId),
-    refetchInterval: (query) =>
-      isTerminal(query.state.data?.state) ? false : 1_000,
-  });
+  const verifyOperation = useOperation(verifyOperationId, 1_000);
 
   useEffect(() => {
     if (verifyOperation.data?.state !== "succeeded") {
