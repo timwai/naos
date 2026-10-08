@@ -53,6 +53,8 @@ export type ShareWriteRequest = components["schemas"]["ShareWriteRequest"];
 export type SharesResponse = components["schemas"]["SharesResponse"];
 export type SmbDoctorResponse =
   components["schemas"]["SmbDoctorResponse"];
+export type SystemDriftResponse =
+  components["schemas"]["SystemDriftResponse"];
 export type UserCreateRequest =
   components["schemas"]["UserCreateRequest"];
 export type UserUpdateRequest =
@@ -185,6 +187,10 @@ export async function getReadiness(): Promise<HealthResponse> {
 
 export async function getSmbDoctor() {
   return requestJson<SmbDoctorResponse>("/api/v1/system/smb/doctor");
+}
+
+export async function getSystemDrift() {
+  return requestJson<SystemDriftResponse>("/api/v1/system/drift");
 }
 
 export async function startSystemVerify() {
