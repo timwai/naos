@@ -12,7 +12,7 @@
 
 工件名由 GitHub runner 的 OS/arch 决定，文件包内包含 `naosd`（Windows 为 `naosd.exe`）和本部署说明。下载后验证同名 `.sha256` 文件提供的 checksum；包由 CI 构建，并不等于代码签名或公证，生产发行仍应增加签名与发布流程。CI 产物有保留期，不能作为长期下载渠道。
 
-`delivery` 同时执行三平台 release 编译、OpenAPI CLI smoke；Linux/macOS 还执行内嵌 SPA 启动、深链路、静态资源和 API 404 保护测试。Windows 当前自动化验证到 release 编译和 CLI，服务启动/真实 SMB 客户端测试仍需在 Windows 主机运行。
+`delivery` 同时执行三平台 release 编译、OpenAPI CLI smoke；Linux/macOS/Windows 均执行内嵌 SPA 启动、深链路、静态资源和 API 404 保护测试。真实 SMB 客户端行为、系统服务安装及生产部署仍需在目标主机运行。
 
 ## 2. 运行环境与安全前提
 
@@ -81,7 +81,7 @@ curl -f http://127.0.0.1:8443/health/ready
 | WebDAV | Rust 测试 | 真实客户端经 HTTPS 代理读写/拒绝访问 |
 | NFSv3 | RPC/NLM/NSM 单测与选定 CI smoke | 分离 client/server 的 NLM restart/reclaim、真实客户端 ACL 与网络边界 |
 | Kerberos | Linux MIT KDC 集成、Windows SSPI build/test | 企业 AD/真实 realm + Windows/macOS/Linux 内核客户端互操作 |
-| 交付包 | 三平台 `delivery` release 构建、Unix SPA smoke、checksum | 目标机器启动、系统服务、恢复演练、程序包签名/公证 |
+| 交付包 | 三平台 `delivery` release 构建、三平台 SPA smoke、checksum | 目标机器启动、系统服务、恢复演练、程序包签名/公证 |
 
 只有**目标部署环境所需门禁全部通过**并保存运行记录，才能把对应平台/功能标记为「可交付」。某平台 provider 返回 unsupported/degraded 时不应对外宣称该功能可用。含 `system-gss` 的 Kerberos 构建不是默认发布包，需要在正确配置 GSS/SSPI 凭据后单独构建和验收：
 
