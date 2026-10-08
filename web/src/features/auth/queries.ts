@@ -6,7 +6,10 @@ import { queryKeys } from "../../lib/api/queryKeys";
 export function useSession() {
   return useQuery({
     queryKey: queryKeys.auth.session(),
-    queryFn: getSession,
+    queryFn: ({ signal }) => getSession(signal),
+    retry: false,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: "always",
   });
 }
 
