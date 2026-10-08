@@ -71,9 +71,20 @@ export class ApiError extends Error {
   }
 }
 
+export const SESSION_EXPIRED_EVENT = "naos:session-expired";
+
 let csrfToken: string | null = null;
+let sessionAuthenticated = false;
+
+function handleUnauthorized(status: number) {
+  if (status !== 401 || !sessionAuthenticated) return;
+  sessionAuthenticated = false;
+  csrfToken = null;
+  window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+}
 
 function observeSession(session: AuthSessionResponse) {
+  sessionAuthenticated = session.authenticated;
   csrfToken = session.authenticated ? (session.csrf_token ?? null) : null;
   return session;
 }
@@ -103,6 +114,7 @@ async function requestJson<T>(
   });
 
   if (!response.ok) {
+    handleUnauthorized(response.status);
     let body: ApiErrorBody | null = null;
     try {
       body = (await response.json()) as ApiErrorBody;
@@ -151,6 +163,7 @@ export async function login(input: LoginRequest) {
 export async function logout() {
   await requestJson<void>("/api/v1/auth/logout", { method: "POST" });
   csrfToken = null;
+  sessionAuthenticated = false;
 }
 
 export async function changePassword(input: PasswordChangeRequest) {
