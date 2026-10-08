@@ -51,13 +51,14 @@ export function DashboardPage() {
         </article>
         )}
 
-        {isAdmin && <article className="metric-card">
-          <span>TCP/445</span>
-          <strong>{doctor.isError ? "检查失败" : doctor.isPending ? "检查中…" : listener}</strong>
-          <small>
-            {doctor.data?.managed_by_naos ? "naos-managed scope" : "provider ownership"}
-          </small>
-        </article>
+        {isAdmin && (
+          <article className="metric-card">
+            <span>TCP/445</span>
+            <strong>{doctor.isError ? "检查失败" : doctor.isPending ? "检查中…" : listener}</strong>
+            <small>
+              {doctor.data?.managed_by_naos ? "naos-managed scope" : "provider ownership"}
+            </small>
+          </article>
         )}
       </div>
 
