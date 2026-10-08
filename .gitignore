@@ -7,3 +7,6 @@
 /web/dist
 /web/.generated
 /web/src/lib/api/generated.ts
+
+/web/playwright-report/
+/web/test-results/
