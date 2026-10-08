@@ -104,6 +104,39 @@ jobs:
           curl -fsS http://127.0.0.1:19443/assets/app.js >/dev/null
           curl -fsS http://127.0.0.1:19443/assets/app.css >/dev/null
           test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:19443/api/v1/not-a-route)" = "404"
+      - name: Smoke embedded SPA on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:NAOS_LISTEN = "127.0.0.1"
+          $env:NAOS_PORT = "19443"
+          $env:NAOS_DATABASE_URL = "sqlite://naos-delivery-windows.db?mode=rwc"
+          $stdout = Join-Path $env:RUNNER_TEMP "naos-delivery-windows.out"
+          $stderr = Join-Path $env:RUNNER_TEMP "naos-delivery-windows.err"
+          $server = Start-Process -FilePath ".\\target\\release\\naosd.exe" -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 40; $i++) {
+              try {
+                $root = Invoke-WebRequest -Uri "http://127.0.0.1:19443/" -TimeoutSec 2
+                if ($root.StatusCode -eq 200) { $ready = $true; break }
+              } catch { Start-Sleep -Seconds 1 }
+            }
+            if (!$ready) {
+              Get-Content $stdout, $stderr -ErrorAction SilentlyContinue
+              throw "Windows embedded SPA did not start"
+            }
+            $files = Invoke-WebRequest -Uri "http://127.0.0.1:19443/files"
+            if ($root.Content -ne $files.Content) { throw "SPA deep-link fallback mismatch" }
+            foreach ($asset in @("app.js", "app.css")) {
+              $reply = Invoke-WebRequest -Uri "http://127.0.0.1:19443/assets/$asset"
+              if ($reply.StatusCode -ne 200) { throw "Asset $asset unavailable" }
+            }
+            $notFound = Invoke-WebRequest -Uri "http://127.0.0.1:19443/api/v1/not-a-route" -SkipHttpErrorCheck
+            if ($notFound.StatusCode -ne 404) { throw "API 404 masked by SPA" }
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          }
       - name: Package Unix release
         if: runner.os != 'Windows'
         shell: bash
