@@ -30,7 +30,9 @@ export function LoginPage() {
       }
       return login({ username, password });
     },
-    onSuccess: (nextSession) => {
+    onSuccess: async (nextSession) => {
+      await queryClient.cancelQueries();
+      queryClient.clear();
       queryClient.setQueryData(queryKeys.auth.session(), nextSession);
       queryClient.setQueryData(queryKeys.auth.setup(), { initialized: true });
       navigate("/", { replace: true });
