@@ -15,6 +15,7 @@
 
 - **系统设计文档**：[docs/naos 设计文档.md](docs/naos%20设计文档.md)
 - **自研 SMB P0 候选方案（Deferred）**：[docs/naos SMB P0 实现设计.md](docs/naos%20SMB%20P0%20%E5%AE%9E%E7%8E%B0%E8%AE%BE%E8%AE%A1.md)
+- **部署、升级与交付验收**：[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)（包括安全前提、CI 产物和平台实机门禁）
 - **管理页面原型**：[docs/naos 管理页面原型.html](docs/naos%20管理页面原型.html)（可直接在浏览器中双击打开预览体验）
 
 ## 🏗️ 架构与技术选型
@@ -26,6 +27,10 @@
 - **NFS 服务**：自研 ONC-RPC/XDR + NFSv3/MOUNT/NLM（带 L1 客户端 CIDR 绑定 / L2 UID 映射 / L3 Kerberos）
 - **SMB 适配**：现阶段不自研 SMB Server；Linux 复用 Samba，Windows 复用系统 SMB Server，macOS 优先复用可管理的系统 SMB provider；启动/Apply 前检测 TCP/445 归属并拒绝未知冲突
 
+
+## 📦 CI 交付候选包
+
+GitHub Actions 的 [`delivery`](https://github.com/timwai/naos/actions/workflows/delivery.yml) workflow 会为 Linux、macOS、Windows 编译内嵌 Web UI 的 release 二进制，并上传带 SHA-256 校验的压缩包。该流程只代表可安装/运行的**候选产物**，不代表已经完成部署、签名或全部三协议真实客户端验收。详情见 [部署与交付验收](docs/DEPLOYMENT.md)。
 
 ## 🌐 生产 Web 控制台
 
