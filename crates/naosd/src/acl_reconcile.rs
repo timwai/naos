@@ -24,10 +24,7 @@ pub struct PlatformAclReconcileDriverFactory {
 }
 
 impl PlatformAclReconcileDriverFactory {
-    pub fn new(
-        shares: Arc<dyn ShareApplyRepository>,
-        acl: Arc<dyn AclMutationRepository>,
-    ) -> Self {
+    pub fn new(shares: Arc<dyn ShareApplyRepository>, acl: Arc<dyn AclMutationRepository>) -> Self {
         Self {
             shares,
             acl,
@@ -119,7 +116,8 @@ impl PlatformAclReconcileDriver {
 
     async fn sync_desired_groups(&self) -> Result<(), ReconcileFailure> {
         for (group_id, usernames) in self.desired_groups() {
-            let group = SystemGroupName::from_group_id(&group_id).map_err(platform_group_failure)?;
+            let group =
+                SystemGroupName::from_group_id(&group_id).map_err(platform_group_failure)?;
             let members = system_accounts(&usernames)?;
             self.system_groups
                 .ensure(&group)
