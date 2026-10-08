@@ -145,6 +145,7 @@ jobs:
           mkdir -p package dist
           cp target/release/naosd package/
           cp docs/DEPLOYMENT.md package/README-DEPLOY.md
+          printf 'repository=timwai/naos\ncommit=%s\nplatform=%s\nfeatures=embedded-web\nworkflow_run=%s\n' "$GITHUB_SHA" "${{ runner.os }}-${{ runner.arch }}" "$GITHUB_RUN_ID" > package/BUILD-INFO.txt
           archive="naos-${{ runner.os }}-${{ runner.arch }}.tar.gz"
           tar -czf "dist/$archive" -C package .
           (cd dist && shasum -a 256 "$archive" > "$archive.sha256")
@@ -155,6 +156,7 @@ jobs:
           New-Item -ItemType Directory -Force package, dist | Out-Null
           Copy-Item target/release/naosd.exe package/
           Copy-Item docs/DEPLOYMENT.md package/README-DEPLOY.md
+          @("repository=timwai/naos", "commit=$env:GITHUB_SHA", "platform=${{ runner.os }}-${{ runner.arch }}", "features=embedded-web", "workflow_run=$env:GITHUB_RUN_ID") | Set-Content -Encoding ascii package/BUILD-INFO.txt
           $archive = "naos-${{ runner.os }}-${{ runner.arch }}.zip"
           Compress-Archive -Path package/* -DestinationPath "dist/$archive" -Force
           $hash = (Get-FileHash "dist/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
