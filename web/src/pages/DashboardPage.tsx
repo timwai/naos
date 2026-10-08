@@ -19,6 +19,7 @@ export function DashboardPage() {
   });
 
   const status = readiness.data?.status ?? (readiness.isError ? "error" : "checking");
+  const isAdmin = session.data?.user?.role === "admin";
   const provider = doctor.data?.provider ?? "—";
   const listener = doctor.data?.listener_445?.process
     ?? doctor.data?.listener_445?.local_address
@@ -41,19 +42,19 @@ export function DashboardPage() {
           <small>/health/ready</small>
         </article>
 
-        <article className="metric-card">
+        {isAdmin && <article className="metric-card">
           <span>SMB provider</span>
           <strong>{doctor.isPending ? "检查中…" : provider}</strong>
           <small>{doctor.data?.status ?? "system provider"}</small>
-        </article>
+        </article>}
 
-        <article className="metric-card">
+        {isAdmin && <article className="metric-card">
           <span>TCP/445</span>
           <strong>{doctor.isPending ? "检查中…" : listener}</strong>
           <small>
             {doctor.data?.managed_by_naos ? "naos-managed scope" : "provider ownership"}
           </small>
-        </article>
+        </article>}
       </div>
 
       {doctor.data?.findings.length ? (
