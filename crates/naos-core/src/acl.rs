@@ -623,10 +623,7 @@ pub struct DatabaseAclReconcileDriverFactory {
 }
 
 impl DatabaseAclReconcileDriverFactory {
-    pub fn new(
-        shares: Arc<dyn ShareApplyRepository>,
-        acl: Arc<dyn AclMutationRepository>,
-    ) -> Self {
+    pub fn new(shares: Arc<dyn ShareApplyRepository>, acl: Arc<dyn AclMutationRepository>) -> Self {
         Self { shares, acl }
     }
 }
