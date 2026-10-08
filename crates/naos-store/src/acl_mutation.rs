@@ -235,14 +235,13 @@ async fn load_apply_rules(
             .map_err(store_error)?;
         let subject = match subject_type.as_str() {
             "user" => {
-                let username = sqlx::query_scalar::<_, String>(
-                    "SELECT username FROM users WHERE id = ?",
-                )
-                .bind(&subject_id)
-                .fetch_optional(&mut **tx)
-                .await
-                .map_err(store_error)?
-                .ok_or(AclMutationRepositoryError::UserNotFound)?;
+                let username =
+                    sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = ?")
+                        .bind(&subject_id)
+                        .fetch_optional(&mut **tx)
+                        .await
+                        .map_err(store_error)?
+                        .ok_or(AclMutationRepositoryError::UserNotFound)?;
                 AclApplySubject::User {
                     user_id: subject_id.clone(),
                     username,
@@ -259,9 +258,7 @@ async fn load_apply_rules(
             }
             _ => return Err(AclMutationRepositoryError::Unavailable),
         };
-        let permission = parse_permission(
-            &row.try_get::<String, _>("perm").map_err(store_error)?,
-        )?;
+        let permission = parse_permission(&row.try_get::<String, _>("perm").map_err(store_error)?)?;
         let rel_path = row.try_get::<String, _>("rel_path").map_err(store_error)?;
 
         result.push(AclApplyRule {
@@ -280,14 +277,12 @@ async fn group_apply_subject(
     tx: &mut Transaction<'_, Sqlite>,
     group_id: &str,
 ) -> Result<AclApplySubject, AclMutationRepositoryError> {
-    let updated_at = sqlx::query_scalar::<_, String>(
-        "SELECT updated_at FROM groups WHERE id = ?",
-    )
-    .bind(group_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(store_error)?
-    .ok_or(AclMutationRepositoryError::GroupNotFound)?;
+    let updated_at = sqlx::query_scalar::<_, String>("SELECT updated_at FROM groups WHERE id = ?")
+        .bind(group_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(store_error)?
+        .ok_or(AclMutationRepositoryError::GroupNotFound)?;
 
     let member_usernames = sqlx::query_scalar::<_, String>(
         "SELECT u.username
@@ -312,13 +307,11 @@ async fn group_snapshot_from_pool(
     pool: &SqlitePool,
     group_id: &str,
 ) -> Result<Option<(String, Vec<String>)>, AclMutationRepositoryError> {
-    let updated_at = sqlx::query_scalar::<_, String>(
-        "SELECT updated_at FROM groups WHERE id = ?",
-    )
-    .bind(group_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(store_error)?;
+    let updated_at = sqlx::query_scalar::<_, String>("SELECT updated_at FROM groups WHERE id = ?")
+        .bind(group_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(store_error)?;
     let Some(updated_at) = updated_at else {
         return Ok(None);
     };
