@@ -680,12 +680,12 @@ async fn acl_replace_is_operation_backed_idempotent_and_bumps_share_generation()
             peer,
             Some(&cookie),
             Some(&csrf),
-            Some("acl-group-unsupported-1"),
+            Some("acl-group-missing-1"),
         ))
         .await
         .unwrap();
-    assert_eq!(group.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(json_body(group).await["code"], "ACL_GROUP_UNSUPPORTED");
+    assert_eq!(group.status(), StatusCode::NOT_FOUND);
+    assert_eq!(json_body(group).await["code"], "GROUP_NOT_FOUND");
 }
 
 #[tokio::test]
