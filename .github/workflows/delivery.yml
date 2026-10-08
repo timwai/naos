@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         working-directory: web
         run: npm install --no-audit --no-fund
+      - name: Test Web API session behavior
+        working-directory: web
+        run: npm test
       - name: Generate OpenAPI types and build Web UI
         working-directory: web
         run: npm run build
