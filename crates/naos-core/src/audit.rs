@@ -97,11 +97,7 @@ impl AuditService {
         self.repository.list(&filter).await.map_err(Into::into)
     }
 
-    pub async fn export(
-        &self,
-        filter: AuditFilter,
-        limit: u32,
-    ) -> Result<AuditExport, AuditError> {
+    pub async fn export(&self, filter: AuditFilter, limit: u32) -> Result<AuditExport, AuditError> {
         let filter = normalize_filter(filter)?;
         if limit == 0 || limit > 50_000 {
             return Err(validation("limit", "limit 必须在 1-50000 之间"));
@@ -206,10 +202,7 @@ mod tests {
 
         #[async_trait]
         impl AuditRepository for UnusedRepository {
-            async fn list(
-                &self,
-                _filter: &AuditFilter,
-            ) -> Result<AuditPage, AuditRepositoryError> {
+            async fn list(&self, _filter: &AuditFilter) -> Result<AuditPage, AuditRepositoryError> {
                 unreachable!()
             }
 
