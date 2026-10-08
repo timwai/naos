@@ -8,6 +8,7 @@
   },
   "scripts": {
     "generate:api": "node ./scripts/generate-api.mjs",
+    "test": "node --test tests/*.test.mjs",
     "dev": "npm run generate:api && vite",
     "build": "npm run generate:api && tsc --noEmit && vite build",
     "preview": "vite preview"
