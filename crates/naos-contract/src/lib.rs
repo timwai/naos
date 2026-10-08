@@ -277,7 +277,6 @@ pub mod doctor {
         pub findings: Vec<SmbDoctorFindingDto>,
     }
 
-
     #[derive(Debug, Clone, Serialize, ToSchema)]
     pub struct SystemDriftFindingDto {
         pub code: String,
