@@ -1,9 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import {
   ApiError,
+  exportAudit,
   listAudit,
   type AuditFilters,
 } from "../lib/api/client";
@@ -46,6 +47,8 @@ export function AuditPage() {
   const [shareDraft, setShareDraft] = useState(shareId);
   const [qDraft, setQDraft] = useState(q);
 
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+
   useEffect(() => setProtocolDraft(protocol), [protocol]);
   useEffect(() => setResultDraft(result), [result]);
   useEffect(() => setUserDraft(userId), [userId]);
@@ -70,12 +73,33 @@ export function AuditPage() {
     queryFn: () => listAudit(filters),
   });
 
+  const exportCsv = useMutation({
+    mutationFn: () => exportAudit(filters),
+    onSuccess: ({ blob, total, exported }) => {
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "naos-audit.csv";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+
+      setExportNotice(
+        total > exported
+          ? `已导出前 ${exported} / ${total} 条；缩小筛选范围可导出完整结果。`
+          : `已导出 ${exported} 条审计记录。`,
+      );
+    },
+  });
+
   const totalPages = audit.data
     ? Math.max(1, Math.ceil(audit.data.total / audit.data.page_size))
     : 1;
 
   const applyFilters = (event: FormEvent) => {
     event.preventDefault();
+    setExportNotice(null);
     const next = new URLSearchParams();
     if (protocolDraft) next.set("protocol", protocolDraft);
     if (resultDraft) next.set("result", resultDraft);
@@ -93,6 +117,7 @@ export function AuditPage() {
   };
 
   const clearFilters = () => {
+    setExportNotice(null);
     setSearchParams({ page: "1" });
   };
 
@@ -106,14 +131,32 @@ export function AuditPage() {
             登录、管理操作与协议事件统一从 audit_log 查询；筛选和分页都由后端执行。
           </p>
         </div>
-        <button
-          className="button secondary"
-          type="button"
-          disabled={audit.isFetching}
-          onClick={() => audit.refetch()}
-        >
-          {audit.isFetching ? "刷新中…" : "刷新"}
-        </button>
+        <div className="heading-actions">
+          <button
+            className="button secondary"
+            type="button"
+            disabled={
+              exportCsv.isPending ||
+              audit.isPending ||
+              audit.isError ||
+              audit.data?.total === 0
+            }
+            onClick={() => {
+              setExportNotice(null);
+              exportCsv.mutate();
+            }}
+          >
+            {exportCsv.isPending ? "导出中…" : "导出 CSV"}
+          </button>
+          <button
+            className="button secondary"
+            type="button"
+            disabled={audit.isFetching}
+            onClick={() => audit.refetch()}
+          >
+            {audit.isFetching ? "刷新中…" : "刷新"}
+          </button>
+        </div>
       </div>
 
       <article className="panel audit-filter-panel">
@@ -185,6 +228,13 @@ export function AuditPage() {
           </div>
         </form>
       </article>
+
+      {exportNotice && <div className="success-box">{exportNotice}</div>}
+      {exportCsv.isError && (
+        <div className="error-box settings-error">
+          {errorMessage(exportCsv.error)}
+        </div>
+      )}
 
       <article className="panel audit-panel">
         <div className="panel-heading">

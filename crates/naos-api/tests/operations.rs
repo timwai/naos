@@ -1486,3 +1486,121 @@ async fn readiness_driver_can_run_directly_through_reconciler() {
         .unwrap();
     assert_eq!(result.state, OperationState::Succeeded);
 }
+
+#[tokio::test]
+async fn audit_export_is_admin_only_filtered_and_bounded() {
+    let (app, _store, _dir) = test_app().await;
+    let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 33007);
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/audit/export",
+            None,
+            peer,
+            None,
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let (cookie, _csrf) = login_admin(&app, peer).await;
+
+    let invalid_limit = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/audit/export?limit=0",
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(invalid_limit.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let empty = app
+        .clone()
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/audit/export?q=definitely-no-such-audit-record&limit=10",
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(empty.status(), StatusCode::OK);
+    assert_eq!(empty.headers().get("x-naos-audit-total").unwrap(), "0");
+    assert_eq!(empty.headers().get("x-naos-audit-exported").unwrap(), "0");
+    let csv = String::from_utf8(
+        empty
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        csv,
+        "\u{feff}id,timestamp,actor_type,actor_id,actor_name,protocol,action,share_id,path,client_ip,result,detail,request_id,operation_id\r\n"
+    );
+
+    let export = app
+        .oneshot(request(
+            Method::GET,
+            "/api/v1/audit/export?limit=10",
+            None,
+            peer,
+            Some(&cookie),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(export.status(), StatusCode::OK);
+    assert_eq!(
+        export.headers().get(CONTENT_TYPE).unwrap(),
+        "text/csv; charset=utf-8"
+    );
+    let total = export
+        .headers()
+        .get("x-naos-audit-total")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    let exported = export
+        .headers()
+        .get("x-naos-audit-exported")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    assert!(total >= 1);
+    assert!(exported >= 1);
+    assert!(exported <= total);
+    let csv = String::from_utf8(
+        export
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(csv.starts_with("\u{feff}id,timestamp,actor_type"));
+    assert!(csv.lines().count() >= 2);
+}

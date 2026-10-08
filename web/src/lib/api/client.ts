@@ -601,7 +601,7 @@ export type AuditFilters = {
   page_size?: number;
 };
 
-export async function listAudit(filters: AuditFilters = {}) {
+function auditParams(filters: AuditFilters, pagination: boolean) {
   const params = new URLSearchParams();
   if (filters.from) params.set("from", filters.from);
   if (filters.to) params.set("to", filters.to);
@@ -610,10 +610,52 @@ export async function listAudit(filters: AuditFilters = {}) {
   if (filters.share_id) params.set("share_id", filters.share_id);
   if (filters.result) params.set("result", filters.result);
   if (filters.q) params.set("q", filters.q);
-  params.set("page", String(filters.page ?? 1));
-  params.set("page_size", String(filters.page_size ?? 50));
+  if (pagination) {
+    params.set("page", String(filters.page ?? 1));
+    params.set("page_size", String(filters.page_size ?? 50));
+  }
+  return params;
+}
 
+export async function listAudit(filters: AuditFilters = {}) {
+  const params = auditParams(filters, true);
   return requestJson<AuditPageResponse>(
     `/api/v1/audit?${params.toString()}`,
   );
+}
+
+export async function exportAudit(
+  filters: AuditFilters = {},
+  limit = 50_000,
+) {
+  const params = auditParams(filters, false);
+  params.set("limit", String(limit));
+  const response = await fetch(
+    `/api/v1/audit/export?${params.toString()}`,
+    { credentials: "include" },
+  );
+
+  if (!response.ok) {
+    let body: ApiErrorBody | null = null;
+    try {
+      body = (await response.json()) as ApiErrorBody;
+    } catch {
+      body = null;
+    }
+    throw new ApiError(response.status, body);
+  }
+
+  const total = Number.parseInt(
+    response.headers.get("x-naos-audit-total") ?? "0",
+    10,
+  );
+  const exported = Number.parseInt(
+    response.headers.get("x-naos-audit-exported") ?? "0",
+    10,
+  );
+  return {
+    blob: await response.blob(),
+    total: Number.isSafeInteger(total) ? total : 0,
+    exported: Number.isSafeInteger(exported) ? exported : 0,
+  };
 }

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use naos_core::audit::{
-    AuditActor, AuditFilter, AuditPage, AuditRecord, AuditRepository, AuditRepositoryError,
+    AuditActor, AuditExport, AuditFilter, AuditPage, AuditRecord, AuditRepository,
+    AuditRepositoryError,
 };
 use serde_json::Value;
 use sqlx::{QueryBuilder, Row, Sqlite};
@@ -10,22 +11,9 @@ use crate::Store;
 #[async_trait]
 impl AuditRepository for Store {
     async fn list(&self, filter: &AuditFilter) -> Result<AuditPage, AuditRepositoryError> {
-        let mut count = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM audit_log WHERE 1 = 1");
-        push_filters(&mut count, filter);
-        let total = count
-            .build_query_scalar::<i64>()
-            .fetch_one(&self.pool)
-            .await
-            .map_err(store_error)?;
-        let total = u64::try_from(total).map_err(|_| AuditRepositoryError::Unavailable)?;
+        let total = count_matching(&self.pool, filter).await?;
 
-        let mut query = QueryBuilder::<Sqlite>::new(
-            "SELECT id, ts, actor_type, actor_id, actor_name, protocol, action, share_id,
-                    path, client_ip, result, detail_json, request_id, operation_id
-             FROM audit_log
-             WHERE 1 = 1",
-        );
-        push_filters(&mut query, filter);
+        let mut query = record_query(filter);
         query.push(" ORDER BY ts DESC, id DESC LIMIT ");
         query.push_bind(i64::from(filter.page_size));
         query.push(" OFFSET ");
@@ -33,16 +21,7 @@ impl AuditRepository for Store {
         let offset = i64::try_from(offset).map_err(|_| AuditRepositoryError::Unavailable)?;
         query.push_bind(offset);
 
-        let rows = query
-            .build()
-            .fetch_all(&self.pool)
-            .await
-            .map_err(store_error)?;
-        let items = rows
-            .into_iter()
-            .map(record_from_row)
-            .collect::<Result<Vec<_>, _>>()?;
-
+        let items = fetch_records(&self.pool, query).await?;
         Ok(AuditPage {
             items,
             page: filter.page,
@@ -50,6 +29,61 @@ impl AuditRepository for Store {
             total,
         })
     }
+
+    async fn export(
+        &self,
+        filter: &AuditFilter,
+        limit: u32,
+    ) -> Result<AuditExport, AuditRepositoryError> {
+        let total = count_matching(&self.pool, filter).await?;
+        let mut query = record_query(filter);
+        query.push(" ORDER BY ts DESC, id DESC LIMIT ");
+        query.push_bind(i64::from(limit));
+
+        Ok(AuditExport {
+            items: fetch_records(&self.pool, query).await?,
+            total,
+        })
+    }
+}
+
+async fn count_matching(
+    pool: &sqlx::SqlitePool,
+    filter: &AuditFilter,
+) -> Result<u64, AuditRepositoryError> {
+    let mut count = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM audit_log WHERE 1 = 1");
+    push_filters(&mut count, filter);
+    let total = count
+        .build_query_scalar::<i64>()
+        .fetch_one(pool)
+        .await
+        .map_err(store_error)?;
+    u64::try_from(total).map_err(|_| AuditRepositoryError::Unavailable)
+}
+
+fn record_query<'a>(filter: &'a AuditFilter) -> QueryBuilder<'a, Sqlite> {
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "SELECT id, ts, actor_type, actor_id, actor_name, protocol, action, share_id,
+                path, client_ip, result, detail_json, request_id, operation_id
+         FROM audit_log
+         WHERE 1 = 1",
+    );
+    push_filters(&mut query, filter);
+    query
+}
+
+async fn fetch_records(
+    pool: &sqlx::SqlitePool,
+    mut query: QueryBuilder<'_, Sqlite>,
+) -> Result<Vec<AuditRecord>, AuditRepositoryError> {
+    query
+        .build()
+        .fetch_all(pool)
+        .await
+        .map_err(store_error)?
+        .into_iter()
+        .map(record_from_row)
+        .collect()
 }
 
 fn push_filters<'a>(query: &mut QueryBuilder<'a, Sqlite>, filter: &'a AuditFilter) {
