@@ -50,6 +50,8 @@ $env:NAOS_PORT = "8443"
 
 在可信本机通过浏览器打开 `http://localhost:8443/` 完成首次管理员创建。浏览器对 Secure Cookie 的本地 HTTP 例外可能不同；如会话无法持久化，请使用可信本地 HTTPS 代理完成初始化，不要移除 Cookie 安全属性。完成首次初始化后，配置 HTTPS 代理再授权远程访问。
 
+包内提供非破坏性的 HTTP/SPA 验收脚本。启动 `naosd` 后，Linux/macOS 在解压目录执行 `bash ./acceptance-smoke.sh http://127.0.0.1:8443`，Windows 在 PowerShell 执行 `.\\acceptance-smoke.ps1 -BaseUrl http://127.0.0.1:8443`。脚本验证管理服务健康、未登录 Session、SPA 深链路与静态资源以及 `/api` 404 边界；**不执行登录、不修改主机或共享，也不替代 SMB/WebDAV/NFS/ACL/TLS 真实客户端验收**。远程 HTTPS 代理可使用同一脚本传入 HTTPS URL，但需由部署方自行完成证书与网络验证。
+
 可用的基础检查：
 
 ```bash
