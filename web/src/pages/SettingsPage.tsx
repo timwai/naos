@@ -3,7 +3,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import {
   ApiError,
@@ -11,6 +11,7 @@ import {
   deleteNfsPrincipal,
   getOperation,
   getSmbDoctor,
+  getSystemDrift,
   listNfsPrincipals,
   listUsers,
   startSystemVerify,
@@ -38,6 +39,12 @@ export function SettingsPage() {
   const [verifyOperationId, setVerifyOperationId] = useState<string | null>(
     null,
   );
+
+  const drift = useQuery({
+    queryKey: queryKeys.system.drift(),
+    queryFn: getSystemDrift,
+    staleTime: 10_000,
+  });
 
   const doctor = useQuery({
     queryKey: queryKeys.system.smbDoctor(),
@@ -69,6 +76,18 @@ export function SettingsPage() {
     refetchInterval: (query) =>
       isTerminal(query.state.data?.state) ? false : 1_000,
   });
+
+  useEffect(() => {
+    if (verifyOperation.data?.state !== "succeeded") {
+      return;
+    }
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.system.drift(),
+    });
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.system.smbDoctor(),
+    });
+  }, [queryClient, verifyOperation.data?.state]);
 
   const createPrincipal = useMutation({
     mutationFn: createNfsPrincipal,
@@ -174,6 +193,78 @@ export function SettingsPage() {
       )}
 
       <div className="settings-grid">
+        <article className="panel settings-card">
+          <div className="panel-heading">
+            <div>
+              <h2>Desired-state drift</h2>
+              <p>区分正在收敛的 Operation 与已经偏离 desired state 的资源。</p>
+            </div>
+            <button
+              className="button secondary"
+              type="button"
+              disabled={drift.isFetching}
+              onClick={() => drift.refetch()}
+            >
+              {drift.isFetching ? "刷新中…" : "刷新"}
+            </button>
+          </div>
+
+          {drift.isPending ? (
+            <div className="inline-state settings-state">正在检查漂移…</div>
+          ) : drift.isError ? (
+            <div className="error-box">{errorMessage(drift.error)}</div>
+          ) : (
+            <>
+              <dl className="settings-facts">
+                <div>
+                  <dt>Status</dt>
+                  <dd>{drift.data.status}</dd>
+                </div>
+                <div>
+                  <dt>Shares checked</dt>
+                  <dd>{drift.data.shares_checked}</dd>
+                </div>
+                <div>
+                  <dt>Pending</dt>
+                  <dd>{drift.data.pending_count}</dd>
+                </div>
+                <div>
+                  <dt>Drift</dt>
+                  <dd>{drift.data.drift_count}</dd>
+                </div>
+              </dl>
+
+              {drift.data.findings.length ? (
+                <div className="finding-list compact-findings">
+                  {drift.data.findings.map((finding) => (
+                    <article
+                      className="finding"
+                      key={[
+                        finding.code,
+                        finding.resource_type,
+                        finding.resource_id ?? "system",
+                      ].join(":")}
+                    >
+                      <div>
+                        <strong>{finding.summary}</strong>
+                        <p>{finding.detail}</p>
+                        <small>{finding.remediation}</small>
+                      </div>
+                      <span className={"severity " + finding.severity}>
+                        {finding.severity}
+                      </span>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="success-box settings-success">
+                  当前 desired state 与已应用状态一致。
+                </div>
+              )}
+            </>
+          )}
+        </article>
+
         <article className="panel settings-card">
           <div className="panel-heading">
             <div>
