@@ -1487,7 +1487,6 @@ async fn readiness_driver_can_run_directly_through_reconciler() {
     assert_eq!(result.state, OperationState::Succeeded);
 }
 
-
 #[tokio::test]
 async fn audit_export_is_admin_only_filtered_and_bounded() {
     let (app, _store, _dir) = test_app().await;
@@ -1539,14 +1538,8 @@ async fn audit_export_is_admin_only_filtered_and_bounded() {
         .await
         .unwrap();
     assert_eq!(empty.status(), StatusCode::OK);
-    assert_eq!(
-        empty.headers().get("x-naos-audit-total").unwrap(),
-        "0"
-    );
-    assert_eq!(
-        empty.headers().get("x-naos-audit-exported").unwrap(),
-        "0"
-    );
+    assert_eq!(empty.headers().get("x-naos-audit-total").unwrap(), "0");
+    assert_eq!(empty.headers().get("x-naos-audit-exported").unwrap(), "0");
     let csv = String::from_utf8(
         empty
             .into_body()
