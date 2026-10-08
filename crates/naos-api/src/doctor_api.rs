@@ -9,9 +9,7 @@ use naos_contract::doctor::{
 };
 use naos_core::{
     auth::{AuthService, AuthenticatedSession},
-    doctor::{
-        SmbDoctorError, SmbDoctorReport, SystemDriftReport, build_system_drift_report,
-    },
+    doctor::{SmbDoctorError, SmbDoctorReport, SystemDriftReport, build_system_drift_report},
 };
 use utoipa::OpenApi;
 
@@ -59,7 +57,11 @@ async fn system_drift(
     Extension(session): Extension<AuthenticatedSession>,
 ) -> Result<Json<SystemDriftResponse>, ApiError> {
     AuthService::ensure_admin(&session)?;
-    let shares = state.shares.list().await.map_err(|_| ApiError::internal())?;
+    let shares = state
+        .shares
+        .list()
+        .await
+        .map_err(|_| ApiError::internal())?;
     let smb = state.smb_doctor.inspect().await?;
     Ok(Json(drift_dto(build_system_drift_report(&shares, &smb))))
 }
